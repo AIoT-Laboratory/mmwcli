@@ -1,6 +1,7 @@
 bin/
-obj/
-*.user
-*.suo
 *.log
 *.bin
+*.part
+*.test
+coverage.out
+*.gocache
