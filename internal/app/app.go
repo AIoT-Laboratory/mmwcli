@@ -40,6 +40,8 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 		err = runDoctor(arguments[1:], stdout, stderr)
 	case "debug-capture":
 		err = runDebugCapture(arguments[1:], stdout, stderr)
+	case "repl":
+		err = runREPL(arguments[1:], os.Stdin, stdout, stderr, openStudioREPLClient)
 	case "demo", "studio-cli":
 		err = runRadar(arguments[0], arguments[1:], stdout, stderr)
 	case "dca":
@@ -58,12 +60,20 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
+	if replInvocationCancelled(arguments, err) {
+		fmt.Fprintln(stderr, "repl cancelled; serial closed; device state may be unknown")
+		return 130
+	}
 	if captureInvocationHasCleanup(arguments) && cancellationOnly(err) {
 		fmt.Fprintln(stderr, "capture cancelled; cleanup completed")
 		return 130
 	}
 	fmt.Fprintln(stderr, "failed:", err)
 	return 4
+}
+
+func replInvocationCancelled(arguments []string, err error) bool {
+	return len(arguments) != 0 && strings.EqualFold(arguments[0], "repl") && cancellationOnly(err)
 }
 
 func captureInvocationHasCleanup(arguments []string) bool {
@@ -249,6 +259,7 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "  mmwcli firmware verify FILE")
 	fmt.Fprintln(writer, "  mmwcli debug-capture check --bss-fw FILE --mss-fw FILE")
 	fmt.Fprintln(writer, "  mmwcli debug-capture native-check")
+	fmt.Fprintln(writer, "  mmwcli repl --port PORT [options]")
 	fmt.Fprintln(writer, "  mmwcli demo check|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli studio-cli check|version|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli dca ping|version|configure|start|stop|reset-fpga|reset-radar|capture ...")
@@ -280,6 +291,10 @@ func printFirmwareHelp(writer io.Writer) {
 func printDebugCaptureHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "usage: mmwcli debug-capture check --bss-fw FILE --mss-fw FILE")
 	fmt.Fprintln(writer, "       mmwcli debug-capture native-check")
+}
+
+func printREPLHelp(writer io.Writer) {
+	fmt.Fprintln(writer, "usage: mmwcli repl --port PORT [--baud 921600] [--serial-timeout-ms 10000]")
 }
 
 func newCommandFlagSet(name string, output io.Writer, synopsis string) *flag.FlagSet {

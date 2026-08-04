@@ -21,7 +21,7 @@ func TestHelpContainsOnlyCLIBackends(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
 	}
 	text := stdout.String()
-	for _, expected := range []string{"mmwcli version", "studio-cli", "demo", "dca", "debug-capture", "native-check", "cross-platform"} {
+	for _, expected := range []string{"mmwcli version", "studio-cli", "demo", "repl", "dca", "debug-capture", "native-check", "cross-platform"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("help does not contain %q:\n%s", expected, text)
 		}
@@ -437,6 +437,21 @@ func TestCancellationCleanupClassification(t *testing.T) {
 	}
 	if cancellationOnly(errors.Join(context.Canceled, errors.New("malformed DCA packet"))) {
 		t.Fatal("operational failure joined with cancellation was hidden as clean cancellation")
+	}
+}
+
+func TestREPLCancellationClassification(t *testing.T) {
+	if !replInvocationCancelled([]string{"REPL"}, context.Canceled) {
+		t.Fatal("repl cancellation was not classified for exit 130")
+	}
+	if replInvocationCancelled([]string{"studio-cli", "capture"}, context.Canceled) {
+		t.Fatal("non-repl cancellation was classified as repl")
+	}
+	if replInvocationCancelled(
+		[]string{"repl"},
+		errors.Join(context.Canceled, errors.New("close failed")),
+	) {
+		t.Fatal("repl cancellation with a close failure was classified as clean cancellation")
 	}
 }
 
