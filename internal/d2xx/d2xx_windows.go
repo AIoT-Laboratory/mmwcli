@@ -5,6 +5,7 @@ package d2xx
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"unsafe"
 )
@@ -15,6 +16,25 @@ type windowsLibrary struct {
 	path    string
 	library *syscall.DLL
 	version *syscall.Proc
+	openEx  *syscall.Proc
+	device  windowsDeviceProcedures
+}
+
+type windowsDeviceProcedures struct {
+	close            *syscall.Proc
+	read             *syscall.Proc
+	write            *syscall.Proc
+	queueStatus      *syscall.Proc
+	setTimeouts      *syscall.Proc
+	setChars         *syscall.Proc
+	setLatencyTimer  *syscall.Proc
+	setBitMode       *syscall.Proc
+	setUSBParameters *syscall.Proc
+}
+
+type windowsDevice struct {
+	handle     uintptr
+	procedures windowsDeviceProcedures
 }
 
 func openNative() (nativeLibrary, error) {
@@ -27,12 +47,33 @@ func openNative() (nativeLibrary, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load FTDI D2XX library %s: %w", path, err)
 	}
-	version, err := library.FindProc("FT_GetLibraryVersion")
-	if err != nil {
-		_ = library.Release()
-		return nil, fmt.Errorf("resolve FT_GetLibraryVersion in %s: %w", path, err)
+	native := &windowsLibrary{path: path, library: library}
+	bindings := []struct {
+		name   string
+		target **syscall.Proc
+	}{
+		{name: "FT_GetLibraryVersion", target: &native.version},
+		{name: "FT_OpenEx", target: &native.openEx},
+		{name: "FT_Close", target: &native.device.close},
+		{name: "FT_Read", target: &native.device.read},
+		{name: "FT_Write", target: &native.device.write},
+		{name: "FT_GetQueueStatus", target: &native.device.queueStatus},
+		{name: "FT_SetTimeouts", target: &native.device.setTimeouts},
+		{name: "FT_SetChars", target: &native.device.setChars},
+		{name: "FT_SetLatencyTimer", target: &native.device.setLatencyTimer},
+		{name: "FT_SetBitMode", target: &native.device.setBitMode},
+		{name: "FT_SetUSBParameters", target: &native.device.setUSBParameters},
 	}
-	return &windowsLibrary{path: path, library: library, version: version}, nil
+	for _, binding := range bindings {
+		procedure, findErr := library.FindProc(binding.name)
+		if findErr == nil {
+			*binding.target = procedure
+			continue
+		}
+		_ = library.Release()
+		return nil, fmt.Errorf("resolve %s in %s: %w", binding.name, path, findErr)
+	}
+	return native, nil
 }
 
 func (library *windowsLibrary) info() (nativeInfo, error) {
@@ -45,11 +86,101 @@ func (library *windowsLibrary) info() (nativeInfo, error) {
 	return nativeInfo{library: library.path, version: Version(rawVersion), versionKnown: true}, nil
 }
 
+func (library *windowsLibrary) open(selector Selector) (nativeDevice, error) {
+	argument, err := syscall.BytePtrFromString(selector.Value)
+	if err != nil {
+		return nil, fmt.Errorf("encode D2XX selector: %w", err)
+	}
+	var handle uintptr
+	status := callD2XX(
+		library.openEx,
+		uintptr(unsafe.Pointer(argument)),
+		uintptr(selector.By),
+		uintptr(unsafe.Pointer(&handle)),
+	)
+	runtime.KeepAlive(argument)
+	if err := statusError("FT_OpenEx", status); err != nil {
+		return nil, err
+	}
+	if handle == 0 {
+		return nil, fmt.Errorf("D2XX FT_OpenEx returned a nil handle")
+	}
+	return &windowsDevice{handle: handle, procedures: library.device}, nil
+}
+
 func (library *windowsLibrary) close() error {
 	if err := library.library.Release(); err != nil {
 		return fmt.Errorf("release FTDI D2XX library %s: %w", library.path, err)
 	}
 	return nil
+}
+
+func (device *windowsDevice) close() Status {
+	return callD2XX(device.procedures.close, device.handle)
+}
+
+func (device *windowsDevice) read(buffer []byte) (uint32, Status) {
+	var count uint32
+	status := callD2XX(
+		device.procedures.read,
+		device.handle,
+		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(len(buffer)),
+		uintptr(unsafe.Pointer(&count)),
+	)
+	runtime.KeepAlive(buffer)
+	return count, status
+}
+
+func (device *windowsDevice) write(buffer []byte) (uint32, Status) {
+	var count uint32
+	status := callD2XX(
+		device.procedures.write,
+		device.handle,
+		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(len(buffer)),
+		uintptr(unsafe.Pointer(&count)),
+	)
+	runtime.KeepAlive(buffer)
+	return count, status
+}
+
+func (device *windowsDevice) queueStatus() (uint32, Status) {
+	var count uint32
+	status := callD2XX(device.procedures.queueStatus, device.handle, uintptr(unsafe.Pointer(&count)))
+	return count, status
+}
+
+func (device *windowsDevice) setTimeouts(readMilliseconds, writeMilliseconds uint32) Status {
+	return callD2XX(device.procedures.setTimeouts, device.handle, uintptr(readMilliseconds), uintptr(writeMilliseconds))
+}
+
+func (device *windowsDevice) setChars(eventChar, eventEnabled, errorChar, errorEnabled byte) Status {
+	return callD2XX(
+		device.procedures.setChars,
+		device.handle,
+		uintptr(eventChar),
+		uintptr(eventEnabled),
+		uintptr(errorChar),
+		uintptr(errorEnabled),
+	)
+}
+
+func (device *windowsDevice) setLatencyTimer(milliseconds byte) Status {
+	return callD2XX(device.procedures.setLatencyTimer, device.handle, uintptr(milliseconds))
+}
+
+func (device *windowsDevice) setBitMode(mask, mode byte) Status {
+	return callD2XX(device.procedures.setBitMode, device.handle, uintptr(mask), uintptr(mode))
+}
+
+func (device *windowsDevice) setUSBParameters(inputSize, outputSize uint32) Status {
+	return callD2XX(device.procedures.setUSBParameters, device.handle, uintptr(inputSize), uintptr(outputSize))
+}
+
+func callD2XX(procedure *syscall.Proc, arguments ...uintptr) Status {
+	result, _, _ := procedure.Call(arguments...)
+	return Status(uint32(result))
 }
 
 func windowsSystemDirectory() (string, error) {

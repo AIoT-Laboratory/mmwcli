@@ -5,7 +5,14 @@ package d2xx
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+)
+
+var (
+	ErrLibraryClosed = errors.New("D2XX library is closed")
+	ErrDeviceClosed  = errors.New("D2XX device is closed")
+	ErrDevicesOpen   = errors.New("D2XX library still has open devices")
 )
 
 type Status uint32
@@ -103,6 +110,31 @@ type Info struct {
 	VersionKnown bool
 }
 
+type Selection uint32
+
+const (
+	SelectBySerialNumber Selection = 1
+	SelectByDescription  Selection = 2
+)
+
+type Selector struct {
+	By    Selection
+	Value string
+}
+
+func (selector Selector) validate() error {
+	if selector.By != SelectBySerialNumber && selector.By != SelectByDescription {
+		return fmt.Errorf("invalid D2XX selection method %d", selector.By)
+	}
+	if selector.Value == "" {
+		return errors.New("D2XX selector value is empty")
+	}
+	if strings.ContainsRune(selector.Value, 0) {
+		return errors.New("D2XX selector contains NUL")
+	}
+	return nil
+}
+
 type nativeInfo struct {
 	library      string
 	version      Version
@@ -111,6 +143,7 @@ type nativeInfo struct {
 
 type nativeLibrary interface {
 	info() (nativeInfo, error)
+	open(Selector) (nativeDevice, error)
 	close() error
 }
 
@@ -118,6 +151,7 @@ type Library struct {
 	mu     sync.Mutex
 	native nativeLibrary
 	info   Info
+	open   int
 }
 
 func Load() (*Library, error) {
@@ -150,6 +184,37 @@ func (library *Library) Info() Info {
 	return library.info
 }
 
+func (library *Library) Open(selector Selector) (*Device, error) {
+	if err := selector.validate(); err != nil {
+		return nil, err
+	}
+	if library == nil {
+		return nil, ErrLibraryClosed
+	}
+	library.mu.Lock()
+	defer library.mu.Unlock()
+	if library.native == nil {
+		return nil, ErrLibraryClosed
+	}
+	native, err := library.native.open(selector)
+	if err != nil {
+		return nil, err
+	}
+	if native == nil {
+		return nil, errors.New("D2XX native open returned a nil device")
+	}
+	library.open++
+	return &Device{native: native, release: library.releaseDevice}, nil
+}
+
+func (library *Library) releaseDevice() {
+	library.mu.Lock()
+	if library.open > 0 {
+		library.open--
+	}
+	library.mu.Unlock()
+}
+
 func (library *Library) Close() error {
 	if library == nil {
 		return nil
@@ -159,7 +224,12 @@ func (library *Library) Close() error {
 	if library.native == nil {
 		return nil
 	}
+	if library.open != 0 {
+		return fmt.Errorf("%w: %d", ErrDevicesOpen, library.open)
+	}
 	err := library.native.close()
-	library.native = nil
+	if err == nil {
+		library.native = nil
+	}
 	return err
 }
