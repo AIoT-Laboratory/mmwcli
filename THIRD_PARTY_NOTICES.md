@@ -1,13 +1,17 @@
-# 第三方组件与边界
+# 第三方声明
 
-本仓库当前不包含或重新分发 TI mmWave Studio 的 DLL、固件或 Lua 运行库。
-`mmwcli studio` 只在运行时从用户自己的 mmWave Studio 2.1.1 安装目录加载这些文件。
-它们继续受各自的 TI 许可条款约束，不能随本项目产物打包发布。
+mmwcli 自身采用 MIT License，见 [LICENSE](LICENSE)。主机端只使用 Go 标准库，`go.mod`
+不包含第三方模块。
 
-DCA1000 协议实现参考了本机 mmWave Studio 安装中的 DCA1000 ReferenceCode；后续
-计划移植的 Radar Toolbox `tools/studio_cli` 主机/设备源码和 mmWave SDK mmWaveLink
-源码均带有各自的 BSD-3-Clause notice。复制或派生这些源码时，必须把对应源文件头、
-版权声明和许可文本一并保留。
+项目实现参考了 Texas Instruments 提供的 xWR68xx、Radar Toolbox Studio CLI 与 DCA1000
+协议资料。TI 固件、主机工具、参考源码、profiles、manifest 和文档不属于本项目的 MIT
+授权范围，也不随仓库或发布包分发。使用者应从自己的合法 TI 安装中取得这些资产，并遵守
+每个文件及对应 manifest 的许可条款。
 
-本项目自身的许可证尚未确定；仓库根目录的 `LICENSE` 当前为空，发布前必须由维护者
-选择并填写，不应把 TI 二进制组件的许可误当作本项目许可证。
+`studio_cli` 与 `mmwave_Studio_cli_xwr68xx.bin` 是 TI Radar Toolbox 中的原始资产名；
+它们不表示 mmwcli 依赖桌面版 mmWave Studio。仓库中的
+`hardware/toolbox-xwr6843-raw.cfg` 是本项目的 raw capture 验收配置，不是 TI 官方
+monitor profile。
+
+Texas Instruments、TI、mmWave 及相关产品名称和商标归其各自权利人所有。本项目与
+Texas Instruments 无隶属或背书关系。
