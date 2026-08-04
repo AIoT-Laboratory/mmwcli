@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"mmwcli/internal/d2xx"
 	"mmwcli/internal/debugcapture"
 	"mmwcli/internal/firmware"
 )
@@ -143,15 +144,23 @@ func runFirmware(arguments []string, stdout, stderr io.Writer) error {
 
 func runDebugCapture(arguments []string, stdout, stderr io.Writer) error {
 	if len(arguments) == 0 {
-		return usageError{message: "debug-capture requires check"}
+		return usageError{message: "debug-capture requires check or native-check"}
 	}
 	if isHelp(arguments[0]) {
 		printDebugCaptureHelp(stdout)
 		return nil
 	}
-	if !strings.EqualFold(arguments[0], "check") {
+	switch strings.ToLower(arguments[0]) {
+	case "check":
+		return runDebugCaptureCheck(arguments[1:], stdout, stderr)
+	case "native-check":
+		return runDebugCaptureNativeCheck(arguments[1:], stdout, stderr, loadNativeD2XX)
+	default:
 		return usageError{message: "unknown debug-capture command: " + arguments[0]}
 	}
+}
+
+func runDebugCaptureCheck(arguments []string, stdout, stderr io.Writer) error {
 	flags := newCommandFlagSet(
 		"debug-capture check",
 		stderr,
@@ -159,7 +168,7 @@ func runDebugCapture(arguments []string, stdout, stderr io.Writer) error {
 	)
 	bssPath := flags.String("bss-fw", "", "xWR68xx BSS/RadarSS firmware file")
 	mssPath := flags.String("mss-fw", "", "xWR68xx MSS/MasterSS firmware file")
-	if err := parseCommandFlags(flags, arguments[1:]); err != nil {
+	if err := parseCommandFlags(flags, arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -175,6 +184,51 @@ func runDebugCapture(arguments []string, stdout, stderr io.Writer) error {
 	printDebugCaptureAsset(stdout, assets.BSS)
 	printDebugCaptureAsset(stdout, assets.MSS)
 	fmt.Fprintln(stdout, "debug-capture asset check passed (offline; no hardware accessed)")
+	return nil
+}
+
+type nativeD2XXLibrary interface {
+	Info() d2xx.Info
+	Close() error
+}
+
+func loadNativeD2XX() (nativeD2XXLibrary, error) {
+	return d2xx.Load()
+}
+
+func runDebugCaptureNativeCheck(
+	arguments []string,
+	stdout, stderr io.Writer,
+	load func() (nativeD2XXLibrary, error),
+) error {
+	flags := newCommandFlagSet(
+		"debug-capture native-check",
+		stderr,
+		"mmwcli debug-capture native-check",
+	)
+	if err := parseCommandFlags(flags, arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return usageError{message: "unexpected debug-capture native-check arguments: " + strings.Join(flags.Args(), " ")}
+	}
+
+	library, err := load()
+	if err != nil {
+		return err
+	}
+	info := library.Info()
+	if err := library.Close(); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(stdout, "FTDI D2XX library: %s\n", info.Library)
+	if info.VersionKnown {
+		fmt.Fprintf(stdout, "FTDI D2XX version: %s (0x%08X)\n", info.Version, uint32(info.Version))
+	} else {
+		fmt.Fprintln(stdout, "FTDI D2XX version: not reported by this platform")
+	}
+	fmt.Fprintln(stdout, "debug-capture native check passed (library only; no hardware accessed)")
 	return nil
 }
 
@@ -194,6 +248,7 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "  mmwcli doctor [--studio-cli-firmware FILE]")
 	fmt.Fprintln(writer, "  mmwcli firmware verify FILE")
 	fmt.Fprintln(writer, "  mmwcli debug-capture check --bss-fw FILE --mss-fw FILE")
+	fmt.Fprintln(writer, "  mmwcli debug-capture native-check")
 	fmt.Fprintln(writer, "  mmwcli demo check|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli studio-cli check|version|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli dca ping|version|configure|start|stop|reset-fpga|reset-radar|capture ...")
@@ -224,6 +279,7 @@ func printFirmwareHelp(writer io.Writer) {
 
 func printDebugCaptureHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "usage: mmwcli debug-capture check --bss-fw FILE --mss-fw FILE")
+	fmt.Fprintln(writer, "       mmwcli debug-capture native-check")
 }
 
 func newCommandFlagSet(name string, output io.Writer, synopsis string) *flag.FlagSet {

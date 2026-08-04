@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"mmwcli/internal/d2xx"
 	"mmwcli/internal/dca"
 	"mmwcli/internal/debugcapture"
 	"mmwcli/internal/session"
@@ -20,7 +21,7 @@ func TestHelpContainsOnlyCLIBackends(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
 	}
 	text := stdout.String()
-	for _, expected := range []string{"mmwcli version", "studio-cli", "demo", "dca", "debug-capture", "cross-platform"} {
+	for _, expected := range []string{"mmwcli version", "studio-cli", "demo", "dca", "debug-capture", "native-check", "cross-platform"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("help does not contain %q:\n%s", expected, text)
 		}
@@ -259,6 +260,47 @@ func TestDebugCaptureCheckRejectsBadAssetsOffline(t *testing.T) {
 	if !strings.Contains(stderr.String(), "BSS firmware size mismatch") {
 		t.Fatalf("missing asset error: %s", stderr.String())
 	}
+}
+
+func TestDebugCaptureNativeCheckUsesLibraryOnly(t *testing.T) {
+	library := &fakeNativeD2XXLibrary{info: d2xx.Info{
+		Library:      "fake-ftd2xx",
+		Version:      0x00030214,
+		VersionKnown: true,
+	}}
+	var stdout, stderr bytes.Buffer
+	err := runDebugCaptureNativeCheck(nil, &stdout, &stderr, func() (nativeD2XXLibrary, error) {
+		return library, nil
+	})
+	if err != nil {
+		t.Fatalf("native check: %v", err)
+	}
+	if library.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", library.closeCalls)
+	}
+	for _, expected := range []string{
+		"FTDI D2XX library: fake-ftd2xx",
+		"FTDI D2XX version: 3.2.14 (0x00030214)",
+		"library only; no hardware accessed",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
+type fakeNativeD2XXLibrary struct {
+	info       d2xx.Info
+	closeCalls int
+}
+
+func (library *fakeNativeD2XXLibrary) Info() d2xx.Info {
+	return library.info
+}
+
+func (library *fakeNativeD2XXLibrary) Close() error {
+	library.closeCalls++
+	return nil
 }
 
 func TestPrintDebugCaptureAssetIncludesRPRCWritePlan(t *testing.T) {
