@@ -13,12 +13,16 @@
   别名。该路线可加载用户显式提供的 MSS/BSS 固件，但必须与文本 CLI 路线分层实现，
   不能依赖 mmWave Studio 主机运行时。
 - TI 参考流程只在固件内存写阶段使用 Enhanced COM，随后切换到 FTDI MPSSE SPI/IRQ；
-  不得把 `debug-capture` 建模为纯 UART 路线。真实 USB transport 必须另立小批次，并继续
-  满足跨平台与依赖约束。
-- 主机端使用 Go 1.26+ 标准库，正式构建固定 `CGO_ENABLED=0`；支持 Windows/Linux
-  amd64 与 arm64。
-- 不引入 GUI、MATLAB、后处理链、C#/.NET、CGo、mmWave Studio 运行时、TI DCA CLI、
-  Lua host/interpreter 或第三方 Go 模块。
+  不得把 `debug-capture` 建模为纯 UART 路线。该路线的主机 USB transport 固定使用 FTDI
+  D2XX，不实现自有 raw-USB，也不绑定或复制 mmWave Studio DLL/FTDILib。
+- 主机端使用 Go 1.26+ 标准库；默认构建固定 `CGO_ENABLED=0`，支持 Windows/Linux amd64
+  与 arm64。D2XX backend 只在 `ftd2xx` build tag 下启用：Windows 仍使用纯 Go 并加载系统
+  安装的 DLL；Linux 是唯一允许的 CGo 例外，直接链接用户安装的 `libftd2xx.so`。原生
+  backend 的架构支持取决于匹配的 FTDI 库，必须逐项实机验证。
+- 不引入 GUI、MATLAB、后处理链、C#/.NET、mmWave Studio 运行时、TI DCA CLI、Lua
+  host/interpreter 或第三方 Go 模块。除上述 Linux D2XX 适配层外禁止 CGo。
+- 仓库与发布包不分发 FTDI header、library、driver 或 installer；只绑定完成当前操作所需的
+  最小 D2XX ABI，不移植 TI 的完整 FTDILib。
 - TI 固件、配置和工具由用户从自己的 TI 安装中提供；不得复制到仓库或发布包。
 - `sensorStop` 只停止传感器，不代表雷达或采集卡断电。
 
