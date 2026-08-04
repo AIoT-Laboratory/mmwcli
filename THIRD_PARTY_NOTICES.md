@@ -8,10 +8,11 @@ mmwcli 自身采用 MIT License，见 [LICENSE](LICENSE)。主机端只使用 Go
 授权范围，也不随仓库或发布包分发。使用者应从自己的合法 TI 安装中取得这些资产，并遵守
 每个文件及对应 manifest 的许可条款。
 
-`studio_cli` 与 `mmwave_Studio_cli_xwr68xx.bin` 是 TI Radar Toolbox 中的原始资产名；
-它们不表示 mmwcli 依赖桌面版 mmWave Studio。仓库中的
-`hardware/toolbox-xwr6843-raw.cfg` 是本项目的 raw capture 验收配置，不是 TI 官方
-monitor profile。
+`studio_cli` 与 `mmwave_Studio_cli_xwr68xx.bin` 是 TI Radar Toolbox 中的原始资产名。
+functional 路线只要求用户自行烧录这个设备固件；完整 Toolbox、参考源码、profiles、
+manifest 和主机工具都不是构建或运行依赖。仓库中的
+`hardware/studio-cli-xwr6843-raw.cfg` 是本项目的 raw capture 验收配置，不是 TI 官方
+monitor profile。未来 `debug-capture` 使用的 MSS/BSS 固件也必须由用户自行提供。
 
 Texas Instruments、TI、mmWave 及相关产品名称和商标归其各自权利人所有。本项目与
 Texas Instruments 无隶属或背书关系。

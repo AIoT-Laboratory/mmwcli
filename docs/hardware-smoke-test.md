@@ -1,12 +1,12 @@
 # xWR6843 + DCA1000 硬件冒烟测试
 
-本流程验证 Radar Toolbox `studio_cli` 固件、xWR6843 ES2 和 DCA1000 的两轮复用采集。
+本流程验证 TI `studio_cli` 固件、xWR6843 ES2 和 DCA1000 的两轮复用采集。
 一次测试只使用一种雷达 CLI 固件。
 
 ## 前置条件
 
 - xWR6843 ES2、DCA1000、独立以太网口和匹配的电源/线缆；
-- Radar Toolbox 4.00.00.05；
+- 已取得 `mmwave_Studio_cli_xwr68xx.bin`；
 - 已构建的 mmwcli；
 - 操作者确认的 CLI UART；
 - 天线周围满足实验室 RF 安全要求。
@@ -20,13 +20,12 @@
 以下命令不访问串口或 DCA1000：
 
 ```text
-mmwcli toolbox verify --toolbox-root TOOLBOX_ROOT
-mmwcli studio-cli check hardware/toolbox-xwr6843-raw.cfg
+mmwcli firmware verify PATH/mmwave_Studio_cli_xwr68xx.bin
+mmwcli studio-cli check hardware/studio-cli-xwr6843-raw.cfg
 ```
 
-将通过校验的
-`tools/studio_cli/prebuilt_binaries/mmwave_Studio_cli_xwr68xx.bin` 烧录到雷达。不要使用
-`profile_monitor_xwr68xx.cfg` 采集；它启用了本项目不接收的 monitor UART 数据。
+`firmware verify` 只校验上述单个文件，不需要完整 Radar Toolbox。将通过校验的文件烧录
+到雷达；不要使用 TI 的 monitor profile 采集，它会启用本项目不接收的 monitor UART 数据。
 
 记录雷达型号/ES、固件 SHA-256、SOP 和 CLI UART。`studio-cli version` 只能确认 xWR68xx
 平台，不能替代板卡或采购记录对 ES2 的确认。
@@ -56,7 +55,7 @@ mmwcli dca version
 确认雷达已从 functional/application 模式启动，并把人工确认的串口替换为 `PORT`：
 
 ```text
-mmwcli studio-cli capture hardware/toolbox-xwr6843-raw.cfg capture-01.bin --port PORT
+mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-01.bin --port PORT
 ```
 
 示例 CFG 为 100 个有限帧：每帧 64 chirps，每 chirp 包含 4 RX × 256 complex16 samples。
@@ -80,7 +79,7 @@ mmwcli studio-cli capture hardware/toolbox-xwr6843-raw.cfg capture-01.bin --port
 保持固件、SOP、CFG、串口和全部连接不变。不要 reset 雷达或 DCA1000：
 
 ```text
-mmwcli studio-cli capture hardware/toolbox-xwr6843-raw.cfg capture-02.bin --port PORT --no-reconfig
+mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-02.bin --port PORT --no-reconfig
 ```
 
 第二轮会再次 configure/start/stop DCA1000，但不 reset FPGA，也不重发雷达配置；雷达以
@@ -104,7 +103,7 @@ mmwcli demo capture profile_raw_68xx.cfg capture-sdk.bin --port PORT
 ```
 
 profile 必须显式开启兼容的硬件 ADC LVDS。`demo capture` 不支持 `--no-reconfig`，因此不
-用于上述 Radar Toolbox 两轮复用验收。
+用于上述 `studio_cli` 两轮复用验收。
 
 ## 验收记录
 

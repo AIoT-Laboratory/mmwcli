@@ -5,7 +5,7 @@ mmwcli 将设备协议、采集状态机和操作系统 I/O 分开，使 Windows
 ```text
 cmd/mmwcli
   -> internal/app          命令解析与退出码
-  -> internal/toolbox      TI 资产定位与离线校验
+  -> internal/firmware     单个 TI 设备固件的离线校验
   -> internal/radar        CLI 方言、CFG 预检、应答解析
      -> internal/serialport
   -> internal/session      雷达与 DCA1000 采集状态机
@@ -21,7 +21,7 @@ cmd/mmwcli
 
 | 方言 | 命令前缀 | 默认波特率 | 设备固件 |
 | --- | --- | ---: | --- |
-| Radar Toolbox | `studio-cli` | 921600 | `mmwave_Studio_cli_xwr68xx.bin` |
+| TI `studio_cli` | `studio-cli` | 921600 | `mmwave_Studio_cli_xwr68xx.bin` |
 | mmWave SDK demo | `demo` | 115200 | xWR68xx SDK demo 或兼容固件 |
 
 两种方言共享传输层，但命令集合和启动语义隔离。`studio-cli version` 必须返回 xWR68xx
@@ -45,13 +45,18 @@ cmd/mmwcli
   `0x3fff` 个 2-byte unit；
 - 有限帧的 RX、sample、chirp、loop 与 frame 数能推导出精确输出字节数。
 
-`sensorStart` 可省略；若存在则必须唯一且位于最后，协调器会先移除它。Radar Toolbox
+`sensorStart` 可省略；若存在则必须唯一且位于最后，协调器会先移除它。`studio_cli`
 全量配置必须以 `flushCfg` 开始并通过 raw-only 白名单。`--no-reconfig` 仍完整预检同一
 CFG，但不下发配置，只发送 `sensorStart 0`；它仅适用于 `studio-cli`。
 
 Advanced frame、monitor、continuous、test、loopback、软件 LVDS 和 LVDS header 在预检
-阶段被拒绝。TI 的 `profile_monitor_xwr68xx.cfg` 会启用本项目未实现的 monitor UART 链，
-因此只用作安装指纹。
+阶段被拒绝。TI 的 monitor profile 不是运行依赖，也不能用于本项目的 raw-only capture。
+
+## SOP2 直控边界
+
+SOP2 主机下载与直控路径使用独立入口 `debug-capture`，不属于文本 CLI 方言，也不接入
+当前 `session.Radar` 接口。MSS/BSS 固件必须由用户显式提供；该路径不得自动发现 TI 安装，
+不得依赖 mmWave Studio runtime、Lua、C# 或 CGo。只有 CLI 中实际公开的子命令才视为已实现。
 
 ## 一体化采集状态机
 

@@ -6,7 +6,12 @@
 
 - `mmwcli` 是 TI xWR68xx 的跨平台命令行控制与 DCA1000 原始 ADC 采集工具。
 - 首期基线是 xWR6843 ES2、legacy frame、16-bit complex ADC、两路 LVDS。
-- 雷达只通过 SDK demo CLI 或 Radar Toolbox `studio_cli` 文本串口控制。
+- 已实现的 functional/application 路线只通过 SDK demo CLI 或 TI `studio_cli` 设备固件的
+  文本串口控制。`studio_cli` 路线只需要用户自行烧录
+  `mmwave_Studio_cli_xwr68xx.bin`，不要求完整 Radar Toolbox 安装。
+- SOP2 主机下载与直控路线的公开命令固定为 `debug-capture`，不得提供其它架构或型号
+  别名。该路线可加载用户显式提供的 MSS/BSS 固件，但必须与文本 CLI 路线分层实现，
+  不能依赖 mmWave Studio 主机运行时。
 - 主机端使用 Go 1.26+ 标准库，正式构建固定 `CGO_ENABLED=0`；支持 Windows/Linux
   amd64 与 arm64。
 - 不引入 GUI、MATLAB、后处理链、C#/.NET、CGo、mmWave Studio 运行时、TI DCA CLI、
