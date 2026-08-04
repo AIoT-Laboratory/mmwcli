@@ -1,56 +1,55 @@
 # TI 资料与版本地图
 
-本机实际 TI 根目录是 `D:\Apps\ti`（不是 `D:\App\ti`）；Radar Toolbox 位于
-`C:\ti\radar_toolbox_4_00_00_05`。下列内容已作为首期实现的本地资料基线。
+mmwcli 不下载或分发 TI 资产。`--toolbox-root` 与 `MMWCLI_RADAR_TOOLBOX_ROOT` 接受用户
+自己的 Radar Toolbox 安装根目录；文中路径均相对于该根目录或对应 SDK 根目录。
 
-## 无 GUI 68xx 首选参考
+## Radar Toolbox 4.00.00.05
 
-`C:\ti\radar_toolbox_4_00_00_05\tools\studio_cli`
+xWR6843 主线参考位于 `tools/studio_cli`：
 
-- `prebuilt_binaries\mmwave_Studio_cli_xwr68xx.bin`：xWR6843 ES2 预编译固件；
-- `src\mss\mmw_cli.c`、`mss_main.c`：设备端命令与状态机；
-- `src\common\mmwl_if.c`：设备端 mmWaveLink 边界；
-- `gui\mmw_cli_tool\mmw_main.c`、`serial_comm`：C 语言无 GUI 主机参考；
-- `gui\mmw_cli_tool\dca_comm\dca_control.c`：DCA1000 调用顺序；
-- `docs`：开发指南、入门指南和发布说明。
+- `prebuilt_binaries/mmwave_Studio_cli_xwr68xx.bin`：xWR6843 ES2 设备固件；
+- `src/mss/mmw_cli.c`、`mss_main.c`：文本命令和设备状态机；
+- `src/common/mmw_rfparser.c`：ADCBuf 容量计算；
+- `gui/mmw_cli_tool/mmw_main.c` 与 `serial_comm`：UART 参考实现；
+- `gui/mmw_cli_tool/dca_comm/dca_control.c`：DCA1000 调用顺序；
+- `docs`：Studio CLI 指南与发布说明。
 
-该工程针对 mmWave SDK 3.5.0.01，并精确要求 SYS/BIOS 6.73.1.01、XDCtools
-3.55.2.22 和 ARM CGT 16.9.6.LTS。本机没有完整匹配的构建组合，所以首轮使用预编译
-68xx 固件做硬件验证；不能用 SDK 3.6.2 替换依赖后声称得到等价固件。
+`mmwcli toolbox verify` 校验 package metadata 以及以下已知资产：
 
-## mmWave SDK 3.6.2
+| 相对路径 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `tools/studio_cli/prebuilt_binaries/mmwave_Studio_cli_xwr68xx.bin` | 358660 | `24BDAE9662AA8E611DBEDAE65709B7589CDCFB6E3F71B8E0E7FA78C5DD4A18BF` |
+| `tools/studio_cli/src/profiles/profile_monitor_xwr68xx.cfg` | 1409 | `169C070C3F7E18D9E851BB272D13D6CC4E5211A2C9302BBBF91D5B3393D6A35A` |
+| `toolbox_docs/RADAR_TOOLBOX_manifest.html` | 179989 | `5683D43FB3A272DA3CB16F0FC8E1795F50751401D6544F956205F101AD0091D4` |
 
-根目录：`D:\Apps\ti\mmwave_sdk_03_06_02_00-LTS`
+`profile_monitor_xwr68xx.cfg` 只用于识别安装。它会产生 RF monitor UART 报告，不能作为
+mmwcli 的 raw-only capture 配置。
 
-- `packages\ti\demo\xwr68xx\mmw\mss\mmw_cli.c`：115200 文本 CLI 与
-  `sensorStart`/`sensorStart 0` 的真实语义；
-- `packages\ti\demo\xwr68xx\mmw\profiles`：官方配置样例；
-- `packages\ti\control\mmwavelink`：未来原生 RadarLink 后端候选源码；
-- `docs\mmwave_sdk_software_manifest.html`：版本与许可清单。
+`tools/studio_cli/src/6843/studio_cli_xwr68xx.projectspec` 指定该固件的构建组合：
 
-SDK demo 停止后若没有重发完整配置，必须用 `sensorStart 0` 重启。它和 Toolbox
-`studio_cli` 固件虽然都使用文本命令，但命令集合、启动语义及 UART 波特率不应混用。
+- mmWave SDK 3.5.0.01
+- SYS/BIOS 6.73.1.01
+- XDCtools 3.55.2.22_core
+- ARM CGT 16.9.6.LTS
 
-## Legacy mmWave Studio 2.1.1
+不同版本的 SDK 不能视为可直接替换的等价构建环境。0.1 验收使用 Toolbox 提供且通过
+上述校验的预编译固件。
 
-根目录：`D:\Apps\ti\mmwave_studio_02_01_01_00`
+## mmWave SDK 3.6.2 参考
 
-- `mmWaveStudio\Clients\AR1xController\AR1xController.dll`；
-- `mmWaveStudio\Clients\AR1xController\RadarLinkDLL.dll`；
-- `mmWaveStudio\RunTime\lua51.dll`；
-- `rf_eval_firmware\radarss\xwr68xx_radarss.bin`；
-- `rf_eval_firmware\masterss\xwr68xx_masterss.bin`；
-- `mmWaveStudio\Scripts\DataCaptureDemo_xWR.lua` 与 `RadarStudioAPIsTest.lua`；
-- `mmWaveStudio\ReferenceCode\DCA1000\SourceCode`。
+SDK demo 方言的主要参考路径为：
 
-本机 `Scripts\xwr68xx.lua` 和 `xwr68xx_sync_capture.lua` 含用户后加路径，不能作为未修改的
-官方黄金样例。Studio 2.1.1 的 RF evaluation 固件和 SDK 3.6.2 的 68xx RadarSS 版本
-也不相同，禁止跨控制路径混搭 MSS/BSS/RadarSS。
+- `packages/ti/demo/xwr68xx/mmw/mss/mmw_cli.c`：115200 baud CLI 与启动语义；
+- `packages/ti/demo/xwr68xx/mmw/profiles`：官方 demo profiles；
+- `packages/ti/common/sys_common_xwr68xx.h`：xWR68xx 32 KiB ADCBuf；
+- `packages/ti/drivers/cbuff/include/cbuff_internal.h`：CBUFF 约束；
+- `docs/mmwave_sdk_software_manifest.html`：版本和许可清单。
 
-## 首期硬件合同
+普通 demo profile 不一定开启硬件 LVDS。用于 DCA1000 capture 的配置必须显式满足
+mmwcli 的 raw-only 预检。
 
-- xWR6843 ES2，单芯片，两路硬件 LVDS，legacy frame；
-- Studio/SOP2 路径为 Windows x86，动态使用用户本机 TI 2.1.1 运行库；
-- DCA1000 默认 `192.168.33.30 -> 192.168.33.180`、UDP 4096/4098；
-- DCA1000 可以反复 start/stop，常规停止不隐式 reset FPGA；
-- 保存 ADC 原始字节，不做重排、FFT、检测、MATLAB 或 GUI 后处理。
+## 许可边界
+
+TI manifest 和源文件可能包含不同许可条款，不能从单个文件推断整个 Toolbox 或 SDK 的
+许可证。mmwcli 只读取用户安装中的 metadata、manifest、固件和 profile，不将它们复制到
+仓库或发布包。详见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
