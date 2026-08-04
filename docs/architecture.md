@@ -6,7 +6,7 @@ mmwcli 将设备协议、采集状态机和操作系统 I/O 分开，使 Windows
 cmd/mmwcli
   -> internal/app          命令解析与退出码
   -> internal/firmware     单个 TI 设备固件的离线校验
-  -> internal/debugcapture SOP2 直控所需 MSS/BSS 资产校验
+  -> internal/debugcapture SOP2 资产校验与 D2XX MPSSE transport
   -> internal/d2xx         可选 FTDI D2XX 原生库边界
   -> internal/radar        CLI 方言、CFG 预检、应答解析
      -> internal/serialport
@@ -17,7 +17,8 @@ cmd/mmwcli
 
 项目以 Go 1.26+ 标准库实现，核心构建使用 `CGO_ENABLED=0`。平台代码仅负责系统 I/O，
 协议和状态机不得按操作系统分叉。可选 D2XX backend 由 `ftd2xx` build tag 隔离：Windows
-加载系统安装的 DLL，Linux 是唯一允许的 CGo 变体并链接用户安装的 `libftd2xx.so`。
+加载系统安装的 DLL，Linux 是唯一允许的 CGo 变体，包含用户安装的官方 `ftd2xx.h` 并
+链接 `libftd2xx.so`。
 核心发布架构为 Windows/Linux amd64 与 arm64；原生 backend 的架构支持需要分别实机验证。
 
 ## 雷达 CLI 方言
@@ -29,6 +30,10 @@ cmd/mmwcli
 
 两种方言共享传输层，但命令集合和启动语义隔离。`studio-cli version` 必须返回 xWR68xx
 平台；SDK demo 没有统一的同类门禁。串口只能由操作者显式指定，程序不枚举或试探端口。
+
+顶层 `repl` 不增加第三种方言。它固定创建 `StudioCLI` 客户端，先执行同一 xWR68xx
+`version` 门禁，再逐行发送符合 CFG 词法规则的命令。兼容固件可以增加命令，但不能绕过
+`Done`/数字 `Error` 终态合同；未知结果立即关闭会话，也不会授予该固件 capture 能力。
 
 每条命令同时受串口 timeout 和调用者 context deadline 限制。若写入、取消、超时或应答
 没有明确 `Done`/`Error`，设备状态记为未知。下一条命令必须先看到自身 echo，才能接受
@@ -60,14 +65,16 @@ Advanced frame、monitor、continuous、test、loopback、软件 LVDS 和 LVDS h
 SOP2 主机下载与直控路径使用独立入口 `debug-capture`，不属于文本 CLI 方言，也不接入
 当前 `session.Radar` 接口。MSS/BSS 固件必须由用户显式提供；该路径不得自动发现 TI 安装，
 不得依赖 mmWave Studio runtime、Lua 或 C#。当前实现离线资产校验、RPRC 解析、xWR68xx
-内存窗口检查、每块不超过 4096 字节的非空内存写计划，以及 FTDI A/B 通道所需的离线
-MPSSE 命令编码原语。`debug-capture native-check` 只确认当前构建的 D2XX 库边界可用；
-Windows 读取库版本，Linux 当前不报告版本。该命令不枚举或打开 USB 设备。
+内存窗口检查、每块不超过 4096 字节的非空内存写计划，以及以显式 serial/description
+选择同一 FTDI 的 A/B 接口、初始化 MPSSE、执行有界 SPI/IRQ I/O 的 transport。设备选择
+不使用枚举、索引或 location。该 transport 目前只经过 fake 离线测试，尚未接入公开
+`debug-capture` 硬件命令。`debug-capture native-check` 只确认 D2XX 库边界可用；Windows
+读取库版本，Linux 当前不报告版本，并且该命令不会查询或打开 USB 设备。
 
 TI 参考流程在 Enhanced COM 上完成 MSS/BSS 内存写，随后通过 FTDI MPSSE SPI/IRQ 承载
 mmWaveLink；因此 COM 不能单独完成直控采集。主机 USB transport 固定采用 FTDI D2XX，
-不实现 raw USB，也不依赖 mmWave Studio DLL。设备枚举与打开、SOP2 下载握手、
-mmWaveLink 控制和 ADC 采集尚未实现。
+不实现 raw USB，也不依赖 mmWave Studio DLL。SOP2 下载握手、mmWaveLink 控制、与公开
+命令的整合及 ADC 采集尚未实现，也没有 D2XX 实机兼容性结论。
 
 ## 一体化采集状态机
 

@@ -58,7 +58,8 @@ go build -trimpath -tags ftd2xx -o bin/mmwcli.exe ./cmd/mmwcli
 Remove-Item Env:CGO_ENABLED
 ```
 
-Linux 需要用户先安装与目标架构匹配的官方 `libftd2xx.so`，再构建唯一的 CGo 变体：
+Linux 需要用户先安装与目标架构匹配的官方 `ftd2xx.h` 和 `libftd2xx.so`，再构建唯一的
+CGo 变体：
 
 ```sh
 CGO_ENABLED=1 go build -trimpath -tags ftd2xx -o bin/mmwcli ./cmd/mmwcli
@@ -85,6 +86,20 @@ mmwcli studio-cli check hardware/studio-cli-xwr6843-raw.cfg
 已经完成。`debug-capture native-check` 只确认当前构建的 D2XX 库边界可用；Windows 读取
 库版本，Linux 当前不报告版本。该命令不查询或打开 USB 设备；未使用 `ftd2xx` build tag
 的核心版本会明确报告 backend 不可用。
+
+## 固件命令 REPL
+
+`repl` 用于向实现 TI `studio_cli` 行协议的 xWR68xx 固件发送扩展命令：
+
+```text
+mmwcli repl --port PORT
+```
+
+连接后会先发送 `version`，只有收到包含 `Platform: xWR68xx` 且以 `Done` 结束的响应才进入
+会话。输入按 CFG 的单行与注释规则处理；明确的数字 `Error <code>` 会报告并继续，超时、
+取消或缺少 `Done`/`Error <code>` 的响应会立即关闭串口并终止，且不会发送下一条命令或
+自动重试。该入口没有自定义方言或跳过平台门禁选项；通过门禁的固件可以扩展命令，但不会
+因此成为受支持的配置或采集 backend。
 
 ## xWR6843 + DCA1000 快速开始
 
@@ -123,6 +138,7 @@ mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-02.bin --p
 | `firmware verify FILE` | 严格校验单个 `studio_cli` 固件文件 |
 | `debug-capture check` | 离线校验直控路线所需的 MSS/BSS 固件 |
 | `debug-capture native-check` | 只检查可选 D2XX 动态库，不访问设备 |
+| `repl --port PORT` | 发送符合 `studio_cli` 行协议的单行固件命令 |
 | `studio-cli check` | 离线预检 `studio_cli` CFG |
 | `studio-cli version\|apply\|start\|stop\|capture` | 控制 `studio_cli` 固件 |
 | `demo check\|apply\|start\|stop\|capture` | 控制 SDK demo 固件 |

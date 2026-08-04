@@ -17,8 +17,9 @@ monitor profile。`debug-capture` 校验的 MSS/BSS 固件也必须由用户自�
 
 ## FTDI D2XX
 
-`debug-capture` 的可选 `ftd2xx` build tag 当前只建立 D2XX 库加载与链接边界；后续 transport
-也只会扩展必要的 ABI。仓库与发布包不包含 FTDI library、header、driver 或 installer；
+`debug-capture` 的可选 `ftd2xx` build tag 只绑定显式打开 A/B 接口、MPSSE 初始化与
+SPI/IRQ transport 所需的最小 D2XX ABI。仓库与发布包不包含 FTDI library、header、driver
+或 installer；Linux 构建时使用的官方 `ftd2xx.h` 与 `libftd2xx.so` 也必须由用户提供。
 这些文件不属于本项目的 MIT 授权范围。使用者应从
 [FTDI D2XX 官方下载页](https://ftdichip.com/drivers/d2xx-drivers/) 取得与操作系统及架构匹配
 的版本，并遵守其中随附的许可条款。API 定义见

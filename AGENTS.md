@@ -9,6 +9,9 @@
 - 已实现的 functional/application 路线只通过 SDK demo CLI 或 TI `studio_cli` 设备固件的
   文本串口控制。`studio_cli` 路线只需要用户自行烧录
   `mmwave_Studio_cli_xwr68xx.bin`，不要求完整 Radar Toolbox 安装。
+- 顶层 `repl` 固定使用 `studio_cli` 行协议与 xWR68xx `version` 门禁，不提供可选的自定义
+  方言或跳过门禁模式。它可以发送兼容固件扩展的单行命令，但不因此把该固件声明为受支持
+  的配置或采集 backend；无明确 `Done`/`Error <code>` 的未知结果必须立即终止会话。
 - SOP2 主机下载与直控路线的公开命令固定为 `debug-capture`，不得提供其它架构或型号
   别名。该路线可加载用户显式提供的 MSS/BSS 固件，但必须与文本 CLI 路线分层实现，
   不能依赖 mmWave Studio 主机运行时。
@@ -17,8 +20,8 @@
   D2XX，不实现自有 raw-USB，也不绑定或复制 mmWave Studio DLL/FTDILib。
 - 主机端使用 Go 1.26+ 标准库；默认构建固定 `CGO_ENABLED=0`，支持 Windows/Linux amd64
   与 arm64。D2XX backend 只在 `ftd2xx` build tag 下启用：Windows 仍使用纯 Go 并加载系统
-  安装的 DLL；Linux 是唯一允许的 CGo 例外，直接链接用户安装的 `libftd2xx.so`。原生
-  backend 的架构支持取决于匹配的 FTDI 库，必须逐项实机验证。
+  安装的 DLL；Linux 是唯一允许的 CGo 例外，包含用户安装的官方 `ftd2xx.h` 并链接
+  `libftd2xx.so`。原生 backend 的架构支持取决于匹配的 FTDI 库，必须逐项实机验证。
 - 不引入 GUI、MATLAB、后处理链、C#/.NET、mmWave Studio 运行时、TI DCA CLI、Lua
   host/interpreter 或第三方 Go 模块。除上述 Linux D2XX 适配层外禁止 CGo。
 - 仓库与发布包不分发 FTDI header、library、driver 或 installer；只绑定完成当前操作所需的
