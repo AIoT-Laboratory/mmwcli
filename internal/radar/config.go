@@ -348,7 +348,7 @@ func validateADCBuf(dialect Dialect, commands []string) error {
 		}
 		if dialect == StudioCLI &&
 			(values[0] != -1 || values[2] != 1 || values[3] != 1) {
-			return fmt.Errorf("Radar Toolbox studio_cli requires adcbufCfg -1 0 1 1 1: %s", command)
+			return fmt.Errorf("TI xWR68xx studio_cli firmware requires adcbufCfg -1 0 1 1 1: %s", command)
 		}
 		count++
 	}
@@ -500,15 +500,15 @@ func deriveExpectedBytes(dialect Dialect, commands []string, frame frameConfigur
 		return 0, 0, fmt.Errorf("xWR68xx text CLI supports at most 32 unique frame chirps, got %d", uniqueChirps)
 	}
 	if dialect == StudioCLI {
-		// Radar Toolbox 4.00.00.05 studio_cli hard-codes profile index 0
-		// in mmw_rfparser.c. Reject configurations the firmware cannot
-		// represent instead of deriving a byte count for a different
-		// effective configuration.
+		// The studio_cli source audited from Radar Toolbox 4.00.00.05
+		// hard-codes profile index 0 in mmw_rfparser.c. Reject configurations
+		// the firmware cannot represent instead of deriving a byte count for a
+		// different effective configuration.
 		if len(profiles) != 1 {
-			return 0, 0, errors.New("Radar Toolbox studio_cli requires exactly one profileCfg for profile ID 0")
+			return 0, 0, errors.New("TI xWR68xx studio_cli firmware requires exactly one profileCfg for profile ID 0")
 		}
 		if _, found := profiles[0]; !found {
-			return 0, 0, errors.New("Radar Toolbox studio_cli requires its only profileCfg to use profile ID 0")
+			return 0, 0, errors.New("TI xWR68xx studio_cli firmware requires its only profileCfg to use profile ID 0")
 		}
 	}
 	ranges, err := parseChirpProfileRanges(commands, profiles, enabledTransmitters)
@@ -516,7 +516,7 @@ func deriveExpectedBytes(dialect Dialect, commands []string, frame frameConfigur
 		return 0, 0, err
 	}
 	if dialect == StudioCLI && len(ranges) > 5 {
-		return 0, 0, fmt.Errorf("Radar Toolbox studio_cli stores at most five chirpCfg ranges, got %d", len(ranges))
+		return 0, 0, fmt.Errorf("TI xWR68xx studio_cli firmware stores at most five chirpCfg ranges, got %d", len(ranges))
 	}
 	samplesPerLoop, samplesPerChirp, err := mappedSamplesPerLoop(frame, profiles, ranges)
 	if err != nil {
@@ -631,7 +631,7 @@ func parseProfileSamples(dialect Dialect, commands []string) (map[uint64]uint64,
 				return nil, fmt.Errorf("invalid profileCfg frequency slope in %q", command)
 			}
 			if frequencySlope < 0 {
-				return nil, fmt.Errorf("Radar Toolbox xWR68xx studio_cli does not support negative profileCfg frequency slope: %s", command)
+				return nil, fmt.Errorf("TI xWR68xx studio_cli firmware does not support negative profileCfg frequency slope: %s", command)
 			}
 		}
 		samples, err := parseUnsignedArgument(command, fields, 10, 16, "profileCfg numAdcSamples")

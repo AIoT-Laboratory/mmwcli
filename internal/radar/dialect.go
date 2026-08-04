@@ -24,7 +24,7 @@ var (
 	// SDKDemo is the text CLI exposed by the mmWave SDK demo firmware.
 	SDKDemo = Dialect{name: "demo", defaultBaud: 115200}
 
-	// StudioCLI is the Radar Toolbox studio_cli firmware for xWR68xx.
+	// StudioCLI is TI's xWR68xx studio_cli device firmware dialect.
 	StudioCLI = Dialect{
 		name:              "studio-cli",
 		defaultBaud:       921600,
@@ -104,8 +104,8 @@ func (e *CommandError) Error() string {
 	return fmt.Sprintf("radar rejected %q with Error %d%s", e.Command, e.Code, detail)
 }
 
-// StudioErrorDescription maps the errors implemented by Radar Toolbox
-// studio_cli. The boolean is false for codes outside the audited range.
+// StudioErrorDescription maps the errors implemented by the audited xWR68xx
+// studio_cli device firmware. The boolean is false outside that range.
 func StudioErrorDescription(code int) (string, bool) {
 	description, ok := studioErrorDescriptions[code]
 	return description, ok
@@ -198,7 +198,7 @@ var studioOutOfScopeCommands = map[string]struct{}{
 }
 
 // ValidateConfiguration enforces the audited raw-only command surface of the
-// Radar Toolbox dialect. When full is true, flushCfg must occur exactly once
+// studio_cli dialect. When full is true, flushCfg must occur exactly once
 // and be the first command. A flushCfg supplied in reuse mode must still be
 // first; reuse does not imply that flushCfg clears profile/chirp counters.
 func (d Dialect) ValidateConfiguration(commands []string, full bool) error {
