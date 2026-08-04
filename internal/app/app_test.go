@@ -146,7 +146,7 @@ func TestCommandHelpDoesNotRequirePositionalsOrHardware(t *testing.T) {
 		{"studio-cli", "capture", "--help"},
 		{"dca", "--help"},
 		{"dca", "capture", "--help"},
-		{"toolbox", "--help"},
+		{"firmware", "--help"},
 		{"doctor", "--help"},
 	}
 	for _, arguments := range commands {
@@ -201,11 +201,31 @@ func TestDoctorHelpUsesCommandSynopsis(t *testing.T) {
 		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	help := stderr.String()
-	if !strings.Contains(help, "usage: mmwcli doctor [--toolbox-root PATH]") {
+	if !strings.Contains(help, "usage: mmwcli doctor [--studio-cli-firmware FILE]") {
 		t.Fatalf("doctor help missing command synopsis:\n%s", help)
 	}
 	if strings.Contains(help, "Usage of doctor:") {
 		t.Fatalf("doctor help used default FlagSet synopsis:\n%s", help)
+	}
+}
+
+func TestDoctorDoesNotRequireFirmware(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"doctor"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "TI studio_cli firmware: not checked") {
+		t.Fatalf("doctor implied a firmware dependency:\n%s", stdout.String())
+	}
+}
+
+func TestFirmwareVerifyRequiresExplicitFile(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"firmware", "verify"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "exactly one FILE") {
+		t.Fatalf("missing explicit-file error: %s", stderr.String())
 	}
 }
 
@@ -344,7 +364,7 @@ func TestOnlyCaptureInvocationsClaimCancellationCleanup(t *testing.T) {
 		{"demo", "apply"},
 		{"dca", "stop"},
 		{"dca", "version"},
-		{"toolbox", "verify"},
+		{"firmware", "verify"},
 		{"capture"},
 	} {
 		if captureInvocationHasCleanup(arguments) {

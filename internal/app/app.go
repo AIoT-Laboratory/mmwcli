@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"mmwcli/internal/toolbox"
+	"mmwcli/internal/firmware"
 )
 
 const Version = "0.1.0-dev"
@@ -32,8 +32,8 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 	case "version", "--version", "-v":
 		fmt.Fprintf(stdout, "mmwcli %s (%s/%s)\n", Version, runtime.GOOS, runtime.GOARCH)
 		return 0
-	case "toolbox":
-		err = runToolbox(arguments[1:], stdout, stderr)
+	case "firmware":
+		err = runFirmware(arguments[1:], stdout, stderr)
 	case "doctor":
 		err = runDoctor(arguments[1:], stdout, stderr)
 	case "demo", "studio-cli":
@@ -110,37 +110,31 @@ func hardwareSignalContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
-func runToolbox(arguments []string, stdout, stderr io.Writer) error {
+func runFirmware(arguments []string, stdout, stderr io.Writer) error {
 	if len(arguments) == 0 {
-		return usageError{message: "toolbox requires locate or verify"}
+		return usageError{message: "firmware requires verify"}
 	}
 	if isHelp(arguments[0]) {
-		printToolboxHelp(stdout)
+		printFirmwareHelp(stdout)
 		return nil
 	}
 	action := strings.ToLower(arguments[0])
-	if action != "locate" && action != "verify" {
-		return usageError{message: "unknown toolbox command: " + arguments[0]}
+	if action != "verify" {
+		return usageError{message: "unknown firmware command: " + arguments[0]}
 	}
-	flags := newCommandFlagSet("toolbox "+action, stderr, "mmwcli toolbox "+action+" [options]")
-	root := flags.String("toolbox-root", "", "Radar Toolbox root or tools/studio_cli directory")
+	flags := newCommandFlagSet("firmware "+action, stderr, "mmwcli firmware verify FILE")
 	if err := parseCommandFlags(flags, arguments[1:]); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 {
-		return usageError{message: "unexpected toolbox arguments: " + strings.Join(flags.Args(), " ")}
+	if flags.NArg() != 1 {
+		return usageError{message: "firmware verify requires exactly one FILE"}
 	}
-	installation, err := toolbox.Locate(*root)
+	info, err := firmware.VerifyStudioCLI(flags.Arg(0))
 	if err != nil {
 		return err
 	}
-	toolbox.Print(stdout, installation)
-	if action == "verify" {
-		if err := toolbox.Verify(installation); err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "strict verification passed: Radar Toolbox %s xWR68xx assets\n", installation.PackageVersion)
-	}
+	printFirmwareInfo(stdout, info)
+	fmt.Fprintf(stdout, "strict verification passed: %s\n", firmware.StudioCLIName)
 	return nil
 }
 
@@ -157,8 +151,8 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintf(writer, "mmwcli %s - TI xWR68xx cross-platform CLI control\n\n", Version)
 	fmt.Fprintln(writer, "usage:")
 	fmt.Fprintln(writer, "  mmwcli version")
-	fmt.Fprintln(writer, "  mmwcli doctor [--toolbox-root PATH]")
-	fmt.Fprintln(writer, "  mmwcli toolbox locate|verify [--toolbox-root PATH]")
+	fmt.Fprintln(writer, "  mmwcli doctor [--studio-cli-firmware FILE]")
+	fmt.Fprintln(writer, "  mmwcli firmware verify FILE")
 	fmt.Fprintln(writer, "  mmwcli demo check|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli studio-cli check|version|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli dca ping|version|configure|start|stop|reset-fpga|reset-radar|capture ...")
@@ -183,8 +177,8 @@ func printDCAHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "       mmwcli dca capture OUT [configuration and receiver options]")
 }
 
-func printToolboxHelp(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: mmwcli toolbox locate|verify [--toolbox-root PATH]")
+func printFirmwareHelp(writer io.Writer) {
+	fmt.Fprintln(writer, "usage: mmwcli firmware verify FILE")
 }
 
 func newCommandFlagSet(name string, output io.Writer, synopsis string) *flag.FlagSet {
@@ -206,23 +200,31 @@ func parseCommandFlags(flags *flag.FlagSet, arguments []string) error {
 }
 
 func runDoctor(arguments []string, stdout, stderr io.Writer) error {
-	flags := newCommandFlagSet("doctor", stderr, "mmwcli doctor [--toolbox-root PATH]")
-	root := flags.String("toolbox-root", "", "Radar Toolbox root or tools/studio_cli directory")
+	flags := newCommandFlagSet("doctor", stderr, "mmwcli doctor [--studio-cli-firmware FILE]")
+	firmwarePath := flags.String("studio-cli-firmware", "", "optional TI studio_cli firmware file to verify")
 	if err := parseCommandFlags(flags, arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return usageError{message: "unexpected doctor arguments: " + strings.Join(flags.Args(), " ")}
 	}
-	installation, err := toolbox.Locate(*root)
-	if err != nil {
-		return err
-	}
-	toolbox.Print(stdout, installation)
-	if err := toolbox.Verify(installation); err != nil {
-		return err
+	if strings.TrimSpace(*firmwarePath) == "" {
+		fmt.Fprintln(stdout, "TI studio_cli firmware: not checked")
+	} else {
+		info, err := firmware.VerifyStudioCLI(*firmwarePath)
+		if err != nil {
+			return err
+		}
+		printFirmwareInfo(stdout, info)
 	}
 	fmt.Fprintf(stdout, "platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Fprintln(stdout, "doctor passed (offline environment check only)")
 	return nil
+}
+
+func printFirmwareInfo(writer io.Writer, info firmware.Info) {
+	fmt.Fprintln(writer, "TI studio_cli firmware:")
+	fmt.Fprintln(writer, "  path:", info.Path)
+	fmt.Fprintln(writer, "  size:", info.Size)
+	fmt.Fprintln(writer, "  SHA-256:", info.SHA256)
 }
