@@ -249,6 +249,195 @@ func TestNativeDeadlineCapsLongParent(t *testing.T) {
 	}
 }
 
+func TestD2XXTransportSPIAndIRQTransactions(t *testing.T) {
+	backend, spi, irq, calls := newFakeD2XXBackend()
+	transport, err := openD2XXTransport(context.Background(), testD2XXSelectors(), backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transport.Close()
+
+	*calls = nil
+	if err := transport.SPIWrite(context.Background(), []byte{0x34, 0x12, 0xCD, 0xAB}); err != nil {
+		t.Fatal(err)
+	}
+	spi.spiResponses = [][]byte{{0x12, 0x34}, {0xAB, 0xCD}}
+	buffer := make([]byte, 4)
+	if err := transport.SPIRead(context.Background(), buffer); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buffer, []byte{0x34, 0x12, 0xCD, 0xAB}) {
+		t.Fatalf("SPI read = % X", buffer)
+	}
+	irq.irqSamples = []byte{0x00, 0x20}
+	if err := transport.WaitIRQ(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"A:write:80C04B110100123480C84B87",
+		"A:write:80C04B110100ABCD80C84B87",
+		"A:write:80C24B20010080C84B87", "A:read:2",
+		"A:write:80C24B20010080C84B87", "A:read:2",
+		"B:write:81", "B:read:1", "wait:1ms",
+		"B:write:81", "B:read:1",
+	}
+	if strings.Join(*calls, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("calls:\n%s\nwant:\n%s", strings.Join(*calls, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestD2XXTransportRejectsInvalidSPITransferBeforeIO(t *testing.T) {
+	backend, _, _, calls := newFakeD2XXBackend()
+	transport, err := openD2XXTransport(context.Background(), testD2XXSelectors(), backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transport.Close()
+	*calls = nil
+	for _, buffer := range [][]byte{nil, {1}} {
+		if err := transport.SPIWrite(context.Background(), buffer); err == nil {
+			t.Fatalf("SPIWrite(%v) succeeded", buffer)
+		}
+		if err := transport.SPIRead(context.Background(), buffer); err == nil {
+			t.Fatalf("SPIRead(%v) succeeded", buffer)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("invalid transfer reached device: %v", *calls)
+	}
+}
+
+func TestD2XXTransportFailsClosedWithoutRetry(t *testing.T) {
+	t.Run("stale queue", func(t *testing.T) {
+		backend, spi, _, calls := newFakeD2XXBackend()
+		transport, err := openD2XXTransport(context.Background(), testD2XXSelectors(), backend)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer transport.Close()
+		*calls = nil
+		spi.rx = []byte{0xFA}
+		err = transport.SPIWrite(context.Background(), []byte{0x34, 0x12})
+		if err == nil || !strings.Contains(err.Error(), "not empty") {
+			t.Fatalf("SPIWrite error = %v", err)
+		}
+		if len(*calls) != 0 {
+			t.Fatalf("stale queue was drained or written through: %v", *calls)
+		}
+	})
+
+	t.Run("short write", func(t *testing.T) {
+		backend, spi, _, calls := newFakeD2XXBackend()
+		transport, err := openD2XXTransport(context.Background(), testD2XXSelectors(), backend)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer transport.Close()
+		*calls = nil
+		command := spiMPSSEWriteWord(0x1234)
+		spi.shortWriteOn = command[:]
+		if err := transport.SPIWrite(context.Background(), []byte{0x34, 0x12}); !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("SPIWrite error = %v", err)
+		}
+		if len(*calls) != 1 {
+			t.Fatalf("short write was retried: %v", *calls)
+		}
+	})
+}
+
+func TestD2XXTransportStopsOnCancellationAndClosedState(t *testing.T) {
+	var nilTransport *D2XXTransport
+	if err := nilTransport.WaitIRQ(context.Background(), true); !errors.Is(err, ErrD2XXTransportClosed) {
+		t.Fatalf("nil WaitIRQ = %v", err)
+	}
+	backend, _, _, calls := newFakeD2XXBackend()
+	transport, err := openD2XXTransport(context.Background(), testD2XXSelectors(), backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*calls = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := transport.WaitIRQ(ctx, true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitIRQ error = %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("canceled wait reached device: %v", *calls)
+	}
+	if err := transport.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := transport.SPIWrite(context.Background(), []byte{0, 0}); !errors.Is(err, ErrD2XXTransportClosed) {
+		t.Fatalf("SPIWrite after close = %v", err)
+	}
+}
+
+func TestD2XXTransportAllowsSPIWhileWaitingForIRQAndCloseCancelsWait(t *testing.T) {
+	backend, spi, irq, _ := newFakeD2XXBackend()
+	transport, err := openD2XXTransport(context.Background(), testD2XXSelectors(), backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spiCalls, irqCalls := []string{}, []string{}
+	spi.calls, irq.calls = &spiCalls, &irqCalls
+	irq.irqSamples = nil
+	polling := make(chan struct{}, 1)
+	backend.wait = func(ctx context.Context, duration time.Duration) error {
+		if duration == nativePollInterval {
+			select {
+			case polling <- struct{}{}:
+			default:
+			}
+			return waitContext(ctx, time.Hour)
+		}
+		return nil
+	}
+	transport.backend.wait = backend.wait
+
+	waitResult := make(chan error, 1)
+	go func() {
+		waitResult <- transport.WaitIRQ(context.Background(), true)
+	}()
+	select {
+	case <-polling:
+	case <-time.After(time.Second):
+		t.Fatal("WaitIRQ did not begin polling")
+	}
+	if err := transport.SPIWrite(context.Background(), []byte{0x34, 0x12}); err != nil {
+		t.Fatalf("SPIWrite while waiting for IRQ: %v", err)
+	}
+	if err := transport.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-waitResult:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("WaitIRQ error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel WaitIRQ")
+	}
+}
+
+func TestD2XXTransportSPIReadPublishesAtomically(t *testing.T) {
+	backend, spi, _, _ := newFakeD2XXBackend()
+	transport, err := openD2XXTransport(context.Background(), testD2XXSelectors(), backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transport.Close()
+	spi.spiResponses = [][]byte{{0x12, 0x34}, {0xAB, 0xCD}}
+	spi.readLimits = []int{2, 1}
+	buffer := []byte{0xAA, 0xAA, 0xAA, 0xAA}
+	if err := transport.SPIRead(context.Background(), buffer); err == nil {
+		t.Fatal("short second word succeeded")
+	}
+	if !bytes.Equal(buffer, []byte{0xAA, 0xAA, 0xAA, 0xAA}) {
+		t.Fatalf("partial SPI read was published: % X", buffer)
+	}
+}
+
 func testD2XXSelectors() D2XXSelectors {
 	return D2XXSelectors{
 		SPI: d2xx.Selector{By: d2xx.SelectBySerialNumber, Value: "FTAK3Z11A"},
@@ -304,7 +493,10 @@ type fakeMPSSEDevice struct {
 	closeCalls   int
 	shortWriteOn []byte
 	readLimit    int
+	readLimits   []int
 	zeroRead     bool
+	spiResponses [][]byte
+	irqSamples   []byte
 }
 
 func (device *fakeMPSSEDevice) Read(buffer []byte) (int, error) {
@@ -314,6 +506,13 @@ func (device *fakeMPSSEDevice) Read(buffer []byte) (int, error) {
 	}
 	if device.readLimit > 0 && len(buffer) > device.readLimit {
 		buffer = buffer[:device.readLimit]
+	}
+	if len(device.readLimits) != 0 {
+		limit := device.readLimits[0]
+		device.readLimits = device.readLimits[1:]
+		if limit > 0 && len(buffer) > limit {
+			buffer = buffer[:limit]
+		}
 	}
 	count := copy(buffer, device.rx)
 	device.rx = device.rx[count:]
@@ -328,6 +527,16 @@ func (device *fakeMPSSEDevice) Write(buffer []byte) (int, error) {
 	}
 	if bytes.Equal(buffer, []byte{0xAB}) {
 		device.rx = append(device.rx, device.syncResponse...)
+	}
+	spiReadCommand := spiMPSSEReadWordCommand()
+	if bytes.Equal(buffer, spiReadCommand[:]) && len(device.spiResponses) != 0 {
+		device.rx = append(device.rx, device.spiResponses[0]...)
+		device.spiResponses = device.spiResponses[1:]
+	}
+	irqReadCommand := irqMPSSEReadCommand()
+	if bytes.Equal(buffer, irqReadCommand[:]) && len(device.irqSamples) != 0 {
+		device.rx = append(device.rx, device.irqSamples[0])
+		device.irqSamples = device.irqSamples[1:]
 	}
 	return len(buffer), nil
 }

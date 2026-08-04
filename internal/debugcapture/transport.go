@@ -2,6 +2,7 @@ package debugcapture
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 
 	"mmwcli/internal/d2xx"
 )
+
+var ErrD2XXTransportClosed = errors.New("debug-capture D2XX transport is closed")
 
 const (
 	nativeOperationTimeout = 10 * time.Second
@@ -41,11 +44,16 @@ type d2xxBackend struct {
 }
 
 type D2XXTransport struct {
-	mu      sync.Mutex
-	spi     mpsseDevice
-	irq     mpsseDevice
-	backend d2xxBackend
-	closed  bool
+	lifecycleMu     sync.RWMutex
+	spiMu           sync.Mutex
+	irqMu           sync.Mutex
+	spi             mpsseDevice
+	irq             mpsseDevice
+	backend         d2xxBackend
+	lifecycle       context.Context
+	lifecycleCancel context.CancelFunc
+	closed          bool
+	closeErr        error
 }
 
 func OpenD2XXTransport(ctx context.Context, selectors D2XXSelectors) (*D2XXTransport, error) {
@@ -117,7 +125,14 @@ func openD2XXTransport(ctx context.Context, selectors D2XXSelectors, backend d2x
 		)
 	}
 
-	transport := &D2XXTransport{spi: spi, irq: irq, backend: backend}
+	lifecycle, lifecycleCancel := context.WithCancel(context.Background())
+	transport := &D2XXTransport{
+		spi:             spi,
+		irq:             irq,
+		backend:         backend,
+		lifecycle:       lifecycle,
+		lifecycleCancel: lifecycleCancel,
+	}
 	if err := transport.initialize(operationContext); err != nil {
 		return nil, errors.Join(err, transport.Close())
 	}
@@ -299,14 +314,146 @@ func drainMPSSE(ctx context.Context, device mpsseDevice) error {
 	}
 }
 
+// SPIWrite sends an RHCP byte buffer. Each little-endian host word is emitted
+// most-significant byte first on the MPSSE wire, matching xWR68xx SPI.
+func (transport *D2XXTransport) SPIWrite(ctx context.Context, payload []byte) error {
+	if transport == nil {
+		return ErrD2XXTransportClosed
+	}
+	if err := validateSPITransfer(payload); err != nil {
+		return err
+	}
+	transport.lifecycleMu.RLock()
+	defer transport.lifecycleMu.RUnlock()
+	if transport.closed || transport.spi == nil || transport.lifecycle == nil {
+		return ErrD2XXTransportClosed
+	}
+	operationContext, cancel := transport.withOperationContext(ctx)
+	defer cancel()
+	transport.spiMu.Lock()
+	defer transport.spiMu.Unlock()
+	if err := requireEmptyMPSSEQueue(operationContext, transport.spi); err != nil {
+		return err
+	}
+	for offset := 0; offset < len(payload); offset += 2 {
+		word := binary.LittleEndian.Uint16(payload[offset : offset+2])
+		command := spiMPSSEWriteWord(word)
+		if err := writeMPSSE(operationContext, transport.spi, command[:]); err != nil {
+			return fmt.Errorf("write SPI word %d: %w", offset/2, err)
+		}
+	}
+	return requireEmptyMPSSEQueue(operationContext, transport.spi)
+}
+
+// SPIRead fills an RHCP byte buffer in host little-endian word order.
+func (transport *D2XXTransport) SPIRead(ctx context.Context, buffer []byte) error {
+	if transport == nil {
+		return ErrD2XXTransportClosed
+	}
+	if err := validateSPITransfer(buffer); err != nil {
+		return err
+	}
+	transport.lifecycleMu.RLock()
+	defer transport.lifecycleMu.RUnlock()
+	if transport.closed || transport.spi == nil || transport.lifecycle == nil {
+		return ErrD2XXTransportClosed
+	}
+	operationContext, cancel := transport.withOperationContext(ctx)
+	defer cancel()
+	transport.spiMu.Lock()
+	defer transport.spiMu.Unlock()
+	if err := requireEmptyMPSSEQueue(operationContext, transport.spi); err != nil {
+		return err
+	}
+	result := make([]byte, len(buffer))
+	for offset := 0; offset < len(result); offset += 2 {
+		command := spiMPSSEReadWordCommand()
+		if err := writeMPSSE(operationContext, transport.spi, command[:]); err != nil {
+			return fmt.Errorf("request SPI word %d: %w", offset/2, err)
+		}
+		response, err := readMPSSEExact(operationContext, transport.spi, 2, transport.backend.wait)
+		if err != nil {
+			return fmt.Errorf("read SPI word %d: %w", offset/2, err)
+		}
+		word, err := decodeSPIWord(response)
+		if err != nil {
+			return err
+		}
+		binary.LittleEndian.PutUint16(result[offset:offset+2], word)
+	}
+	copy(buffer, result)
+	return nil
+}
+
+func (transport *D2XXTransport) WaitIRQ(ctx context.Context, asserted bool) error {
+	if transport == nil {
+		return ErrD2XXTransportClosed
+	}
+	transport.lifecycleMu.RLock()
+	defer transport.lifecycleMu.RUnlock()
+	if transport.closed || transport.irq == nil || transport.lifecycle == nil {
+		return ErrD2XXTransportClosed
+	}
+	operationContext, cancel := transport.withOperationContext(ctx)
+	defer cancel()
+	transport.irqMu.Lock()
+	defer transport.irqMu.Unlock()
+	for {
+		if err := requireEmptyMPSSEQueue(operationContext, transport.irq); err != nil {
+			return err
+		}
+		command := irqMPSSEReadCommand()
+		if err := writeMPSSE(operationContext, transport.irq, command[:]); err != nil {
+			return fmt.Errorf("request IRQ state: %w", err)
+		}
+		response, err := readMPSSEExact(operationContext, transport.irq, 1, transport.backend.wait)
+		if err != nil {
+			return fmt.Errorf("read IRQ state: %w", err)
+		}
+		if irqAsserted(response[0]) == asserted {
+			return nil
+		}
+		if err := transport.backend.wait(operationContext, nativePollInterval); err != nil {
+			return err
+		}
+	}
+}
+
+func validateSPITransfer(buffer []byte) error {
+	if len(buffer) == 0 {
+		return errors.New("SPI transfer is empty")
+	}
+	if len(buffer)%2 != 0 {
+		return fmt.Errorf("SPI transfer length must be even: %d", len(buffer))
+	}
+	return nil
+}
+
+func requireEmptyMPSSEQueue(ctx context.Context, device mpsseDevice) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	queued, err := device.QueueStatus()
+	if err != nil {
+		return err
+	}
+	if queued != 0 {
+		return fmt.Errorf("MPSSE receive queue is not empty: %d bytes", queued)
+	}
+	return nil
+}
+
 func (transport *D2XXTransport) Close() error {
 	if transport == nil {
 		return nil
 	}
-	transport.mu.Lock()
-	defer transport.mu.Unlock()
+	if transport.lifecycleCancel != nil {
+		transport.lifecycleCancel()
+	}
+	transport.lifecycleMu.Lock()
+	defer transport.lifecycleMu.Unlock()
 	if transport.closed {
-		return nil
+		return transport.closeErr
 	}
 	transport.closed = true
 
@@ -322,7 +469,20 @@ func (transport *D2XXTransport) Close() error {
 	if transport.backend.close != nil {
 		result = errors.Join(result, transport.backend.close())
 	}
-	return result
+	transport.closeErr = result
+	return transport.closeErr
+}
+
+func (transport *D2XXTransport) withOperationContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := withNativeDeadline(parent)
+	stopLifecycle := context.AfterFunc(transport.lifecycle, cancel)
+	if transport.lifecycle.Err() != nil {
+		cancel()
+	}
+	return ctx, func() {
+		stopLifecycle()
+		cancel()
+	}
 }
 
 func withNativeDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
