@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"mmwcli/internal/debugcapture"
 	"mmwcli/internal/firmware"
 )
 
@@ -36,6 +37,8 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 		err = runFirmware(arguments[1:], stdout, stderr)
 	case "doctor":
 		err = runDoctor(arguments[1:], stdout, stderr)
+	case "debug-capture":
+		err = runDebugCapture(arguments[1:], stdout, stderr)
 	case "demo", "studio-cli":
 		err = runRadar(arguments[0], arguments[1:], stdout, stderr)
 	case "dca":
@@ -138,6 +141,43 @@ func runFirmware(arguments []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
+func runDebugCapture(arguments []string, stdout, stderr io.Writer) error {
+	if len(arguments) == 0 {
+		return usageError{message: "debug-capture requires check"}
+	}
+	if isHelp(arguments[0]) {
+		printDebugCaptureHelp(stdout)
+		return nil
+	}
+	if !strings.EqualFold(arguments[0], "check") {
+		return usageError{message: "unknown debug-capture command: " + arguments[0]}
+	}
+	flags := newCommandFlagSet(
+		"debug-capture check",
+		stderr,
+		"mmwcli debug-capture check --bss-fw FILE --mss-fw FILE",
+	)
+	bssPath := flags.String("bss-fw", "", "xWR68xx BSS/RadarSS firmware file")
+	mssPath := flags.String("mss-fw", "", "xWR68xx MSS/MasterSS firmware file")
+	if err := parseCommandFlags(flags, arguments[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return usageError{message: "unexpected debug-capture arguments: " + strings.Join(flags.Args(), " ")}
+	}
+	if strings.TrimSpace(*bssPath) == "" || strings.TrimSpace(*mssPath) == "" {
+		return usageError{message: "debug-capture check requires --bss-fw FILE and --mss-fw FILE"}
+	}
+	assets, err := debugcapture.CheckAssets(*bssPath, *mssPath)
+	if err != nil {
+		return err
+	}
+	printDebugCaptureAsset(stdout, assets.BSS)
+	printDebugCaptureAsset(stdout, assets.MSS)
+	fmt.Fprintln(stdout, "debug-capture asset check passed (offline; no hardware accessed)")
+	return nil
+}
+
 func isHelp(command string) bool {
 	switch strings.ToLower(command) {
 	case "help", "--help", "-h":
@@ -153,6 +193,7 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "  mmwcli version")
 	fmt.Fprintln(writer, "  mmwcli doctor [--studio-cli-firmware FILE]")
 	fmt.Fprintln(writer, "  mmwcli firmware verify FILE")
+	fmt.Fprintln(writer, "  mmwcli debug-capture check --bss-fw FILE --mss-fw FILE")
 	fmt.Fprintln(writer, "  mmwcli demo check|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli studio-cli check|version|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli dca ping|version|configure|start|stop|reset-fpga|reset-radar|capture ...")
@@ -179,6 +220,10 @@ func printDCAHelp(writer io.Writer) {
 
 func printFirmwareHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "usage: mmwcli firmware verify FILE")
+}
+
+func printDebugCaptureHelp(writer io.Writer) {
+	fmt.Fprintln(writer, "usage: mmwcli debug-capture check --bss-fw FILE --mss-fw FILE")
 }
 
 func newCommandFlagSet(name string, output io.Writer, synopsis string) *flag.FlagSet {
@@ -227,4 +272,11 @@ func printFirmwareInfo(writer io.Writer, info firmware.Info) {
 	fmt.Fprintln(writer, "  path:", info.Path)
 	fmt.Fprintln(writer, "  size:", info.Size)
 	fmt.Fprintln(writer, "  SHA-256:", info.SHA256)
+}
+
+func printDebugCaptureAsset(writer io.Writer, asset debugcapture.File) {
+	fmt.Fprintf(writer, "%s firmware (%s):\n", asset.Role, asset.Name)
+	fmt.Fprintln(writer, "  path:", asset.Path)
+	fmt.Fprintln(writer, "  size:", asset.Size)
+	fmt.Fprintln(writer, "  SHA-256:", asset.SHA256)
 }

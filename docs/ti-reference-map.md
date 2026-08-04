@@ -14,6 +14,19 @@ mmwcli 不下载或分发 TI 资产。functional/application 路线运行时不�
 
 完整 Toolbox、package metadata、manifest、profile 和源码都不是校验或采集前置条件。
 
+## `debug-capture` MSS/BSS 固件
+
+离线资产合同来自 mmWave Studio 2.1.1 的 RF evaluation firmware。只需用户显式提供下列
+两个文件，不需要安装或调用 mmWave Studio runtime：
+
+| 角色与相对路径 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| BSS `rf_eval_firmware/radarss/xwr68xx_radarss.bin` | 240072 | `E2C69405394E35BA376EFE1A52305EE74DBD19F8BAB72BD5A9078878853CD77F` |
+| MSS `rf_eval_firmware/masterss/xwr68xx_masterss.bin` | 92992 | `316911D4A8DBA1762714A3A107071BD0CF06A135FAE29BFBBC92B037592DE060` |
+
+`mmwcli debug-capture check --bss-fw FILE --mss-fw FILE` 只做离线校验，不会打开雷达、
+DCA1000 或 USB 设备。该命令通过不代表直控采集链已经实现。
+
 ## 开发参考
 
 协议核对曾参考 `tools/studio_cli` 中的下列资料：

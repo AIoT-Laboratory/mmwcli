@@ -6,6 +6,7 @@ mmwcli 将设备协议、采集状态机和操作系统 I/O 分开，使 Windows
 cmd/mmwcli
   -> internal/app          命令解析与退出码
   -> internal/firmware     单个 TI 设备固件的离线校验
+  -> internal/debugcapture SOP2 直控所需 MSS/BSS 资产校验
   -> internal/radar        CLI 方言、CFG 预检、应答解析
      -> internal/serialport
   -> internal/session      雷达与 DCA1000 采集状态机
@@ -56,7 +57,8 @@ Advanced frame、monitor、continuous、test、loopback、软件 LVDS 和 LVDS h
 
 SOP2 主机下载与直控路径使用独立入口 `debug-capture`，不属于文本 CLI 方言，也不接入
 当前 `session.Radar` 接口。MSS/BSS 固件必须由用户显式提供；该路径不得自动发现 TI 安装，
-不得依赖 mmWave Studio runtime、Lua、C# 或 CGo。只有 CLI 中实际公开的子命令才视为已实现。
+不得依赖 mmWave Studio runtime、Lua、C# 或 CGo。当前只实现离线资产校验；SOP2 下载、
+mmWaveLink 控制与 ADC 采集尚未实现。
 
 ## 一体化采集状态机
 

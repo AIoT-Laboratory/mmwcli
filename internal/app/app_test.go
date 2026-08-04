@@ -19,7 +19,7 @@ func TestHelpContainsOnlyCLIBackends(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
 	}
 	text := stdout.String()
-	for _, expected := range []string{"mmwcli version", "studio-cli", "demo", "dca", "cross-platform"} {
+	for _, expected := range []string{"mmwcli version", "studio-cli", "demo", "dca", "debug-capture", "cross-platform"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("help does not contain %q:\n%s", expected, text)
 		}
@@ -147,6 +147,8 @@ func TestCommandHelpDoesNotRequirePositionalsOrHardware(t *testing.T) {
 		{"dca", "--help"},
 		{"dca", "capture", "--help"},
 		{"firmware", "--help"},
+		{"debug-capture", "--help"},
+		{"debug-capture", "check", "--help"},
 		{"doctor", "--help"},
 	}
 	for _, arguments := range commands {
@@ -226,6 +228,35 @@ func TestFirmwareVerifyRequiresExplicitFile(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "exactly one FILE") {
 		t.Fatalf("missing explicit-file error: %s", stderr.String())
+	}
+}
+
+func TestDebugCaptureCheckRequiresExplicitAssets(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"debug-capture", "check", "--bss-fw", "bss.bin"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "requires --bss-fw FILE and --mss-fw FILE") {
+		t.Fatalf("missing explicit-assets error: %s", stderr.String())
+	}
+}
+
+func TestDebugCaptureCheckRejectsBadAssetsOffline(t *testing.T) {
+	root := t.TempDir()
+	bssPath := filepath.Join(root, "bss.bin")
+	mssPath := filepath.Join(root, "mss.bin")
+	for _, path := range []string{bssPath, mssPath} {
+		if err := os.WriteFile(path, []byte("not TI firmware"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	arguments := []string{"debug-capture", "check", "--bss-fw", bssPath, "--mss-fw", mssPath}
+	if code := Run(arguments, &stdout, &stderr); code != 4 {
+		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "BSS firmware size mismatch") {
+		t.Fatalf("missing asset error: %s", stderr.String())
 	}
 }
 

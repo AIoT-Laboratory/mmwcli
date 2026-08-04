@@ -53,11 +53,14 @@ CGO_ENABLED=0 go build -trimpath -o bin/mmwcli ./cmd/mmwcli
 ```text
 mmwcli doctor
 mmwcli firmware verify PATH/mmwave_Studio_cli_xwr68xx.bin
+mmwcli debug-capture check --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin
 mmwcli studio-cli check hardware/studio-cli-xwr6843-raw.cfg
 ```
 
 `firmware verify` 只读取显式给出的文件，并按已知大小与 SHA-256 严格校验；它不查找或
 校验 Toolbox metadata、profile、manifest。若不需要验证固件，`doctor` 无需任何 TI 路径。
+`debug-capture check` 目前只核对用户显式提供的 MSS/BSS 固件，不访问任何硬件；它不表示
+SOP2 下载、mmWaveLink 控制或 ADC 采集已经完成。
 
 ## xWR6843 + DCA1000 快速开始
 
@@ -94,6 +97,7 @@ mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-02.bin --p
 | `version` | 显示 mmwcli 版本与目标平台 |
 | `doctor` | 离线检查平台；可选校验 `studio_cli` 固件 |
 | `firmware verify FILE` | 严格校验单个 `studio_cli` 固件文件 |
+| `debug-capture check` | 离线校验直控路线所需的 MSS/BSS 固件 |
 | `studio-cli check` | 离线预检 `studio_cli` CFG |
 | `studio-cli version\|apply\|start\|stop\|capture` | 控制 `studio_cli` 固件 |
 | `demo check\|apply\|start\|stop\|capture` | 控制 SDK demo 固件 |
