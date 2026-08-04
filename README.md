@@ -17,7 +17,7 @@ LVDS。functional/application 路线使用 TI `studio_cli` 设备固件，SDK de
 - Advanced frame、级联、LVDS header、软件 LVDS、RF monitor UART、CSI-2 和 TSW1400
   暂不支持。
 
-这条路线唯一涉及的 Toolbox 资产是用户自行烧录的
+文本 CLI 路线唯一需要的 TI 资产是用户自行烧录的
 `mmwave_Studio_cli_xwr68xx.bin`。烧录后，正常配置与采集不需要固件路径，也不需要安装
 Radar Toolbox 或 mmWave Studio。固件和 TI 文档不随本仓库分发。
 
@@ -59,8 +59,9 @@ mmwcli studio-cli check hardware/studio-cli-xwr6843-raw.cfg
 
 `firmware verify` 只读取显式给出的文件，并按已知大小与 SHA-256 严格校验；它不查找或
 校验 Toolbox metadata、profile、manifest。若不需要验证固件，`doctor` 无需任何 TI 路径。
-`debug-capture check` 目前只核对用户显式提供的 MSS/BSS 固件，不访问任何硬件；它不表示
-SOP2 下载、mmWaveLink 控制或 ADC 采集已经完成。
+`debug-capture check` 核对用户显式提供的 MSS/BSS 固件，解析 RPRC 并生成 xWR68xx
+内存写计划，全程不访问硬件；它不表示 SOP2 下载、mmWaveLink 控制或 ADC 采集
+已经完成。
 
 ## xWR6843 + DCA1000 快速开始
 

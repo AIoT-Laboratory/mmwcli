@@ -1,7 +1,7 @@
 # TI 资料与版本地图
 
-mmwcli 不下载或分发 TI 资产。functional/application 路线运行时不读取 Toolbox 安装；
-需要离线核对时，只读取用户显式传入的 `mmwave_Studio_cli_xwr68xx.bin`。
+mmwcli 不下载或分发 TI 资产。文本 CLI 路线唯一需要的是用户自行烧录的
+`mmwave_Studio_cli_xwr68xx.bin`；运行时不读取 Toolbox 安装。
 
 ## `studio_cli` 设备固件
 
@@ -24,8 +24,9 @@ mmwcli 不下载或分发 TI 资产。functional/application 路线运行时不�
 | BSS `rf_eval_firmware/radarss/xwr68xx_radarss.bin` | 240072 | `E2C69405394E35BA376EFE1A52305EE74DBD19F8BAB72BD5A9078878853CD77F` |
 | MSS `rf_eval_firmware/masterss/xwr68xx_masterss.bin` | 92992 | `316911D4A8DBA1762714A3A107071BD0CF06A135FAE29BFBBC92B037592DE060` |
 
-`mmwcli debug-capture check --bss-fw FILE --mss-fw FILE` 只做离线校验，不会打开雷达、
-DCA1000 或 USB 设备。该命令通过不代表直控采集链已经实现。
+`mmwcli debug-capture check --bss-fw FILE --mss-fw FILE` 还会解析 RPRC、检查 xWR68xx
+内存窗口并生成内存写计划；它不会打开雷达、DCA1000 或 USB 设备。命令通过不代表
+直控采集链已经实现。
 
 ## 开发参考
 
@@ -55,6 +56,9 @@ SDK demo 方言的主要参考路径为：
 - `packages/ti/demo/xwr68xx/mmw/profiles`：官方 demo profiles；
 - `packages/ti/common/sys_common_xwr68xx.h`：xWR68xx 32 KiB ADCBuf；
 - `packages/ti/drivers/cbuff/include/cbuff_internal.h`：CBUFF 约束；
+- `packages/ti/utils/sbl/include/image_parser.h`、`src/image_parser.c` 与
+  `platform/sbl_xwr68xx.c`：RPRC 格式、补齐和 xWR68xx 内存窗口；
+- `packages/ti/control/mmwavelink`：transport-neutral mmWaveLink/RHCP 协议；
 - `docs/mmwave_sdk_software_manifest.html`：版本和许可清单。
 
 普通 demo profile 不一定开启硬件 LVDS。用于 DCA1000 capture 的配置必须显式满足

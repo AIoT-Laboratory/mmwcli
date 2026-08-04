@@ -57,7 +57,11 @@ Advanced frame、monitor、continuous、test、loopback、软件 LVDS 和 LVDS h
 
 SOP2 主机下载与直控路径使用独立入口 `debug-capture`，不属于文本 CLI 方言，也不接入
 当前 `session.Radar` 接口。MSS/BSS 固件必须由用户显式提供；该路径不得自动发现 TI 安装，
-不得依赖 mmWave Studio runtime、Lua、C# 或 CGo。当前只实现离线资产校验；SOP2 下载、
+不得依赖 mmWave Studio runtime、Lua、C# 或 CGo。当前实现离线资产校验、RPRC 解析、
+xWR68xx 内存窗口检查和每块不超过 4096 字节的非空内存写计划，不打开串口或 USB。
+
+TI 参考流程在 Enhanced COM 上完成 MSS/BSS 内存写，随后通过 FTDI MPSSE SPI/IRQ 承载
+mmWaveLink；因此 COM 不能单独完成直控采集。跨平台 USB transport、SOP2 下载握手、
 mmWaveLink 控制与 ADC 采集尚未实现。
 
 ## 一体化采集状态机
