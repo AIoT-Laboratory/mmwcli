@@ -22,11 +22,18 @@ const (
 )
 
 type File struct {
-	Role   string
-	Name   string
-	Path   string
-	Size   int64
-	SHA256 string
+	Role        string
+	Name        string
+	Path        string
+	Size        int64
+	SHA256      string
+	EntryPoint  uint32
+	RPRCVersion uint32
+	Sections    int
+	Writes      int
+
+	image     rprcImage
+	writePlan []memoryWrite
 }
 
 type Assets struct {
@@ -39,6 +46,7 @@ type fileContract struct {
 	name   string
 	size   int64
 	sha256 string
+	target rprcTarget
 }
 
 type contracts struct {
@@ -49,12 +57,13 @@ type contracts struct {
 type candidate struct {
 	path string
 	info os.FileInfo
+	file *os.File
 }
 
 func CheckAssets(bssPath, mssPath string) (Assets, error) {
 	return checkAssets(bssPath, mssPath, contracts{
-		bss: fileContract{role: "BSS", name: BSSName, size: BSSSize, sha256: BSSSHA256},
-		mss: fileContract{role: "MSS", name: MSSName, size: MSSSize, sha256: MSSSHA256},
+		bss: fileContract{role: "BSS", name: BSSName, size: BSSSize, sha256: BSSSHA256, target: rprcTargetBSS},
+		mss: fileContract{role: "MSS", name: MSSName, size: MSSSize, sha256: MSSSHA256, target: rprcTargetMSS},
 	})
 }
 
@@ -63,10 +72,12 @@ func checkAssets(bssPath, mssPath string, expected contracts) (Assets, error) {
 	if err != nil {
 		return Assets{}, err
 	}
+	defer bss.file.Close()
 	mss, err := inspectCandidate(mssPath, expected.mss.role)
 	if err != nil {
 		return Assets{}, err
 	}
+	defer mss.file.Close()
 	if os.SameFile(bss.info, mss.info) {
 		return Assets{}, errors.New("debug-capture BSS and MSS firmware must be different files")
 	}
@@ -91,14 +102,20 @@ func inspectCandidate(path, role string) (candidate, error) {
 	if err != nil {
 		return candidate{}, fmt.Errorf("resolve debug-capture %s firmware %q: %w", role, cleaned, err)
 	}
-	info, err := os.Stat(absolute)
+	file, err := os.Open(absolute)
 	if err != nil {
+		return candidate{}, fmt.Errorf("open debug-capture %s firmware %s: %w", role, absolute, err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
 		return candidate{}, fmt.Errorf("stat debug-capture %s firmware %s: %w", role, absolute, err)
 	}
 	if !info.Mode().IsRegular() {
+		file.Close()
 		return candidate{}, fmt.Errorf("debug-capture %s firmware is not a regular file: %s", role, absolute)
 	}
-	return candidate{path: absolute, info: info}, nil
+	return candidate{path: absolute, info: info, file: file}, nil
 }
 
 func verifyCandidate(candidate candidate, expected fileContract) (File, error) {
@@ -111,10 +128,21 @@ func verifyCandidate(candidate candidate, expected fileContract) (File, error) {
 			candidate.path,
 		)
 	}
-	digest, err := fileSHA256(candidate.path)
+	content, err := io.ReadAll(io.LimitReader(candidate.file, expected.size+1))
 	if err != nil {
-		return File{}, fmt.Errorf("hash debug-capture %s firmware %s: %w", expected.role, candidate.path, err)
+		return File{}, fmt.Errorf("read debug-capture %s firmware %s: %w", expected.role, candidate.path, err)
 	}
+	if int64(len(content)) != expected.size {
+		return File{}, fmt.Errorf(
+			"debug-capture %s firmware changed while reading: expected=%d actual=%d path=%s",
+			expected.role,
+			expected.size,
+			len(content),
+			candidate.path,
+		)
+	}
+	hash := sha256.Sum256(content)
+	digest := strings.ToUpper(hex.EncodeToString(hash[:]))
 	if !strings.EqualFold(digest, expected.sha256) {
 		return File{}, fmt.Errorf(
 			"debug-capture %s firmware SHA-256 mismatch: expected=%s actual=%s path=%s",
@@ -124,24 +152,25 @@ func verifyCandidate(candidate candidate, expected fileContract) (File, error) {
 			candidate.path,
 		)
 	}
-	return File{
-		Role:   expected.role,
-		Name:   expected.name,
-		Path:   candidate.path,
-		Size:   candidate.info.Size(),
-		SHA256: digest,
-	}, nil
-}
-
-func fileSHA256(path string) (string, error) {
-	file, err := os.Open(path)
+	image, err := parseRPRC(content)
 	if err != nil {
-		return "", err
+		return File{}, fmt.Errorf("parse debug-capture %s firmware RPRC %s: %w", expected.role, candidate.path, err)
 	}
-	defer file.Close()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
+	writes, err := planMemoryWrites(image, expected.target)
+	if err != nil {
+		return File{}, fmt.Errorf("plan debug-capture %s firmware writes %s: %w", expected.role, candidate.path, err)
 	}
-	return strings.ToUpper(hex.EncodeToString(hash.Sum(nil))), nil
+	return File{
+		Role:        expected.role,
+		Name:        expected.name,
+		Path:        candidate.path,
+		Size:        candidate.info.Size(),
+		SHA256:      digest,
+		EntryPoint:  image.entryPoints[0],
+		RPRCVersion: image.version,
+		Sections:    len(image.sections),
+		Writes:      len(writes),
+		image:       image,
+		writePlan:   writes,
+	}, nil
 }

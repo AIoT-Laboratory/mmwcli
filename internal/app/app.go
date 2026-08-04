@@ -279,4 +279,12 @@ func printDebugCaptureAsset(writer io.Writer, asset debugcapture.File) {
 	fmt.Fprintln(writer, "  path:", asset.Path)
 	fmt.Fprintln(writer, "  size:", asset.Size)
 	fmt.Fprintln(writer, "  SHA-256:", asset.SHA256)
+	fmt.Fprintf(
+		writer,
+		"  RPRC: version=%d entry=0x%08X sections=%d write-chunks=%d\n",
+		asset.RPRCVersion,
+		asset.EntryPoint,
+		asset.Sections,
+		asset.Writes,
+	)
 }

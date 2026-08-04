@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"mmwcli/internal/dca"
+	"mmwcli/internal/debugcapture"
 	"mmwcli/internal/session"
 )
 
@@ -257,6 +258,23 @@ func TestDebugCaptureCheckRejectsBadAssetsOffline(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "BSS firmware size mismatch") {
 		t.Fatalf("missing asset error: %s", stderr.String())
+	}
+}
+
+func TestPrintDebugCaptureAssetIncludesRPRCWritePlan(t *testing.T) {
+	var output bytes.Buffer
+	printDebugCaptureAsset(&output, debugcapture.File{
+		Role:        "BSS",
+		Name:        debugcapture.BSSName,
+		Path:        "bss.bin",
+		Size:        debugcapture.BSSSize,
+		SHA256:      debugcapture.BSSSHA256,
+		RPRCVersion: 1,
+		Sections:    12,
+		Writes:      65,
+	})
+	if !strings.Contains(output.String(), "RPRC: version=1 entry=0x00000000 sections=12 write-chunks=65") {
+		t.Fatalf("missing RPRC write plan: %s", output.String())
 	}
 }
 
