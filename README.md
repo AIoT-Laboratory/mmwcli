@@ -2,8 +2,9 @@
 
 `mmwcli` 是面向 TI xWR68xx 与 DCA1000 的跨平台命令行工具，用于发送雷达配置、控制
 采集生命周期并保存原始 ADC 数据。它没有 GUI，不依赖 MATLAB、mmWave Studio 主机运行时、
-C#/.NET、CGo、Lua host 或 TI 的 DCA1000 主机程序，也不包含 FFT、检测、可视化等数据
-处理链。
+C#/.NET、Lua host 或 TI 的 DCA1000 主机程序，也不包含 FFT、检测、可视化等数据处理链。
+默认构建不使用 CGo；只有可选的 Linux D2XX backend 使用一个受 build tag 隔离的 CGo
+链接层。
 
 ## 支持范围
 
@@ -11,8 +12,10 @@ C#/.NET、CGo、Lua host 或 TI 的 DCA1000 主机程序，也不包含 FFT、�
 LVDS。functional/application 路线使用 TI `studio_cli` 设备固件，SDK demo CLI 作为独立
 方言支持。
 
-- Windows 与 Linux 使用同一套 Go 源码；发布目标为 amd64 和 arm64。
-- PC 端只使用标准库，正式构建固定 `CGO_ENABLED=0`。
+- 核心版本使用同一套 Go 源码，发布目标为 Windows/Linux amd64 和 arm64，固定
+  `CGO_ENABLED=0`。
+- `debug-capture` 的可选原生 backend 使用用户安装的 FTDI D2XX；具体架构只有经过对应
+  原生库与实机验证后才视为支持。
 - DCA1000 数据按字节偏移写入，不重排、不解析、不修补缺失数据。
 - Advanced frame、级联、LVDS header、软件 LVDS、RF monitor UART、CSI-2 和 TSW1400
   暂不支持。
@@ -46,14 +49,32 @@ CGO_ENABLED=0 go vet ./...
 CGO_ENABLED=0 go build -trimpath -o bin/mmwcli ./cmd/mmwcli
 ```
 
+要启用 `debug-capture` 的 D2XX 原生边界，Windows 使用用户已安装到系统目录的
+`ftd2xx.dll`，仍不需要 CGo：
+
+```powershell
+$env:CGO_ENABLED = '0'
+go build -trimpath -tags ftd2xx -o bin/mmwcli.exe ./cmd/mmwcli
+Remove-Item Env:CGO_ENABLED
+```
+
+Linux 需要用户先安装与目标架构匹配的官方 `libftd2xx.so`，再构建唯一的 CGo 变体：
+
+```sh
+CGO_ENABLED=1 go build -trimpath -tags ftd2xx -o bin/mmwcli ./cmd/mmwcli
+```
+
+仓库不下载或分发 FTDI 库、header、驱动与安装程序，也不引入第三方 Go 模块。
+
 ## 离线检查
 
-以下命令不打开串口，也不访问 DCA1000：
+以下命令不打开串口，也不枚举或打开雷达、DCA1000、FTDI 设备：
 
 ```text
 mmwcli doctor
 mmwcli firmware verify PATH/mmwave_Studio_cli_xwr68xx.bin
 mmwcli debug-capture check --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin
+mmwcli debug-capture native-check
 mmwcli studio-cli check hardware/studio-cli-xwr6843-raw.cfg
 ```
 
@@ -61,7 +82,9 @@ mmwcli studio-cli check hardware/studio-cli-xwr6843-raw.cfg
 校验 Toolbox metadata、profile、manifest。若不需要验证固件，`doctor` 无需任何 TI 路径。
 `debug-capture check` 核对用户显式提供的 MSS/BSS 固件，解析 RPRC 并生成 xWR68xx
 内存写计划，全程不访问硬件；它不表示 SOP2 下载、mmWaveLink 控制或 ADC 采集
-已经完成。
+已经完成。`debug-capture native-check` 只确认当前构建的 D2XX 库边界可用；Windows 读取
+库版本，Linux 当前不报告版本。该命令不查询或打开 USB 设备；未使用 `ftd2xx` build tag
+的核心版本会明确报告 backend 不可用。
 
 ## xWR6843 + DCA1000 快速开始
 
@@ -99,6 +122,7 @@ mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-02.bin --p
 | `doctor` | 离线检查平台；可选校验 `studio_cli` 固件 |
 | `firmware verify FILE` | 严格校验单个 `studio_cli` 固件文件 |
 | `debug-capture check` | 离线校验直控路线所需的 MSS/BSS 固件 |
+| `debug-capture native-check` | 只检查可选 D2XX 动态库，不访问设备 |
 | `studio-cli check` | 离线预检 `studio_cli` CFG |
 | `studio-cli version\|apply\|start\|stop\|capture` | 控制 `studio_cli` 固件 |
 | `demo check\|apply\|start\|stop\|capture` | 控制 SDK demo 固件 |

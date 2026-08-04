@@ -7,6 +7,7 @@ cmd/mmwcli
   -> internal/app          命令解析与退出码
   -> internal/firmware     单个 TI 设备固件的离线校验
   -> internal/debugcapture SOP2 直控所需 MSS/BSS 资产校验
+  -> internal/d2xx         可选 FTDI D2XX 原生库边界
   -> internal/radar        CLI 方言、CFG 预检、应答解析
      -> internal/serialport
   -> internal/session      雷达与 DCA1000 采集状态机
@@ -14,9 +15,10 @@ cmd/mmwcli
      -> internal/capturefile
 ```
 
-项目以 Go 1.26+ 标准库实现，正式构建使用 `CGO_ENABLED=0`。平台代码仅负责 Windows COM
-与 Linux tty；协议和状态机不得按操作系统分叉。0.1 的发布架构为 Windows/Linux amd64
-与 arm64。
+项目以 Go 1.26+ 标准库实现，核心构建使用 `CGO_ENABLED=0`。平台代码仅负责系统 I/O，
+协议和状态机不得按操作系统分叉。可选 D2XX backend 由 `ftd2xx` build tag 隔离：Windows
+加载系统安装的 DLL，Linux 是唯一允许的 CGo 变体并链接用户安装的 `libftd2xx.so`。
+核心发布架构为 Windows/Linux amd64 与 arm64；原生 backend 的架构支持需要分别实机验证。
 
 ## 雷达 CLI 方言
 
@@ -57,12 +59,15 @@ Advanced frame、monitor、continuous、test、loopback、软件 LVDS 和 LVDS h
 
 SOP2 主机下载与直控路径使用独立入口 `debug-capture`，不属于文本 CLI 方言，也不接入
 当前 `session.Radar` 接口。MSS/BSS 固件必须由用户显式提供；该路径不得自动发现 TI 安装，
-不得依赖 mmWave Studio runtime、Lua、C# 或 CGo。当前实现离线资产校验、RPRC 解析、
-xWR68xx 内存窗口检查和每块不超过 4096 字节的非空内存写计划，不打开串口或 USB。
+不得依赖 mmWave Studio runtime、Lua 或 C#。当前实现离线资产校验、RPRC 解析、xWR68xx
+内存窗口检查、每块不超过 4096 字节的非空内存写计划，以及 FTDI A/B 通道所需的离线
+MPSSE 命令编码原语。`debug-capture native-check` 只确认当前构建的 D2XX 库边界可用；
+Windows 读取库版本，Linux 当前不报告版本。该命令不枚举或打开 USB 设备。
 
 TI 参考流程在 Enhanced COM 上完成 MSS/BSS 内存写，随后通过 FTDI MPSSE SPI/IRQ 承载
-mmWaveLink；因此 COM 不能单独完成直控采集。跨平台 USB transport、SOP2 下载握手、
-mmWaveLink 控制与 ADC 采集尚未实现。
+mmWaveLink；因此 COM 不能单独完成直控采集。主机 USB transport 固定采用 FTDI D2XX，
+不实现 raw USB，也不依赖 mmWave Studio DLL。设备枚举与打开、SOP2 下载握手、
+mmWaveLink 控制和 ADC 采集尚未实现。
 
 ## 一体化采集状态机
 
