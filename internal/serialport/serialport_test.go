@@ -17,7 +17,7 @@ func TestValidateOptions(t *testing.T) {
 		want    string
 	}{
 		{name: "valid demo CLI", port: "COM3", baud: 115200, timeout: time.Second},
-		{name: "valid Toolbox CLI", port: "COM10", baud: 921600, timeout: 2500 * time.Millisecond},
+		{name: "valid studio_cli UART", port: "COM10", baud: 921600, timeout: 2500 * time.Millisecond},
 		{name: "empty name", baud: 115200, timeout: time.Second, want: "name is empty"},
 		{name: "blank name", port: "  ", baud: 115200, timeout: time.Second, want: "name is empty"},
 		{name: "surrounding whitespace", port: " COM3", baud: 115200, timeout: time.Second, want: "whitespace"},

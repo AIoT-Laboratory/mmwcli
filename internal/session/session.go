@@ -145,7 +145,7 @@ func Run(
 		return stats, errors.New("radar configuration does not enable hardware LVDS")
 	}
 	if plan.Mode == radar.ReuseConfiguration && plan.Dialect != radar.StudioCLI {
-		return stats, errors.New("capture reuse without reconfiguration is only supported by Radar Toolbox studio_cli")
+		return stats, errors.New("capture reuse without reconfiguration is only supported by TI studio_cli device firmware")
 	}
 	if plan.ExpectedBytes > 0 {
 		if plan.BytesPerFrame <= 0 || plan.NumberOfFrames == 0 || plan.InfiniteFrames ||
