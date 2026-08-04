@@ -122,7 +122,7 @@ type Selector struct {
 	Value string
 }
 
-func (selector Selector) validate() error {
+func (selector Selector) Validate() error {
 	if selector.By != SelectBySerialNumber && selector.By != SelectByDescription {
 		return fmt.Errorf("invalid D2XX selection method %d", selector.By)
 	}
@@ -185,7 +185,7 @@ func (library *Library) Info() Info {
 }
 
 func (library *Library) Open(selector Selector) (*Device, error) {
-	if err := selector.validate(); err != nil {
+	if err := selector.Validate(); err != nil {
 		return nil, err
 	}
 	if library == nil {
