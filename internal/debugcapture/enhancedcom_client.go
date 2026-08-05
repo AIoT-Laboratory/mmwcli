@@ -101,9 +101,9 @@ func (client *enhancedCOMClient) close() error {
 }
 
 // initialize reproduces Studio's fixed three-wake connection sequence. A
-// fixed-width reply to the monitor probe establishes the SOP2 monitor
-// exchange; the connection must still gate TOPRCM part identity before any
-// target write.
+// TI-compatible one-to-eight-digit hexadecimal reply establishes the SOP2
+// monitor exchange; the connection must still gate TOPRCM part identity before
+// any target write.
 func (client *enhancedCOMClient) initialize(ctx context.Context) (uint32, error) {
 	client.mu.Lock()
 	defer client.mu.Unlock()

@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-func TestEnhancedCOMClientReadsOneBoundedHexResponse(t *testing.T) {
+func TestEnhancedCOMClientAccumulatesSplitHexResponseUntilQuiet(t *testing.T) {
 	transport := &fakeEnhancedCOMTransport{
-		reads: [][]byte{[]byte("ad01"), []byte("0100\r\n"), nil},
+		reads: [][]byte{[]byte("ad010"), []byte("100\r\n"), nil},
 	}
 	client := mustEnhancedCOMClient(t, transport)
 	client.wait = recordingEnhancedCOMWait(&transport.calls)
@@ -25,7 +25,7 @@ func TestEnhancedCOMClientReadsOneBoundedHexResponse(t *testing.T) {
 	if value != 0xad010100 {
 		t.Fatalf("value = 0x%08X, want 0xAD010100", value)
 	}
-	wantCalls := []string{"purge", "write:rd ffffe1dc\\r", "wait:100ms", "read:4", "read:6", "read:0"}
+	wantCalls := []string{"purge", "write:rd ffffe1dc\\r", "wait:100ms", "read:5", "read:5", "read:0"}
 	if strings.Join(transport.calls, "\n") != strings.Join(wantCalls, "\n") {
 		t.Fatalf("calls = %v, want %v", transport.calls, wantCalls)
 	}

@@ -10,6 +10,8 @@ import (
 
 const enhancedCOMMaximumBlockSize = 4096
 
+var errEnhancedCOMInvalidResponse = errors.New("Enhanced COM read response is invalid")
+
 func encodeEnhancedCOMWake() []byte {
 	return []byte("x0 \r\n")
 }
@@ -60,21 +62,37 @@ func encodeEnhancedCOMBlockWrite(address uint32, data []byte) ([]byte, error) {
 func parseEnhancedCOMReadResponse(response []byte) (uint32, error) {
 	value := trimEnhancedCOMWhitespace(response)
 	if len(value) == 0 {
-		return 0, errors.New("Enhanced COM read response is empty")
+		return 0, invalidEnhancedCOMResponse(response, "response is empty")
 	}
-	if len(value) != 8 {
-		return 0, fmt.Errorf("Enhanced COM read response must contain exactly 8 hex digits; got %d", len(value))
+	if len(value) > 8 {
+		return 0, invalidEnhancedCOMResponse(
+			response,
+			fmt.Sprintf("response exceeds 8 hex digits after trimming; got %d", len(value)),
+		)
 	}
 	for _, character := range value {
 		if !isASCIIHexDigit(character) {
-			return 0, fmt.Errorf("Enhanced COM read response contains non-hex byte 0x%02X", character)
+			return 0, invalidEnhancedCOMResponse(
+				response,
+				fmt.Sprintf("response contains non-hex byte 0x%02X", character),
+			)
 		}
 	}
 	parsed, err := strconv.ParseUint(string(value), 16, 32)
 	if err != nil {
-		return 0, fmt.Errorf("parse Enhanced COM read response: %w", err)
+		return 0, invalidEnhancedCOMResponse(response, "parse response: "+err.Error())
 	}
 	return uint32(parsed), nil
+}
+
+func invalidEnhancedCOMResponse(response []byte, detail string) error {
+	return fmt.Errorf(
+		"%w: %s; raw bytes (%d): % X",
+		errEnhancedCOMInvalidResponse,
+		detail,
+		len(response),
+		response,
+	)
 }
 
 func trimEnhancedCOMWhitespace(value []byte) []byte {

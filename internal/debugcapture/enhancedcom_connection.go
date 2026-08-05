@@ -89,22 +89,9 @@ func openEnhancedCOMConnectionWithBackend(
 		}
 	}
 
-	efuseRow10, err := client.readRegister(ctx, xwr68xxEFUSERow10Address)
+	partNumber, err := gateXWR6843Part(ctx, client)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("read xWR68xx part identity on %q: %w", portName, err), client.close())
-	}
-	partNumber := uint8((efuseRow10 >> xwr68xxPartNumberShift) & xwr68xxPartNumberMask)
-	if !supportedXWR6843Part(partNumber) {
-		return nil, errors.Join(
-			fmt.Errorf(
-				"Enhanced COM target on %q has unsupported part number 0x%02X; expected IWR68xx ES2 0x%02X or AWR68xx 0x%02X",
-				portName,
-				partNumber,
-				iwr68xxES2PartNumber,
-				awr68xxPartNumber,
-			),
-			client.close(),
-		)
+		return nil, errors.Join(fmt.Errorf("gate xWR6843 part identity on %q: %w", portName, err), client.close())
 	}
 	return &enhancedCOMConnection{
 		client:     client,
@@ -130,7 +117,8 @@ func openInitializedEnhancedCOMClient(
 	probeValue, err := client.initialize(ctx)
 	if err != nil {
 		closeErr := client.close()
-		return nil, 0, errors.Is(err, errEnhancedCOMReadTimeout) && closeErr == nil, errors.Join(
+		probeRejected := errors.Is(err, errEnhancedCOMReadTimeout) || errors.Is(err, errEnhancedCOMInvalidResponse)
+		return nil, 0, probeRejected && closeErr == nil, errors.Join(
 			fmt.Errorf("initialize Enhanced COM port %q at %d baud: %w", portName, baud, err),
 			closeErr,
 		)
@@ -173,6 +161,9 @@ func negotiateEnhancedCOMBaud(
 	if _, err := coldBootClient.probe(ctx); err != nil {
 		return fail(fmt.Errorf("probe Enhanced COM port %q at cold-boot baud %d: %w", portName, enhancedCOMColdBootBaud, err))
 	}
+	if _, err := gateXWR6843Part(ctx, coldBootClient); err != nil {
+		return fail(fmt.Errorf("gate xWR6843 part identity at cold-boot baud %d: %w", enhancedCOMColdBootBaud, err))
+	}
 	if err := backend.wait(ctx, enhancedCOMBaudRegisterWait); err != nil {
 		return fail(err)
 	}
@@ -203,6 +194,23 @@ func negotiateEnhancedCOMBaud(
 		return nil, 0, fmt.Errorf("verify Enhanced COM baud transition on %q: %w", portName, err)
 	}
 	return client, probeValue, nil
+}
+
+func gateXWR6843Part(ctx context.Context, client *enhancedCOMClient) (uint8, error) {
+	efuseRow10, err := client.readRegister(ctx, xwr68xxEFUSERow10Address)
+	if err != nil {
+		return 0, fmt.Errorf("read xWR68xx part identity: %w", err)
+	}
+	partNumber := uint8((efuseRow10 >> xwr68xxPartNumberShift) & xwr68xxPartNumberMask)
+	if !supportedXWR6843Part(partNumber) {
+		return 0, fmt.Errorf(
+			"unsupported part number 0x%02X; expected IWR68xx ES2 0x%02X or AWR68xx 0x%02X",
+			partNumber,
+			iwr68xxES2PartNumber,
+			awr68xxPartNumber,
+		)
+	}
+	return partNumber, nil
 }
 
 func supportedXWR6843Part(partNumber uint8) bool {

@@ -2,6 +2,7 @@ package debugcapture
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -76,6 +77,8 @@ func TestParseEnhancedCOMReadResponse(t *testing.T) {
 		response string
 		want     uint32
 	}{
+		{response: "2", want: 2},
+		{response: "12345\r\n", want: 0x12345},
 		{response: "00000000", want: 0},
 		{response: "ffffffff", want: 0xffffffff},
 		{response: " \r\nAd010100\t", want: 0xad010100},
@@ -95,7 +98,6 @@ func TestParseEnhancedCOMReadResponseRejectsAmbiguousInput(t *testing.T) {
 	}{
 		{name: "empty", response: nil},
 		{name: "whitespace", response: []byte(" \r\n")},
-		{name: "short", response: []byte("0000000")},
 		{name: "too long", response: []byte("100000000")},
 		{name: "prefix", response: []byte("0x1")},
 		{name: "sign", response: []byte("+1")},
@@ -105,9 +107,17 @@ func TestParseEnhancedCOMReadResponseRejectsAmbiguousInput(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := parseEnhancedCOMReadResponse(test.response); err == nil {
+			if _, err := parseEnhancedCOMReadResponse(test.response); err == nil ||
+				!errors.Is(err, errEnhancedCOMInvalidResponse) || !strings.Contains(err.Error(), "raw bytes") {
 				t.Fatalf("response %q was accepted", test.response)
 			}
 		})
+	}
+}
+
+func TestParseEnhancedCOMReadResponsePreservesRawDiagnosticBytes(t *testing.T) {
+	_, err := parseEnhancedCOMReadResponse([]byte("x0 ??\r\n"))
+	if err == nil || !strings.Contains(err.Error(), "78 30 20 3F 3F 0D 0A") {
+		t.Fatalf("error = %v, want raw response bytes", err)
 	}
 }
