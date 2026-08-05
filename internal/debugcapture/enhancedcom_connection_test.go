@@ -10,7 +10,7 @@ import (
 )
 
 func TestOpenEnhancedCOMConnectionUsesFixedBaudAndInitializes(t *testing.T) {
-	transport := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("1234\r\n"), nil}}
+	transport := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("00001234\r\n"), nil}}
 	openCalls := 0
 	var waits []time.Duration
 	connection, err := openEnhancedCOMConnectionWithBackend(

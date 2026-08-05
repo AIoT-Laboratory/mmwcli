@@ -109,8 +109,44 @@ func TestEnhancedCOMClientNeverRetriesUnknownWrite(t *testing.T) {
 	}
 }
 
+func TestEnhancedCOMClientTreatsPostWriteCancellationAsUnknown(t *testing.T) {
+	t.Run("parent context", func(t *testing.T) {
+		transport := &fakeEnhancedCOMTransport{}
+		client := mustEnhancedCOMClient(t, transport)
+		ctx, cancel := context.WithCancel(context.Background())
+		transport.afterWrite = cancel
+
+		err := client.writeRegister(ctx, 0xffffe108, 0xadad00ad)
+		var unknown *enhancedCOMUnknownResultError
+		if !errors.As(err, &unknown) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v", err)
+		}
+		if err := client.writeRegister(context.Background(), 0xffffe108, 0); !errors.Is(err, errEnhancedCOMUnusable) {
+			t.Fatalf("write after canceled result = %v", err)
+		}
+		if transport.writeCalls != 1 {
+			t.Fatalf("canceled write was retried: %d calls", transport.writeCalls)
+		}
+	})
+
+	t.Run("concurrent close", func(t *testing.T) {
+		transport := &fakeEnhancedCOMTransport{}
+		client := mustEnhancedCOMClient(t, transport)
+		transport.afterWrite = func() { _ = client.close() }
+
+		err := client.writeRegister(context.Background(), 0xffffe108, 0xadad00ad)
+		var unknown *enhancedCOMUnknownResultError
+		if !errors.As(err, &unknown) || !errors.Is(err, errEnhancedCOMClosed) {
+			t.Fatalf("error = %v", err)
+		}
+		if transport.writeCalls != 1 || transport.closeCalls != 1 {
+			t.Fatalf("write/close calls = %d/%d", transport.writeCalls, transport.closeCalls)
+		}
+	})
+}
+
 func TestEnhancedCOMClientFailsClosedAfterAmbiguousRead(t *testing.T) {
-	transport := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("0x1"), nil}}
+	transport := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("000000x1"), nil}}
 	client := mustEnhancedCOMClient(t, transport)
 	client.wait = func(context.Context, time.Duration) error { return nil }
 
@@ -227,6 +263,7 @@ type fakeEnhancedCOMTransport struct {
 	shortWrite bool
 	writeError error
 	readError  error
+	afterWrite func()
 	writeCalls int
 	readCalls  int
 	purgeCalls int
@@ -250,6 +287,9 @@ func (transport *fakeEnhancedCOMTransport) Write(buffer []byte) (int, error) {
 	transport.writeCalls++
 	transport.writes = append(transport.writes, append([]byte(nil), buffer...))
 	transport.calls = append(transport.calls, "write:"+strings.ReplaceAll(string(buffer), "\r", "\\r"))
+	if transport.afterWrite != nil {
+		transport.afterWrite()
+	}
 	if transport.shortWrite {
 		return len(buffer) - 1, transport.writeError
 	}

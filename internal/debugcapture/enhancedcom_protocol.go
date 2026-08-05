@@ -62,8 +62,8 @@ func parseEnhancedCOMReadResponse(response []byte) (uint32, error) {
 	if len(value) == 0 {
 		return 0, errors.New("Enhanced COM read response is empty")
 	}
-	if len(value) > 8 {
-		return 0, fmt.Errorf("Enhanced COM read response has %d hex digits; maximum is 8", len(value))
+	if len(value) != 8 {
+		return 0, fmt.Errorf("Enhanced COM read response must contain exactly 8 hex digits; got %d", len(value))
 	}
 	for _, character := range value {
 		if !isASCIIHexDigit(character) {

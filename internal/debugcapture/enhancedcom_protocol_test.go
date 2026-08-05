@@ -76,7 +76,7 @@ func TestParseEnhancedCOMReadResponse(t *testing.T) {
 		response string
 		want     uint32
 	}{
-		{response: "0", want: 0},
+		{response: "00000000", want: 0},
 		{response: "ffffffff", want: 0xffffffff},
 		{response: " \r\nAd010100\t", want: 0xad010100},
 	}
@@ -95,6 +95,7 @@ func TestParseEnhancedCOMReadResponseRejectsAmbiguousInput(t *testing.T) {
 	}{
 		{name: "empty", response: nil},
 		{name: "whitespace", response: []byte(" \r\n")},
+		{name: "short", response: []byte("0000000")},
 		{name: "too long", response: []byte("100000000")},
 		{name: "prefix", response: []byte("0x1")},
 		{name: "sign", response: []byte("+1")},

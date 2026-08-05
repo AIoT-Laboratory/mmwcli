@@ -303,16 +303,24 @@ func (client *enhancedCOMClient) writeLocked(
 	}
 
 	written, writeErr := client.transport.Write(command)
-	if written == len(command) && writeErr == nil {
+	postWriteErr := ctx.Err()
+	if postWriteErr == nil && client.closed.Load() {
+		postWriteErr = errEnhancedCOMClosed
+	}
+	if written == len(command) && writeErr == nil && postWriteErr == nil {
 		return nil
 	}
 	if written < 0 || written > len(command) {
 		writeErr = fmt.Errorf("invalid serial write count %d", written)
 	} else if writeErr == nil {
-		writeErr = io.ErrShortWrite
+		if postWriteErr != nil {
+			writeErr = postWriteErr
+		} else {
+			writeErr = io.ErrShortWrite
+		}
 	}
-	if err := ctx.Err(); err != nil {
-		writeErr = err
+	if postWriteErr != nil {
+		writeErr = postWriteErr
 	}
 	client.unusable = true
 	return &enhancedCOMUnknownResultError{
