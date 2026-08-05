@@ -11,6 +11,7 @@ import (
 
 const (
 	enhancedCOMBaud             = 921600
+	enhancedCOMPreOpenWait      = 400 * time.Millisecond
 	enhancedCOMOpenTimeout      = time.Second
 	enhancedCOMOperationTimeout = 5 * time.Second
 	enhancedCOMFirmwareTimeout  = 2 * time.Minute
@@ -54,6 +55,9 @@ func openEnhancedCOMConnectionWithBackend(
 	}
 	if backend.wait == nil {
 		return nil, errors.New("Enhanced COM wait function is nil")
+	}
+	if err := backend.wait(ctx, enhancedCOMPreOpenWait); err != nil {
+		return nil, err
 	}
 
 	transport, err := backend.open(portName, enhancedCOMBaud, enhancedCOMOpenTimeout)

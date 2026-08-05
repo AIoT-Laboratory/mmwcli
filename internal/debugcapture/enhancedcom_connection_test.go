@@ -3,6 +3,7 @@ package debugcapture
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 func TestOpenEnhancedCOMConnectionUsesFixedBaudAndInitializes(t *testing.T) {
 	transport := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("1234\r\n"), nil}}
 	openCalls := 0
+	var waits []time.Duration
 	connection, err := openEnhancedCOMConnectionWithBackend(
 		context.Background(),
 		"COM3",
@@ -22,7 +24,10 @@ func TestOpenEnhancedCOMConnectionUsesFixedBaudAndInitializes(t *testing.T) {
 				}
 				return transport, nil
 			},
-			wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+			wait: func(ctx context.Context, duration time.Duration) error {
+				waits = append(waits, duration)
+				return ctx.Err()
+			},
 		},
 	)
 	if err != nil {
@@ -30,6 +35,10 @@ func TestOpenEnhancedCOMConnectionUsesFixedBaudAndInitializes(t *testing.T) {
 	}
 	if openCalls != 1 || connection.probeValue != 0x1234 {
 		t.Fatalf("open calls/probe = %d/0x%08X", openCalls, connection.probeValue)
+	}
+	wantWaits := []time.Duration{400 * time.Millisecond, 400 * time.Millisecond, 100 * time.Millisecond, 100 * time.Millisecond}
+	if !slices.Equal(waits, wantWaits) {
+		t.Fatalf("waits = %v, want %v", waits, wantWaits)
 	}
 	if transport.writeCalls != 4 {
 		t.Fatalf("initialization writes = %d, want 4", transport.writeCalls)
@@ -80,10 +89,24 @@ func TestOpenEnhancedCOMConnectionDoesNotOwnFailedOpen(t *testing.T) {
 	want := errors.New("port unavailable")
 	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
 		open: func(string, int, time.Duration) (enhancedCOMTransport, error) { return nil, want },
-		wait: waitContext,
+		wait: func(context.Context, time.Duration) error { return nil },
 	})
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestOpenEnhancedCOMConnectionCancelsDuringPreOpenWait(t *testing.T) {
+	openCalls := 0
+	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+		open: func(string, int, time.Duration) (enhancedCOMTransport, error) {
+			openCalls++
+			return nil, errors.New("unexpected open")
+		},
+		wait: func(context.Context, time.Duration) error { return context.Canceled },
+	})
+	if !errors.Is(err, context.Canceled) || openCalls != 0 {
+		t.Fatalf("result = %v, open calls = %d", err, openCalls)
 	}
 }
 
