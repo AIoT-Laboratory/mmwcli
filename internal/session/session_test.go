@@ -104,10 +104,11 @@ func (f *fakeDCA) DrainAsyncStatuses(context.Context, time.Duration) ([]dca.Resp
 }
 
 type fakeReceiver struct {
-	events   *[]string
-	stats    dca.CaptureStats
-	waitHook func(context.Context) (dca.CaptureStats, error)
-	closeErr error
+	events    *[]string
+	stats     dca.CaptureStats
+	waitHook  func(context.Context) (dca.CaptureStats, error)
+	closeHook func()
+	closeErr  error
 }
 
 func (f *fakeReceiver) Start(_ context.Context, output io.WriterAt) error {
@@ -138,6 +139,9 @@ func (f *fakeReceiver) Wait(ctx context.Context) (dca.CaptureStats, error) {
 func (f *fakeReceiver) Stats() dca.CaptureStats { return f.stats }
 func (f *fakeReceiver) Close() error {
 	*f.events = append(*f.events, "receiverClose")
+	if f.closeHook != nil {
+		f.closeHook()
+	}
 	return f.closeErr
 }
 
@@ -306,6 +310,63 @@ func TestCancellationDuringCleanupPreventsCommit(t *testing.T) {
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run error = %v, want sticky cancellation", err)
+	}
+	assertPartRetained(t, finalPath)
+}
+
+func TestFiniteDeadlineReportsFinalCoverageAfterReceiverCleanup(t *testing.T) {
+	plan := sessionTestPlan(t)
+	finalPath := filepath.Join(t.TempDir(), "finite-deadline.bin")
+	output, err := capturefile.Create(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	now := time.Now()
+	receiver := &fakeReceiver{
+		events: &events,
+		stats: dca.CaptureStats{
+			PacketsReceived: 1,
+			OutputBytes:     plan.ExpectedBytes,
+			FirstPacketAt:   now,
+			LastPacketAt:    now,
+		},
+		waitHook: func(context.Context) (dca.CaptureStats, error) {
+			return dca.CaptureStats{}, context.DeadlineExceeded
+		},
+	}
+	receiver.closeHook = func() {
+		receiver.stats.MissingBytes = 2
+		receiver.stats.SequenceGaps = 1
+		receiver.stats.DiscardedBeforeBasePackets = 3
+	}
+
+	gotStats, err := Run(
+		context.Background(),
+		&fakeRadar{events: &events},
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		plan,
+		output,
+		DefaultOptions(),
+	)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run error = %v, want deadline identity", err)
+	}
+	for _, diagnostic := range []string{
+		"finite-frame data exceeded planned maximum duration",
+		"expected=3",
+		"output=3",
+		"missing=2",
+		"sequenceGaps=1",
+		"discardedBeforeBase=3",
+	} {
+		if !strings.Contains(err.Error(), diagnostic) {
+			t.Fatalf("Run error = %v, want diagnostic %q", err, diagnostic)
+		}
+	}
+	if gotStats != receiver.stats {
+		t.Fatalf("Run stats = %#v, want finalized %#v", gotStats, receiver.stats)
 	}
 	assertPartRetained(t, finalPath)
 }

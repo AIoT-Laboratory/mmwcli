@@ -51,6 +51,16 @@ func (e *CleanupError) Error() string       { return "capture cleanup failed: " 
 func (e *CleanupError) Unwrap() error       { return e.Err }
 func (e *CleanupError) CleanupFailed() bool { return true }
 
+type finiteCaptureDeadlineError struct {
+	maximum time.Duration
+}
+
+func (e *finiteCaptureDeadlineError) Error() string {
+	return fmt.Sprintf("finite-frame data exceeded planned maximum duration %s", e.maximum)
+}
+
+func (e *finiteCaptureDeadlineError) Unwrap() error { return context.DeadlineExceeded }
+
 type Options struct {
 	FPGAConfig          dca.FPGAConfig
 	ReceiverConfig      dca.ReceiverConfig
@@ -231,6 +241,18 @@ func Run(
 		if receiver != nil {
 			stats = receiver.Stats()
 		}
+		var deadlineErr *finiteCaptureDeadlineError
+		if errors.As(resultErr, &deadlineErr) {
+			resultErr = fmt.Errorf(
+				"%w: coverage expected=%d output=%d missing=%d sequenceGaps=%d discardedBeforeBase=%d",
+				resultErr,
+				plan.ExpectedBytes,
+				stats.OutputBytes,
+				stats.MissingBytes,
+				stats.SequenceGaps,
+				stats.DiscardedBeforeBasePackets,
+			)
+		}
 		if cleanupErr != nil {
 			marked := &CleanupError{Err: cleanupErr}
 			if resultErr == nil {
@@ -368,7 +390,7 @@ func Run(
 	stats, err = receiver.Wait(waitContext)
 	cancelWait()
 	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-		return stats, fmt.Errorf("finite-frame data exceeded planned maximum duration %s", maximumStreamingDuration)
+		return stats, &finiteCaptureDeadlineError{maximum: maximumStreamingDuration}
 	}
 	return stats, err
 }
