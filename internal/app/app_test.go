@@ -33,6 +33,16 @@ func TestHelpContainsOnlyCLIBackends(t *testing.T) {
 	}
 }
 
+func TestVersionReportsReleaseVersion(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"version"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+	}
+	if Version != "0.1.0" || !strings.HasPrefix(stdout.String(), "mmwcli 0.1.0 (") {
+		t.Fatalf("release version output = %q", stdout.String())
+	}
+}
+
 func TestUnknownCommandIsUsageError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := Run([]string{"studio"}, &stdout, &stderr); code != 2 {

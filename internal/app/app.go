@@ -17,7 +17,7 @@ import (
 	"mmwcli/internal/firmware"
 )
 
-const Version = "0.1.0-dev"
+const Version = "0.1.0"
 
 type usageError struct{ message string }
 

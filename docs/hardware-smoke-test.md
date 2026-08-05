@@ -131,7 +131,7 @@ mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg OUT --enhanc
 | BSS 固件 SHA-256 | `E2C69405394E35BA376EFE1A52305EE74DBD19F8BAB72BD5A9078878853CD77F` |
 | MSS 固件 SHA-256 | `316911D4A8DBA1762714A3A107071BD0CF06A135FAE29BFBBC92B037592DE060` |
 | CFG | `hardware/debug-capture-xwr6843-raw.cfg`；SHA-256 `69749D609DCF59CFF9C4F133BBEF11B4D3300CC71C0299E20998E969B7A5DC8D` |
-| 显式恢复与 DCA 配置 | `--sop2-reset`；`--delay-us 100`；未 reset DCA FPGA |
+| SOP2 与传输参数 | `--sop2-reset`；`--delay-us 100`；未 reset DCA FPGA |
 | 预期与实际 payload | `26,214,400` bytes / `26,214,400` bytes |
 | CLI 统计 | `packets=18005 payload=26214400 output=26214400 gaps=0 outOfOrder=0 missing=0` |
 | 输出事务 | 成功发布 `OUT`，没有遗留 `OUT.part` |
