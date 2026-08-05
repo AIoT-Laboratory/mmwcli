@@ -91,8 +91,8 @@ RF 初始化必须报告完整校准 mask；frame start 和显式 stop 都只发
 `--no-reconfig`。
 
 `debug-capture native-check` 只加载 D2XX 库，不查询或打开 USB 设备。公开 capture 命令也在
-固件提交前执行同一 library-only 门禁。协议、失败状态和编排目前经过 fake 离线测试；本轮
-没有 Enhanced COM、D2XX 或 ADC 采集的实机兼容性结论。
+固件提交前执行同一 library-only 门禁。协议、失败状态和编排经过 fake 离线测试；0.1 已完成
+一个 Windows/amd64 原生 D2XX 组合的实机验收，范围见[支持证据](#支持证据)。
 
 ## 一体化采集状态机
 
@@ -148,7 +148,7 @@ Windows 使用不替换目标的同卷移动，支持 NTFS、exFAT 和 FAT32，�
 ## 支持证据
 
 离线测试覆盖协议、CFG、loopback、取消和清理，但不能证明硬件兼容。functional/application
-组合至少要用相同固件和 CFG 完成两次有限帧采集：第一次全量配置，第二次
-`--no-reconfig`，两次都不 reset DCA1000；步骤见
-[hardware-smoke-test.md](hardware-smoke-test.md)。debug 组合不支持复用雷达配置，必须用
-相同 MSS/BSS、CFG、D2XX 库和硬件连续完成完整采集，并单独记录实机证据。
+组合的两轮有限帧复用验收当前尚未完成；验收要求见
+[hardware-smoke-test.md](hardware-smoke-test.md)。0.1 仅完成该页记录的
+Windows/amd64、D2XX 3.2.14、IWR6843 ES2 与 DCA1000 debug mode 组合；Linux D2XX、arm64、
+SDK demo 及其它固件或配置不在实机验证结论内。

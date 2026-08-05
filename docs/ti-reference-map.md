@@ -33,7 +33,8 @@ mmWave Studio runtime。
 在 `debug-capture capture` 中，Enhanced COM 只用于将这两个文件提交到 SOP2 设备内存；
 随后主机切换到 FTDI D2XX A/B，以 SPI/IRQ 承载 mmWaveLink 配置、启动和停止。采集 CFG
 由主机翻译为 mmWaveLink 消息，不会作为文本命令发送，也不需要 mmWave Studio runtime。
-当前公开验证记录仅覆盖离线测试与 fake transport，实机兼容性仍需可复现的采集记录确认。
+表中的两个确切哈希已用于 2026-08-05 的 debug mode 实机验收；其它固件版本不在该结论内。
+完整组合与结果见[硬件冒烟测试](hardware-smoke-test.md#debug-mode-01-实机验收记录)。
 
 ## 开发参考
 
@@ -52,8 +53,9 @@ mmWave Studio runtime。
 - XDCtools 3.55.2.22_core
 - ARM CGT 16.9.6.LTS
 
-不同版本的 SDK 不能视为可直接替换的等价构建环境。0.1 验收使用通过上述单文件校验的
-预编译固件；这些源码与构建工具不参与 mmwcli 运行。
+不同版本的 SDK 不能视为可直接替换的等价构建环境。0.1 functional/application 资产合同
+锁定通过上述单文件校验的预编译固件，但当前只完成离线校验，尚无该路线的实机验收记录；
+这些源码与构建工具不参与 mmwcli 运行。
 
 ## mmWave SDK 3.6.2 参考
 

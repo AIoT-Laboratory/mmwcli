@@ -171,8 +171,9 @@ mmWaveLink 配置、启动和停止，DCA1000 仍通过以太网传输 ADC 数�
 
 `debug-capture capture` 不支持 `--no-reconfig`；每次采集都执行完整的固件下载和雷达配置。
 不要在 SOP2 下使用 `studio-cli capture`，也不要把 Enhanced COM 当作设备固件的 CLI UART。
-当前公开验证记录仅覆盖离线测试与 fake transport；这条路线仍需用上述命令完成可复现的
-xWR6843 ES2 + DCA1000 实机验收后，才能声明对应原生库与硬件组合兼容。
+0.1 已完成 Windows/amd64、FTDI D2XX 3.2.14、IWR6843 ES2 与 DCA1000 的这一条
+debug mode 实机验收。functional/application、SDK demo、Linux D2XX、arm64 及其它固件或
+配置尚未经过实机验证；完整组合与结果见[硬件冒烟测试](docs/hardware-smoke-test.md#debug-mode-01-实机验收记录)。
 
 ## CLI 概览
 
