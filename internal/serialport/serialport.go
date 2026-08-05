@@ -17,6 +17,7 @@ type Port interface {
 	io.ReadWriteCloser
 	SetReadDeadline(time.Time) error
 	SetWriteDeadline(time.Time) error
+	PurgeInput() error
 }
 
 // Open opens name at baud and verifies a bounded I/O timeout. Protocol callers
