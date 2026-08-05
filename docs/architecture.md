@@ -67,12 +67,15 @@ SOP2 主机下载与直控路径使用独立入口 `debug-capture`，不属于�
 不会自动发现 TI 安装，也不依赖 mmWave Studio runtime、Lua 或 C#。资产预检包括严格哈希、
 RPRC、xWR68xx 内存窗口和每块不超过 4096 字节的写计划。
 
-Enhanced COM 只以 TI xWR68xx debug monitor 的 921600 baud 打开显式端口，不扫描或
-fallback。固定三次 `x0`
-握手及 TOPRCM part number 门禁通过后，按 xWR6843 的 BSS→MSS 顺序提交固件；未知写结果
-不重试，也不自动 release 或 reset。随后以显式 serial/description 选择同一 FTDI 的 D2XX
-A/B 接口，通过 MPSSE SPI/IRQ 完成 mmWaveLink 启动门禁，再关闭 Enhanced COM。设备选择
-不使用枚举、索引或 location，主机也不实现 raw USB。
+Enhanced COM 只打开操作者显式指定的端口，不扫描设备。连接先探测 TI monitor 的
+921600 baud；只有该探测完全没有收到字节且端口已成功关闭时，才执行一次固定的 115200
+冷启动协商：验证 monitor、保留 `0xFFFFE144` 原值并置位 `0x7800`、写入 TI 的 921600
+切换值，然后关闭端口并以 921600 重新验证。程序不尝试其它波特率；部分或畸形响应、切换
+写入的未知结果以及关闭失败都立即终止，且不会重写切换寄存器。固定三次 `x0` 握手及
+TOPRCM part number 门禁通过后，按 xWR6843 的 BSS→MSS 顺序提交固件；未知写结果不重试，
+也不自动 release 或 reset。随后以显式 serial/description 选择同一 FTDI 的 D2XX A/B
+接口，通过 MPSSE SPI/IRQ 完成 mmWaveLink 启动门禁，再关闭 Enhanced COM。设备选择不使用
+枚举、索引或 location，主机也不实现 raw USB。
 
 mmWaveLink 启动门禁要求 MSS 与 RF 固件均为 `6.2.1.5`。主机将通过 `studio-cli` 合同预检的
 CFG 翻译为固定的 RF、LVDS、profile、chirp、frame 与 apply 消息；CFG 不作为文本发送。

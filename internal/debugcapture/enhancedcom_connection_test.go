@@ -3,6 +3,7 @@ package debugcapture
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -60,6 +61,176 @@ func TestOpenEnhancedCOMConnectionUsesTIDebugBaudAndGatesPart(t *testing.T) {
 	}
 	if transport.closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+}
+
+func TestOpenEnhancedCOMConnectionNegotiatesColdBootBaudOnce(t *testing.T) {
+	requestedProbe := &fakeEnhancedCOMTransport{readError: os.ErrDeadlineExceeded}
+	coldBoot := &fakeEnhancedCOMTransport{reads: [][]byte{
+		[]byte("00000002\r\n"), nil,
+		[]byte("00000001\r\n"), nil,
+	}}
+	requestedFinal := &fakeEnhancedCOMTransport{reads: [][]byte{
+		[]byte("00000002\r\n"), nil,
+		[]byte("03880000\r\n"), nil,
+	}}
+	transports := []*fakeEnhancedCOMTransport{requestedProbe, coldBoot, requestedFinal}
+	var bauds []int
+	var waits []time.Duration
+	connection, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+		open: func(name string, baud int, timeout time.Duration) (enhancedCOMTransport, error) {
+			if name != "COM3" || timeout != enhancedCOMOpenTimeout || len(transports) == 0 {
+				t.Fatalf("open arguments/remaining = %q, %d, %s/%d", name, baud, timeout, len(transports))
+			}
+			bauds = append(bauds, baud)
+			transport := transports[0]
+			transports = transports[1:]
+			return transport, nil
+		},
+		wait: func(ctx context.Context, duration time.Duration) error {
+			waits = append(waits, duration)
+			return ctx.Err()
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int{921600, 115200, 921600}; !slices.Equal(bauds, want) {
+		t.Fatalf("open bauds = %v, want %v", bauds, want)
+	}
+	wantColdBootWrites := []string{
+		"x0 \r\n",
+		"rd ffffe2fc\r",
+		"rd ffffe144\r",
+		"wr ffffe144 00007801\r",
+		"wr ffffe264 0d902c2b\r",
+	}
+	var coldBootWrites []string
+	for _, write := range coldBoot.writes {
+		coldBootWrites = append(coldBootWrites, string(write))
+	}
+	if !slices.Equal(coldBootWrites, wantColdBootWrites) {
+		t.Fatalf("cold-boot writes = %q, want %q", coldBootWrites, wantColdBootWrites)
+	}
+	wantWaits := []time.Duration{
+		400 * time.Millisecond,
+		400 * time.Millisecond, 100 * time.Millisecond, 100 * time.Millisecond,
+		500 * time.Millisecond, 500 * time.Millisecond,
+		100 * time.Millisecond, 100 * time.Millisecond,
+		300 * time.Millisecond, 100 * time.Millisecond,
+		300 * time.Millisecond, 300 * time.Millisecond,
+		900 * time.Millisecond,
+		400 * time.Millisecond,
+		400 * time.Millisecond, 100 * time.Millisecond, 100 * time.Millisecond,
+		100 * time.Millisecond,
+	}
+	if !slices.Equal(waits, wantWaits) {
+		t.Fatalf("waits = %v, want %v", waits, wantWaits)
+	}
+	if requestedProbe.closeCalls != 1 || coldBoot.closeCalls != 1 || requestedFinal.closeCalls != 0 {
+		t.Fatalf(
+			"probe/cold/final close calls = %d/%d/%d, want 1/1/0",
+			requestedProbe.closeCalls,
+			coldBoot.closeCalls,
+			requestedFinal.closeCalls,
+		)
+	}
+	if connection.probeValue != 2 || connection.partNumber != iwr68xxES2PartNumber {
+		t.Fatalf("probe/part = 0x%08X/0x%02X", connection.probeValue, connection.partNumber)
+	}
+	if err := connection.close(); err != nil {
+		t.Fatal(err)
+	}
+	if requestedFinal.closeCalls != 1 {
+		t.Fatalf("final close calls = %d, want 1", requestedFinal.closeCalls)
+	}
+}
+
+func TestOpenEnhancedCOMConnectionDoesNotNegotiateAfterAmbiguousProbe(t *testing.T) {
+	transport := &fakeEnhancedCOMTransport{
+		reads:     [][]byte{[]byte("0000"), nil},
+		readError: os.ErrDeadlineExceeded,
+	}
+	openCalls := 0
+	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+		open: func(string, int, time.Duration) (enhancedCOMTransport, error) {
+			openCalls++
+			return transport, nil
+		},
+		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+	})
+	if err == nil || !strings.Contains(err.Error(), "exactly 8 hex digits") {
+		t.Fatalf("error = %v", err)
+	}
+	if openCalls != 1 || transport.closeCalls != 1 {
+		t.Fatalf("open/close calls = %d/%d, want 1/1", openCalls, transport.closeCalls)
+	}
+}
+
+func TestOpenEnhancedCOMConnectionDoesNotNegotiateWhenInitialCloseFails(t *testing.T) {
+	closeErr := errors.New("close failed")
+	transport := &fakeEnhancedCOMTransport{closeError: closeErr}
+	openCalls := 0
+	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+		open: func(string, int, time.Duration) (enhancedCOMTransport, error) {
+			openCalls++
+			return transport, nil
+		},
+		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+	})
+	if !errors.Is(err, closeErr) || !errors.Is(err, errEnhancedCOMReadTimeout) {
+		t.Fatalf("error = %v", err)
+	}
+	if openCalls != 1 || transport.closeCalls != 1 {
+		t.Fatalf("open/close calls = %d/%d, want 1/1", openCalls, transport.closeCalls)
+	}
+}
+
+func TestOpenEnhancedCOMConnectionDoesNotRetryUnknownBaudSwitch(t *testing.T) {
+	requestedProbe := &fakeEnhancedCOMTransport{}
+	baudSwitchErr := errors.New("baud switch result unknown")
+	coldBoot := &fakeEnhancedCOMTransport{reads: [][]byte{
+		[]byte("00000002\r\n"), nil,
+		[]byte("00000001\r\n"), nil,
+	}}
+	coldBoot.afterWrite = func() {
+		if coldBoot.writeCalls == 5 {
+			coldBoot.writeError = baudSwitchErr
+		}
+	}
+	transports := []*fakeEnhancedCOMTransport{requestedProbe, coldBoot}
+	var bauds []int
+	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+		open: func(_ string, baud int, _ time.Duration) (enhancedCOMTransport, error) {
+			bauds = append(bauds, baud)
+			if len(transports) == 0 {
+				t.Fatal("unexpected reopen after unknown baud switch")
+			}
+			transport := transports[0]
+			transports = transports[1:]
+			return transport, nil
+		},
+		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+	})
+	if !errors.Is(err, baudSwitchErr) {
+		t.Fatalf("error = %v", err)
+	}
+	if want := []int{921600, 115200}; !slices.Equal(bauds, want) {
+		t.Fatalf("open bauds = %v, want %v", bauds, want)
+	}
+	baudSwitchWrites := 0
+	for _, write := range coldBoot.writes {
+		if string(write) == "wr ffffe264 0d902c2b\r" {
+			baudSwitchWrites++
+		}
+	}
+	if baudSwitchWrites != 1 || requestedProbe.closeCalls != 1 || coldBoot.closeCalls != 1 {
+		t.Fatalf(
+			"baud-switch writes/probe closes/cold closes = %d/%d/%d, want 1/1/1",
+			baudSwitchWrites,
+			requestedProbe.closeCalls,
+			coldBoot.closeCalls,
+		)
 	}
 }
 

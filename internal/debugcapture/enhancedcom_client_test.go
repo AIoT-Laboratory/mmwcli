@@ -268,6 +268,7 @@ type fakeEnhancedCOMTransport struct {
 	readCalls  int
 	purgeCalls int
 	closeCalls int
+	closeError error
 }
 
 func (transport *fakeEnhancedCOMTransport) Read(buffer []byte) (int, error) {
@@ -299,7 +300,7 @@ func (transport *fakeEnhancedCOMTransport) Write(buffer []byte) (int, error) {
 func (transport *fakeEnhancedCOMTransport) Close() error {
 	transport.closeCalls++
 	transport.calls = append(transport.calls, "close")
-	return nil
+	return transport.closeError
 }
 
 func (transport *fakeEnhancedCOMTransport) SetReadDeadline(time.Time) error  { return nil }

@@ -121,14 +121,7 @@ func (client *enhancedCOMClient) initialize(ctx context.Context) (uint32, error)
 	if err := client.wait(ctx, enhancedCOMFirstWakeWait); err != nil {
 		return 0, client.failSubmittedLocked("initial wake wait", len(wake), err)
 	}
-	if err := client.writeLocked(ctx, deadline, "probe wake", wake); err != nil {
-		return 0, err
-	}
-	if err := client.wait(ctx, enhancedCOMProbeWakeWait); err != nil {
-		return 0, client.failSubmittedLocked("probe wake wait", len(wake), err)
-	}
-
-	status, err := client.readRegisterLocked(ctx, deadline, 0xffffe2fc)
+	status, err := client.probeLocked(ctx, deadline)
 	if err != nil {
 		return 0, err
 	}
@@ -136,6 +129,31 @@ func (client *enhancedCOMClient) initialize(ctx context.Context) (uint32, error)
 		return 0, err
 	}
 	return status, nil
+}
+
+// probe performs Studio's IsConnected exchange without the outer Init wakes.
+// The fixed 115200 side of baud negotiation uses exactly this shorter form.
+func (client *enhancedCOMClient) probe(ctx context.Context) (uint32, error) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+
+	ctx, deadline, finish, err := client.beginLocked(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer finish()
+	return client.probeLocked(ctx, deadline)
+}
+
+func (client *enhancedCOMClient) probeLocked(ctx context.Context, deadline time.Time) (uint32, error) {
+	wake := encodeEnhancedCOMWake()
+	if err := client.writeLocked(ctx, deadline, "probe wake", wake); err != nil {
+		return 0, err
+	}
+	if err := client.wait(ctx, enhancedCOMProbeWakeWait); err != nil {
+		return 0, client.failSubmittedLocked("probe wake wait", len(wake), err)
+	}
+	return client.readRegisterLocked(ctx, deadline, 0xffffe2fc)
 }
 
 func (client *enhancedCOMClient) readRegister(ctx context.Context, address uint32) (uint32, error) {
@@ -204,9 +222,9 @@ func (client *enhancedCOMClient) readRegisterLocked(
 			return 0, client.failReadLocked(address, len(command), err)
 		}
 		if len(response) == 0 {
-			cause := readErr
-			if cause == nil {
-				cause = errEnhancedCOMReadTimeout
+			cause := errEnhancedCOMReadTimeout
+			if readErr != nil && !errors.Is(readErr, errEnhancedCOMReadTimeout) {
+				cause = errors.Join(cause, readErr)
 			}
 			return 0, client.failReadLocked(address, len(command), cause)
 		}

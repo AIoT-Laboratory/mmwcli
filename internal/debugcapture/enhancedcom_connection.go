@@ -10,17 +10,26 @@ import (
 )
 
 const (
-	enhancedCOMBaud             = 921600
-	enhancedCOMPreOpenWait      = 400 * time.Millisecond
-	enhancedCOMOpenTimeout      = time.Second
-	enhancedCOMOperationTimeout = 5 * time.Second
-	enhancedCOMFirmwareTimeout  = 2 * time.Minute
+	enhancedCOMBaud                     = 921600
+	enhancedCOMColdBootBaud             = 115200
+	enhancedCOMPreOpenWait              = 400 * time.Millisecond
+	enhancedCOMNegotiationOpenWait      = 500 * time.Millisecond
+	enhancedCOMNegotiationProbeWait     = 500 * time.Millisecond
+	enhancedCOMBaudRegisterWait         = 300 * time.Millisecond
+	enhancedCOMNegotiationReconnectWait = 900 * time.Millisecond
+	enhancedCOMOpenTimeout              = time.Second
+	enhancedCOMOperationTimeout         = 5 * time.Second
+	enhancedCOMFirmwareTimeout          = 2 * time.Minute
 
-	xwr68xxEFUSERow10Address = uint32(0xffffe214)
-	xwr68xxPartNumberShift   = 18
-	xwr68xxPartNumberMask    = uint32(0xff)
-	iwr68xxES2PartNumber     = uint8(0xe2)
-	awr68xxPartNumber        = uint8(0x51)
+	xwr68xxBaudClockAddress    = uint32(0xffffe144)
+	xwr68xxBaudClockMask       = uint32(0x00007800)
+	xwr68xxBaudRegisterAddress = uint32(0xffffe264)
+	xwr68xxBaud921600Value     = uint32(0x0d902c2b)
+	xwr68xxEFUSERow10Address   = uint32(0xffffe214)
+	xwr68xxPartNumberShift     = 18
+	xwr68xxPartNumberMask      = uint32(0xff)
+	iwr68xxES2PartNumber       = uint8(0xe2)
+	awr68xxPartNumber          = uint8(0x51)
 )
 
 type enhancedCOMBackend struct {
@@ -35,9 +44,9 @@ type enhancedCOMConnection struct {
 	verified   bool
 }
 
-// openEnhancedCOMConnection opens only the explicitly named port at the
-// TI xWR68xx debug-monitor baud. It deliberately does not scan ports,
-// probe an alternate baud rate, or perform Studio's fallback/reconnect flow.
+// openEnhancedCOMConnection opens only the explicitly named port. It performs
+// Studio's fixed 921600/115200 negotiation, but never scans ports or guesses
+// any other rate.
 func openEnhancedCOMConnection(ctx context.Context, portName string) (*enhancedCOMConnection, error) {
 	return openEnhancedCOMConnectionWithBackend(ctx, portName, enhancedCOMBackend{
 		open: func(name string, baud int, timeout time.Duration) (enhancedCOMTransport, error) {
@@ -64,23 +73,22 @@ func openEnhancedCOMConnectionWithBackend(
 	if backend.wait == nil {
 		return nil, errors.New("Enhanced COM wait function is nil")
 	}
-	if err := backend.wait(ctx, enhancedCOMPreOpenWait); err != nil {
-		return nil, err
+
+	client, probeValue, safeToNegotiate, err := openInitializedEnhancedCOMClient(ctx, portName, enhancedCOMBaud, backend)
+	if err != nil {
+		if !safeToNegotiate {
+			return nil, err
+		}
+		requestedBaudErr := err
+		client, probeValue, err = negotiateEnhancedCOMBaud(ctx, portName, backend)
+		if err != nil {
+			return nil, errors.Join(
+				fmt.Errorf("probe Enhanced COM port %q at %d baud: %w", portName, enhancedCOMBaud, requestedBaudErr),
+				err,
+			)
+		}
 	}
 
-	transport, err := backend.open(portName, enhancedCOMBaud, enhancedCOMOpenTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("open Enhanced COM port %q: %w", portName, err)
-	}
-	client, err := newEnhancedCOMClient(transport, enhancedCOMOperationTimeout)
-	if err != nil {
-		return nil, errors.Join(err, transport.Close())
-	}
-	client.wait = backend.wait
-	probeValue, err := client.initialize(ctx)
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("initialize Enhanced COM port %q: %w", portName, err), client.close())
-	}
 	efuseRow10, err := client.readRegister(ctx, xwr68xxEFUSERow10Address)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("read xWR68xx part identity on %q: %w", portName, err), client.close())
@@ -104,6 +112,97 @@ func openEnhancedCOMConnectionWithBackend(
 		partNumber: partNumber,
 		verified:   true,
 	}, nil
+}
+
+func openInitializedEnhancedCOMClient(
+	ctx context.Context,
+	portName string,
+	baud int,
+	backend enhancedCOMBackend,
+) (*enhancedCOMClient, uint32, bool, error) {
+	if err := backend.wait(ctx, enhancedCOMPreOpenWait); err != nil {
+		return nil, 0, false, err
+	}
+	client, err := openEnhancedCOMClient(portName, baud, backend)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	probeValue, err := client.initialize(ctx)
+	if err != nil {
+		closeErr := client.close()
+		return nil, 0, errors.Is(err, errEnhancedCOMReadTimeout) && closeErr == nil, errors.Join(
+			fmt.Errorf("initialize Enhanced COM port %q at %d baud: %w", portName, baud, err),
+			closeErr,
+		)
+	}
+	return client, probeValue, false, nil
+}
+
+func openEnhancedCOMClient(portName string, baud int, backend enhancedCOMBackend) (*enhancedCOMClient, error) {
+	transport, err := backend.open(portName, baud, enhancedCOMOpenTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("open Enhanced COM port %q at %d baud: %w", portName, baud, err)
+	}
+	client, err := newEnhancedCOMClient(transport, enhancedCOMOperationTimeout)
+	if err != nil {
+		return nil, errors.Join(err, transport.Close())
+	}
+	client.wait = backend.wait
+	return client, nil
+}
+
+func negotiateEnhancedCOMBaud(
+	ctx context.Context,
+	portName string,
+	backend enhancedCOMBackend,
+) (*enhancedCOMClient, uint32, error) {
+	if err := backend.wait(ctx, enhancedCOMNegotiationOpenWait); err != nil {
+		return nil, 0, err
+	}
+	coldBootClient, err := openEnhancedCOMClient(portName, enhancedCOMColdBootBaud, backend)
+	if err != nil {
+		return nil, 0, err
+	}
+	fail := func(err error) (*enhancedCOMClient, uint32, error) {
+		return nil, 0, errors.Join(err, coldBootClient.close())
+	}
+
+	if err := backend.wait(ctx, enhancedCOMNegotiationProbeWait); err != nil {
+		return fail(err)
+	}
+	if _, err := coldBootClient.probe(ctx); err != nil {
+		return fail(fmt.Errorf("probe Enhanced COM port %q at cold-boot baud %d: %w", portName, enhancedCOMColdBootBaud, err))
+	}
+	if err := backend.wait(ctx, enhancedCOMBaudRegisterWait); err != nil {
+		return fail(err)
+	}
+	clock, err := coldBootClient.readRegister(ctx, xwr68xxBaudClockAddress)
+	if err != nil {
+		return fail(fmt.Errorf("read xWR68xx baud clock configuration: %w", err))
+	}
+	if err := coldBootClient.writeRegister(ctx, xwr68xxBaudClockAddress, clock|xwr68xxBaudClockMask); err != nil {
+		return fail(fmt.Errorf("configure xWR68xx baud clock: %w", err))
+	}
+	if err := backend.wait(ctx, enhancedCOMBaudRegisterWait); err != nil {
+		return fail(err)
+	}
+	if err := coldBootClient.writeRegister(ctx, xwr68xxBaudRegisterAddress, xwr68xxBaud921600Value); err != nil {
+		return fail(fmt.Errorf("switch xWR68xx debug monitor to %d baud: %w", enhancedCOMBaud, err))
+	}
+	if err := backend.wait(ctx, enhancedCOMBaudRegisterWait); err != nil {
+		return fail(err)
+	}
+	if err := coldBootClient.close(); err != nil {
+		return nil, 0, fmt.Errorf("close cold-boot Enhanced COM port %q: %w", portName, err)
+	}
+	if err := backend.wait(ctx, enhancedCOMNegotiationReconnectWait); err != nil {
+		return nil, 0, err
+	}
+	client, probeValue, _, err := openInitializedEnhancedCOMClient(ctx, portName, enhancedCOMBaud, backend)
+	if err != nil {
+		return nil, 0, fmt.Errorf("verify Enhanced COM baud transition on %q: %w", portName, err)
+	}
+	return client, probeValue, nil
 }
 
 func supportedXWR6843Part(partNumber uint8) bool {
