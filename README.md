@@ -28,6 +28,30 @@ SOP2 主机下载与直控路线统一命名为 `debug-capture`，并与上述�
 范围以 CLI 帮助中的实际命令为准。该路线使用用户显式提供的 MSS/BSS 固件和 FTDI D2XX，
 不需要安装 mmWave Studio 主机运行时。
 
+## 下载
+
+正式构建发布在 [GitHub Releases](https://github.com/AIoT-Laboratory/mmwcli/releases)。
+0.1 提供以下产物；只有 Windows/amd64 的 `ftd2xx` 变体包含 `debug-capture` 原生 backend：
+
+| 平台/用途 | 产物 |
+| --- | --- |
+| Windows amd64 核心版 | [`mmwcli-0.1-windows-amd64.exe`](https://github.com/AIoT-Laboratory/mmwcli/releases/download/0.1/mmwcli-0.1-windows-amd64.exe) |
+| Windows amd64 debug mode | [`mmwcli-0.1-windows-amd64-ftd2xx.exe`](https://github.com/AIoT-Laboratory/mmwcli/releases/download/0.1/mmwcli-0.1-windows-amd64-ftd2xx.exe) |
+| Windows arm64 核心版 | [`mmwcli-0.1-windows-arm64.exe`](https://github.com/AIoT-Laboratory/mmwcli/releases/download/0.1/mmwcli-0.1-windows-arm64.exe) |
+| Linux amd64 核心版 | [`mmwcli-0.1-linux-amd64`](https://github.com/AIoT-Laboratory/mmwcli/releases/download/0.1/mmwcli-0.1-linux-amd64) |
+| Linux arm64 核心版 | [`mmwcli-0.1-linux-arm64`](https://github.com/AIoT-Laboratory/mmwcli/releases/download/0.1/mmwcli-0.1-linux-arm64) |
+
+校验值见 [`SHA256SUMS`](https://github.com/AIoT-Laboratory/mmwcli/releases/download/0.1/SHA256SUMS)。
+也可以用 GitHub CLI 下载全部附件，或只下载 Windows debug mode 版本：
+
+```text
+gh release download 0.1 --repo AIoT-Laboratory/mmwcli
+gh release download 0.1 --repo AIoT-Laboratory/mmwcli --pattern "mmwcli-0.1-windows-amd64-ftd2xx.exe" --pattern "SHA256SUMS"
+```
+
+Linux 下载后可能需要执行 `chmod +x mmwcli-0.1-linux-*`。Windows `ftd2xx` 版本仍要求用户
+自行安装 FTDI DLL；Linux 原生 D2XX 版本需要按下一节从源码构建。
+
 ## 构建
 
 需要 Go 1.26 或更高版本。仓库没有第三方 Go 模块。
@@ -159,12 +183,15 @@ mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-02.bin --p
 4. 将 DCA1000 接到已配置上述静态地址的独立网卡，然后执行：
 
 ```text
-mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg capture-debug.bin --enhanced-port PORT --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin --d2xx-serial BASE --sop2-reset
+mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg capture-debug.bin --enhanced-port PORT --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin --d2xx-description AR-DevPack-EVM-012 --sop2-reset
 ```
 
-若设备使用 description 标识，以 `--d2xx-description BASE` 替代 `--d2xx-serial BASE`；两者
-不能同时使用。`--sop2-reset` 是显式的雷达目标复位，只在 Enhanced COM 之前使用同一
-base 派生的 D/C 接口各执行一次 SOP2/NRST 流程；它与控制 DCA FPGA 的 `--reset` 无关。
+`AR-DevPack-EVM-012` 是 0.1 实机验收所用的真实 description base；程序由它派生
+`AR-DevPack-EVM-012 A/B`，使用 `--sop2-reset` 时还会派生 C/D。其它设备必须替换为自身
+标识。若使用 serial number，则改用 `--d2xx-serial BASE`，其中 `BASE` 是去掉 A/B/C/D
+接口后缀的共同 serial 前缀；两种选择器不能同时使用。`--sop2-reset` 是显式的雷达目标
+复位，只在 Enhanced COM 之前使用同一 base 派生的 D/C 接口各执行一次 SOP2/NRST 流程；
+它与控制 DCA FPGA 的 `--reset` 无关。
 Enhanced COM 只负责将 BSS/MSS 固件提交到内存，随后 D2XX A/B 承载
 mmWaveLink 配置、启动和停止，DCA1000 仍通过以太网传输 ADC 数据。CFG 在主机端严格预检
 并翻译成 mmWaveLink 消息，不会作为文本发送给固件。
