@@ -100,9 +100,10 @@ func (client *enhancedCOMClient) close() error {
 	return client.closeErr
 }
 
-// initialize reproduces Studio's fixed three-wake connection sequence. The
-// returned value only proves that the monitor answered one bounded register
-// read; device identity and SOP2 status need a separate gate.
+// initialize reproduces Studio's fixed three-wake connection sequence. A
+// fixed-width reply to the monitor probe establishes the SOP2 monitor
+// exchange; the connection must still gate TOPRCM part identity before any
+// target write.
 func (client *enhancedCOMClient) initialize(ctx context.Context) (uint32, error) {
 	client.mu.Lock()
 	defer client.mu.Unlock()

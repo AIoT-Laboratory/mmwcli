@@ -183,7 +183,11 @@ func TestEnhancedCOMConnectionSubmitsFirmwareAndStaysOpenForVerification(t *test
 func TestEnhancedCOMConnectionClosesAfterSubmissionFailure(t *testing.T) {
 	transport := &fakeEnhancedCOMTransport{}
 	client := mustEnhancedCOMClient(t, transport)
-	connection := &enhancedCOMConnection{client: client}
+	connection := &enhancedCOMConnection{
+		client:     client,
+		partNumber: iwr68xxES2PartNumber,
+		verified:   true,
+	}
 	assets := fixtureSubmissionAssets(t)
 	assets.BSS.image.sections[0].address = 4
 
@@ -193,5 +197,19 @@ func TestEnhancedCOMConnectionClosesAfterSubmissionFailure(t *testing.T) {
 	}
 	if transport.writeCalls != 0 || transport.closeCalls != 1 {
 		t.Fatalf("invalid submission writes/closes = %d/%d", transport.writeCalls, transport.closeCalls)
+	}
+}
+
+func TestEnhancedCOMConnectionRejectsUngatedFirmwareSubmission(t *testing.T) {
+	transport := &fakeEnhancedCOMTransport{}
+	client := mustEnhancedCOMClient(t, transport)
+	connection := &enhancedCOMConnection{client: client, partNumber: iwr68xxES2PartNumber}
+
+	_, err := connection.submitFirmware(context.Background(), fixtureSubmissionAssets(t))
+	if err == nil || !strings.Contains(err.Error(), "has not passed") {
+		t.Fatalf("error = %v", err)
+	}
+	if transport.writeCalls != 0 || transport.closeCalls != 1 {
+		t.Fatalf("ungated submission writes/closes = %d/%d", transport.writeCalls, transport.closeCalls)
 	}
 }

@@ -32,6 +32,7 @@ type enhancedCOMConnection struct {
 	client     *enhancedCOMClient
 	probeValue uint32
 	partNumber uint8
+	verified   bool
 }
 
 // openEnhancedCOMConnection opens only the explicitly named port at the
@@ -97,7 +98,12 @@ func openEnhancedCOMConnectionWithBackend(
 			client.close(),
 		)
 	}
-	return &enhancedCOMConnection{client: client, probeValue: probeValue, partNumber: partNumber}, nil
+	return &enhancedCOMConnection{
+		client:     client,
+		probeValue: probeValue,
+		partNumber: partNumber,
+		verified:   true,
+	}, nil
 }
 
 func supportedXWR6843Part(partNumber uint8) bool {
@@ -121,6 +127,12 @@ func (connection *enhancedCOMConnection) submitFirmware(
 ) (firmwareSubmissionReceipt, error) {
 	if connection == nil || connection.client == nil {
 		return firmwareSubmissionReceipt{}, errors.New("Enhanced COM connection is nil")
+	}
+	if !connection.verified || !supportedXWR6843Part(connection.partNumber) {
+		return firmwareSubmissionReceipt{}, errors.Join(
+			errors.New("Enhanced COM connection has not passed the xWR6843 SOP2 monitor and part identity gate"),
+			connection.close(),
+		)
 	}
 	if ctx == nil {
 		ctx = context.Background()
