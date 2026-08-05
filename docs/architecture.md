@@ -6,7 +6,7 @@ mmwcli 将设备协议、采集状态机和操作系统 I/O 分开，使 Windows
 cmd/mmwcli
   -> internal/app          命令解析与退出码
   -> internal/firmware     单个 TI 设备固件的离线校验
-  -> internal/debugcapture SOP2 资产校验与 D2XX MPSSE transport
+  -> internal/debugcapture SOP2 资产校验、Enhanced COM 固件提交与 D2XX MPSSE transport
   -> internal/d2xx         可选 FTDI D2XX 原生库边界
   -> internal/radar        CLI 方言、CFG 预检、应答解析
      -> internal/serialport
@@ -65,16 +65,22 @@ Advanced frame、monitor、continuous、test、loopback、软件 LVDS 和 LVDS h
 SOP2 主机下载与直控路径使用独立入口 `debug-capture`，不属于文本 CLI 方言，也不接入
 当前 `session.Radar` 接口。MSS/BSS 固件必须由用户显式提供；该路径不得自动发现 TI 安装，
 不得依赖 mmWave Studio runtime、Lua 或 C#。当前实现离线资产校验、RPRC 解析、xWR68xx
-内存窗口检查、每块不超过 4096 字节的非空内存写计划，以及以显式 serial/description
-选择同一 FTDI 的 A/B 接口、初始化 MPSSE、执行有界 SPI/IRQ I/O 的 transport。设备选择
-不使用枚举、索引或 location。该 transport 目前只经过 fake 离线测试，尚未接入公开
-`debug-capture` 硬件命令。`debug-capture native-check` 只确认 D2XX 库边界可用；Windows
-读取库版本，Linux 当前不报告版本，并且该命令不会查询或打开 USB 设备。
+内存窗口检查和每块不超过 4096 字节的内存写计划。非公开的 Enhanced COM 层只打开
+操作者指定的 921600 baud 端口，执行固定三次 `x0` 握手和有界 `rd`/`wr`，再按 xWR6843
+的 BSS→MSS 寄存器、轮询与 payload 顺序提交已校验固件。轮询最多读取 11 次；任何未知
+写结果都禁止重试，失败也不会自动 release 或 reset。Enhanced COM 没有逐写 ACK，因此
+完整提交仍记为未验证，不能等同于固件已运行。
+
+D2XX 层以显式 serial/description 选择同一 FTDI 的 A/B 接口，初始化 MPSSE 并执行有界
+SPI/IRQ I/O；设备选择不使用枚举、索引或 location。Enhanced COM 与 D2XX 路径目前只经过
+fake 离线测试，尚未接入公开 `debug-capture` 硬件命令。`debug-capture native-check` 只确认
+D2XX 库边界可用；Windows 读取库版本，Linux 当前不报告版本，并且该命令不会查询或打开
+USB 设备。
 
 TI 参考流程在 Enhanced COM 上完成 MSS/BSS 内存写，随后通过 FTDI MPSSE SPI/IRQ 承载
 mmWaveLink；因此 COM 不能单独完成直控采集。主机 USB transport 固定采用 FTDI D2XX，
-不实现 raw USB，也不依赖 mmWave Studio DLL。SOP2 下载握手、mmWaveLink 控制、与公开
-命令的整合及 ADC 采集尚未实现，也没有 D2XX 实机兼容性结论。
+不实现 raw USB，也不依赖 mmWave Studio DLL。mmWaveLink 设备身份与固件版本门禁、公开
+命令整合及 ADC 采集尚未实现，也没有 Enhanced COM 或 D2XX 的实机兼容性结论。
 
 ## 一体化采集状态机
 
