@@ -317,6 +317,29 @@ func (controller *Controller) StartWithoutReconfigurationContext(ctx context.Con
 	return "", ErrReuseConfigurationUnsupported
 }
 
+// AwaitFiniteFrameEndContext consumes the natural frame-end event produced by
+// a running finite frame plan. It never sends a frame-stop trigger.
+func (controller *Controller) AwaitFiniteFrameEndContext(ctx context.Context) (string, error) {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if err := controller.readyLocked(ctx); err != nil {
+		return "", err
+	}
+	if controller.state != controllerStateRunning {
+		return "", fmt.Errorf("debug-capture finite frame end requires a running frame; state=%d", controller.state)
+	}
+	if controller.plan.source.InfiniteFrames {
+		return "", errors.New("debug-capture cannot await a natural frame end for an infinite frame plan")
+	}
+
+	controller.state = controllerStateUnknown
+	if err := controller.waitFrameEventLocked(ctx, mmWaveLinkRFFrameEndEventID); err != nil {
+		return "", targetStateFailure(fmt.Errorf("await debug-capture finite frame end: %w", err))
+	}
+	controller.state = controllerStateConfigured
+	return "debug-capture finite frame ended", nil
+}
+
 // StopContext is a local no-op only for the fresh, post-bootstrap state. Once
 // frame configuration has been sent, it emits exactly one stop trigger and
 // accepts the two documented already-stopped status codes as convergence.
@@ -362,6 +385,10 @@ func (controller *Controller) frameTriggerLocked(ctx context.Context, start bool
 	if len(response.subblocks) != 0 {
 		return fmt.Errorf("frame-trigger response has %d sub-blocks; expected a header-only response", len(response.subblocks))
 	}
+	return controller.waitFrameEventLocked(ctx, eventSubblock)
+}
+
+func (controller *Controller) waitFrameEventLocked(ctx context.Context, eventSubblock uint16) error {
 	event, err := controller.link.waitEvent(ctxOrBackground(ctx), mmWaveLinkRFAsyncMessageID, eventSubblock)
 	if err != nil {
 		return err

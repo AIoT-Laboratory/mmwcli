@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"mmwcli/internal/d2xx"
+	"mmwcli/internal/radar"
 	"mmwcli/internal/session"
 )
 
@@ -348,6 +349,103 @@ func TestControllerStartAndStopUseSingleFrameTriggers(t *testing.T) {
 	}
 }
 
+func TestControllerAwaitsNaturalFiniteFrameEndWithoutStopTrigger(t *testing.T) {
+	link := &fakeControllerLink{}
+	controller := newFakeController(mustDebugControllerPlan(t), link)
+	controller.state = controllerStateRunning
+
+	response, err := controller.AwaitFiniteFrameEndContext(context.Background())
+	if err != nil {
+		t.Fatalf("AwaitFiniteFrameEndContext: %v", err)
+	}
+	if response != "debug-capture finite frame ended" {
+		t.Fatalf("response = %q", response)
+	}
+	if controller.state != controllerStateConfigured {
+		t.Fatalf("controller state = %d, want configured", controller.state)
+	}
+	if len(link.commands) != 0 {
+		t.Fatalf("natural frame end sent %d commands", len(link.commands))
+	}
+	wantEvents := [][2]uint16{{mmWaveLinkRFAsyncMessageID, mmWaveLinkRFFrameEndEventID}}
+	if !reflect.DeepEqual(link.events, wantEvents) {
+		t.Fatalf("frame events = %v, want %v", link.events, wantEvents)
+	}
+}
+
+func TestControllerNaturalFiniteFrameEndFailurePoisonsState(t *testing.T) {
+	waitFailure := errors.New("injected frame-end wait failure")
+	tests := []struct {
+		name     string
+		waitHook func(uint16, uint16) (mmWaveLinkMessage, error)
+		want     error
+	}{
+		{
+			name: "wait",
+			waitHook: func(uint16, uint16) (mmWaveLinkMessage, error) {
+				return mmWaveLinkMessage{}, waitFailure
+			},
+			want: waitFailure,
+		},
+		{
+			name: "validation",
+			waitHook: func(_ uint16, subblock uint16) (mmWaveLinkMessage, error) {
+				return controllerAsyncEvent(subblock, []byte{1}), nil
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			link := &fakeControllerLink{waitHook: test.waitHook}
+			controller := newFakeController(mustDebugControllerPlan(t), link)
+			controller.state = controllerStateRunning
+
+			_, err := controller.AwaitFiniteFrameEndContext(context.Background())
+			var stateFailure *TargetStateError
+			if !errors.As(err, &stateFailure) {
+				t.Fatalf("AwaitFiniteFrameEndContext error = %v, want TargetStateError", err)
+			}
+			if test.want != nil && !errors.Is(err, test.want) {
+				t.Fatalf("AwaitFiniteFrameEndContext error = %v, want %v", err, test.want)
+			}
+			if controller.state != controllerStateUnknown {
+				t.Fatalf("controller state = %d, want unknown", controller.state)
+			}
+			if len(link.commands) != 0 || len(link.events) != 1 {
+				t.Fatalf("natural frame end I/O: commands=%d events=%d", len(link.commands), len(link.events))
+			}
+		})
+	}
+}
+
+func TestControllerRejectsNaturalFrameEndOutsideRunningFinitePlanWithoutIO(t *testing.T) {
+	tests := []struct {
+		name  string
+		plan  func(*testing.T) Plan
+		state controllerState
+	}{
+		{name: "configured", plan: mustDebugControllerPlan, state: controllerStateConfigured},
+		{name: "infinite", plan: mustInfiniteDebugControllerPlan, state: controllerStateRunning},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			link := &fakeControllerLink{}
+			controller := newFakeController(test.plan(t), link)
+			controller.state = test.state
+
+			if _, err := controller.AwaitFiniteFrameEndContext(context.Background()); err == nil {
+				t.Fatal("AwaitFiniteFrameEndContext unexpectedly succeeded")
+			}
+			if controller.state != test.state {
+				t.Fatalf("controller state = %d, want unchanged %d", controller.state, test.state)
+			}
+			if len(link.commands) != 0 || len(link.events) != 0 {
+				t.Fatalf("rejected natural frame end caused I/O: commands=%d events=%d", len(link.commands), len(link.events))
+			}
+		})
+	}
+}
+
 func TestControllerFreshStopAndNoReconfigurationPerformNoIO(t *testing.T) {
 	link := &fakeControllerLink{}
 	controller := newFakeController(mustDebugControllerPlan(t), link)
@@ -457,6 +555,27 @@ func mustDebugControllerPlan(t *testing.T) Plan {
 	plan, err := BuildPlan(goldenDebugCaptureSource(t))
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
+	}
+	return plan
+}
+
+func mustInfiniteDebugControllerPlan(t *testing.T) Plan {
+	t.Helper()
+	source := goldenDebugCaptureSource(t)
+	commands := append([]string(nil), source.ConfigurationCommands...)
+	for index, command := range commands {
+		if strings.HasPrefix(command, "frameCfg ") {
+			commands[index] = "frameCfg 0 1 32 0 100 1 0"
+		}
+	}
+	commands = append(commands, source.DeclaredStartCommand)
+	rebuilt, err := radar.BuildCapturePlan(radar.StudioCLI, commands, radar.FullConfiguration)
+	if err != nil {
+		t.Fatalf("build infinite capture plan: %v", err)
+	}
+	plan, err := BuildPlan(rebuilt)
+	if err != nil {
+		t.Fatalf("BuildPlan infinite: %v", err)
 	}
 	return plan
 }
