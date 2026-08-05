@@ -86,8 +86,9 @@ TOPRCM part number 门禁通过后，按 xWR6843 的 BSS→MSS 顺序提交固�
 mmWaveLink 启动门禁要求 MSS 固件为 `2.0.0.3`、RF 固件为 `6.2.1.5`。通过 `studio-cli`
 合同预检的 CFG 会由主机翻译为固定的 RF、LVDS、profile、chirp、frame 与 apply 消息；
 CFG 不作为文本发送。
-RF 初始化必须报告完整校准 mask，frame start/stop 都只发送一次 trigger 并验证对应事件，
-未知结果不会重试。该路线不支持 `--no-reconfig`。
+RF 初始化必须报告完整校准 mask；frame start 和显式 stop 都只发送一次 trigger 并验证对应
+事件，有限帧自然结束则只消费 frame-end 事件。未知结果不会重试。该路线不支持
+`--no-reconfig`。
 
 `debug-capture native-check` 只加载 D2XX 库，不查询或打开 USB 设备。公开 capture 命令也在
 固件提交前执行同一 library-only 门禁。协议、失败状态和编排目前经过 fake 离线测试；本轮
@@ -104,7 +105,8 @@ RF 初始化必须报告完整校准 mask，frame start/stop 都只发送一次 
   -> arm 数据接收并发送一次 StartRecord
   -> StartRecord status=0 后发送一次 radar start
   -> 接收并验证数据
-  -> radar stop -> bounded data drain -> StopRecord -> control drain
+  -> 有限 debug 成功：等待自然 frame-end；其它路径：radar stop
+  -> bounded data drain -> StopRecord -> control drain
   -> sync/close -> 发布 OUT
 ```
 
@@ -112,8 +114,9 @@ functional/application 路线把 radar start/stop 映射为固件文本命令；
 mmWaveLink frame trigger。两条路线不会同时打开或混用。
 
 StartRecord 应答缺失代表卡端状态未知。实现不重发 Start，只允许一次独立、有界的
-StopRecord 收敛。取消和主流程错误同样使用独立清理 context；即使数据持续到达，drain
-也有绝对上限，随后仍会执行 StopRecord。
+StopRecord 收敛。debug 路线的有效有限帧完成后只消费并验证自然 frame-end 事件；取消、
+超时、数据不完整、无限帧和不提供该能力的文本 CLI 路线仍显式停止雷达。清理使用独立
+context；即使数据持续到达，drain 也有绝对上限，随后仍会执行 StopRecord。
 
 ## DCA1000 协议与接收
 

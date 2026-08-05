@@ -23,6 +23,13 @@ type Radar interface {
 	StartWithoutReconfigurationContext(context.Context) (string, error)
 }
 
+// finiteFrameEndAwaiter is an optional capability for radar controllers whose
+// finite frame schedule emits a trustworthy natural-completion event. Text CLI
+// controllers intentionally fall back to the normal explicit stop path.
+type finiteFrameEndAwaiter interface {
+	AwaitFiniteFrameEndContext(context.Context) (string, error)
+}
+
 type DCAControl interface {
 	Execute(context.Context, dca.Command, []byte) (dca.Response, error)
 	Configure(context.Context, dca.FPGAConfig, int) (dca.ConfigurationResponses, error)
@@ -222,6 +229,7 @@ func Run(
 	dcaUsed := false
 	dcaRecording := false
 	radarMayBeRunning := false
+	finiteFrameCompleted := false
 	var radarStartIssuedAt time.Time
 
 	outputManagedByLifecycle = true
@@ -233,6 +241,7 @@ func Run(
 			receiverCancel,
 			receiverStarted,
 			radarMayBeRunning,
+			finiteFrameCompleted && ctx.Err() == nil,
 			dcaUsed,
 			dcaRecording,
 			options,
@@ -389,6 +398,10 @@ func Run(
 	waitContext, cancelWait := context.WithDeadline(ctx, firstPacketAt.Add(maximumStreamingDuration))
 	stats, err = receiver.Wait(waitContext)
 	cancelWait()
+	if err == nil && ctx.Err() == nil &&
+		validateResult(plan, stats, options.ReceiverConfig.IdleTimeout, radarStartIssuedAt) == nil {
+		finiteFrameCompleted = true
+	}
 	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 		return stats, &finiteCaptureDeadlineError{maximum: maximumStreamingDuration}
 	}
@@ -402,6 +415,7 @@ func cleanup(
 	receiverCancel context.CancelFunc,
 	receiverStarted bool,
 	radarMayBeRunning bool,
+	finiteFrameCompleted bool,
 	dcaUsed bool,
 	dcaRecording bool,
 	options Options,
@@ -410,10 +424,19 @@ func cleanup(
 	var failures []error
 	if radarMayBeRunning {
 		stopContext, cancel := context.WithTimeout(context.Background(), options.RadarCleanupTimeout)
-		_, err := radarControl.StopContext(stopContext)
+		operation := "stop radar"
+		var err error
+		if awaiter, ok := radarControl.(finiteFrameEndAwaiter); ok && finiteFrameCompleted {
+			operation = "wait for finite radar frame end"
+			_, err = awaiter.AwaitFiniteFrameEndContext(stopContext)
+		} else {
+			_, err = radarControl.StopContext(stopContext)
+		}
 		cancel()
 		if err != nil {
-			failures = append(failures, fmt.Errorf("stop radar during cleanup: %w", err))
+			failures = append(failures, fmt.Errorf("%s during cleanup: %w", operation, err))
+		} else if operation == "wait for finite radar frame end" {
+			log("finite radar frame ended during cleanup")
 		} else {
 			log("radar stopped during cleanup")
 		}

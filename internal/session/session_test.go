@@ -62,6 +62,21 @@ func (f *fakeRadar) StartWithoutReconfigurationContext(context.Context) (string,
 	return f.StartWithoutReconfiguration()
 }
 
+type fakeFiniteFrameRadar struct {
+	*fakeRadar
+	awaitCalls int
+	awaitHook  func(context.Context) error
+}
+
+func (f *fakeFiniteFrameRadar) AwaitFiniteFrameEndContext(ctx context.Context) (string, error) {
+	*f.events = append(*f.events, "frameEnd")
+	f.awaitCalls++
+	if f.awaitHook != nil {
+		return "", f.awaitHook(ctx)
+	}
+	return "finite frame ended", nil
+}
+
 type fakeDCA struct {
 	events        *[]string
 	startHook     func(context.Context) (dca.Response, error)
@@ -235,6 +250,143 @@ func TestReuseCaptureSendsNoConfigurationAndArmsBeforeStart(t *testing.T) {
 	}
 }
 
+func TestFiniteCaptureUsesNaturalFrameEndCapability(t *testing.T) {
+	plan := sessionTestPlan(t)
+	finalPath := filepath.Join(t.TempDir(), "finite-natural-end.bin")
+	output, err := capturefile.Create(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	radarControl := &fakeFiniteFrameRadar{fakeRadar: &fakeRadar{events: &events}}
+	receiver := &fakeReceiver{
+		events: &events,
+		stats: dca.CaptureStats{
+			PacketsReceived:      1,
+			PayloadBytesReceived: 3,
+			OutputBytes:          plan.ExpectedBytes,
+		},
+	}
+
+	_, err = Run(
+		context.Background(),
+		radarControl,
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		plan,
+		output,
+		DefaultOptions(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if radarControl.stopCalls != 1 || radarControl.awaitCalls != 1 {
+		t.Fatalf(
+			"radar cleanup calls: stop=%d await=%d, want initial stop=1 and await=1",
+			radarControl.stopCalls,
+			radarControl.awaitCalls,
+		)
+	}
+	want := []string{
+		"version", "sensorStop", "dcaStop", "dcaConfigure", "apply",
+		"receiverStart", "dcaStart", "sensorStart", "receiverFirst", "receiverWait",
+		"frameEnd", "receiverWait", "dcaStop", "dcaDrain", "receiverClose",
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v\nwant   = %#v", events, want)
+	}
+	if _, err := os.Stat(finalPath); err != nil {
+		t.Fatalf("finite capture output was not committed: %v", err)
+	}
+}
+
+func TestFiniteCaptureErrorStillUsesExplicitStop(t *testing.T) {
+	plan := sessionTestPlan(t)
+	finalPath := filepath.Join(t.TempDir(), "finite-error-stop.bin")
+	output, err := capturefile.Create(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	radarControl := &fakeFiniteFrameRadar{fakeRadar: &fakeRadar{events: &events}}
+	receiver := &fakeReceiver{
+		events: &events,
+		stats: dca.CaptureStats{
+			PacketsReceived:      1,
+			PayloadBytesReceived: 3,
+			OutputBytes:          plan.ExpectedBytes,
+		},
+	}
+	waitCalls := 0
+	receiver.waitHook = func(context.Context) (dca.CaptureStats, error) {
+		waitCalls++
+		if waitCalls == 1 {
+			return receiver.stats, context.DeadlineExceeded
+		}
+		return receiver.stats, nil
+	}
+
+	_, err = Run(
+		context.Background(),
+		radarControl,
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		plan,
+		output,
+		DefaultOptions(),
+	)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run error = %v, want finite capture deadline", err)
+	}
+	if radarControl.stopCalls != 2 || radarControl.awaitCalls != 0 {
+		t.Fatalf(
+			"radar cleanup calls: stop=%d await=%d, want explicit cleanup stop and no await",
+			radarControl.stopCalls,
+			radarControl.awaitCalls,
+		)
+	}
+	assertPartRetained(t, finalPath)
+}
+
+func TestNaturalFrameEndFailureDoesNotFallbackToStop(t *testing.T) {
+	events := []string{}
+	want := errors.New("unknown natural frame-end result")
+	radarControl := &fakeFiniteFrameRadar{
+		fakeRadar: &fakeRadar{events: &events},
+		awaitHook: func(context.Context) error { return want },
+	}
+	dcaControl := &fakeDCA{events: &events}
+	receiver := &fakeReceiver{events: &events}
+
+	err := cleanup(
+		radarControl,
+		dcaControl,
+		receiver,
+		nil,
+		true,
+		true,
+		true,
+		true,
+		true,
+		DefaultOptions(),
+		func(string) {},
+	)
+	if !errors.Is(err, want) {
+		t.Fatalf("cleanup error = %v, want natural frame-end failure", err)
+	}
+	if radarControl.awaitCalls != 1 || radarControl.stopCalls != 0 {
+		t.Fatalf(
+			"radar cleanup calls: await=%d stop=%d, want one await and no fallback stop",
+			radarControl.awaitCalls,
+			radarControl.stopCalls,
+		)
+	}
+	wantEvents := []string{"frameEnd", "receiverWait", "dcaStop", "dcaDrain", "receiverClose"}
+	if !reflect.DeepEqual(events, wantEvents) || dcaControl.stopCalls != 1 {
+		t.Fatalf("cleanup after frame-end failure: events=%v dcaStops=%d", events, dcaControl.stopCalls)
+	}
+}
+
 func TestCancellationAfterDCAArmDoesNotStartRadar(t *testing.T) {
 	plan := sessionTestPlan(t)
 	finalPath := filepath.Join(t.TempDir(), "cancel-before-start.bin")
@@ -299,9 +451,10 @@ func TestCancellationDuringCleanupPreventsCommit(t *testing.T) {
 			return stats, nil
 		},
 	}
+	radarControl := &fakeFiniteFrameRadar{fakeRadar: &fakeRadar{events: &events}}
 	_, err = Run(
 		ctx,
-		&fakeRadar{events: &events},
+		radarControl,
 		&fakeDCA{events: &events},
 		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
 		plan,
@@ -310,6 +463,13 @@ func TestCancellationDuringCleanupPreventsCommit(t *testing.T) {
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run error = %v, want sticky cancellation", err)
+	}
+	if radarControl.stopCalls != 2 || radarControl.awaitCalls != 0 {
+		t.Fatalf(
+			"radar cleanup calls after cancellation: stop=%d await=%d",
+			radarControl.stopCalls,
+			radarControl.awaitCalls,
+		)
 	}
 	assertPartRetained(t, finalPath)
 }
@@ -494,9 +654,10 @@ func TestRunRejectsCompleteSingleFramePacketReceivedBeforeStart(t *testing.T) {
 			CadenceAnchorFrame:     0,
 		},
 	}
+	radarControl := &fakeFiniteFrameRadar{fakeRadar: &fakeRadar{events: &events}}
 	_, err = Run(
 		context.Background(),
-		&fakeRadar{events: &events},
+		radarControl,
 		&fakeDCA{events: &events},
 		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
 		plan,
@@ -505,6 +666,13 @@ func TestRunRejectsCompleteSingleFramePacketReceivedBeforeStart(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "arrived too early") {
 		t.Fatalf("Run error = %v, want stale pre-start packet failure", err)
+	}
+	if radarControl.stopCalls != 2 || radarControl.awaitCalls != 0 {
+		t.Fatalf(
+			"radar cleanup calls after data validation failure: stop=%d await=%d",
+			radarControl.stopCalls,
+			radarControl.awaitCalls,
+		)
 	}
 	assertPartRetained(t, finalPath)
 }

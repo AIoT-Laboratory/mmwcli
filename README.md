@@ -201,8 +201,9 @@ readiness 门槛；非录制状态下 `SystemAlive` 可能无响应，而 `dca v
 
 - CFG、模式组合、预期字节数和输出路径均在硬件 I/O 前检查。
 - 一体化采集只在 DCA StartRecord 成功后发送一次 `sensorStart`；未知结果不会自动重试。
-- 清理顺序为 `sensorStop -> bounded drain -> StopRecord`，Ctrl+C 和 `SIGTERM` 也会执行
-  有界清理。
+- 正常完成的有限 debug capture 会验证固件自然产生的 frame-end 事件，不再重复发送 stop；
+  functional/application 路线以及取消、超时和失败路径仍按
+  `radar stop -> bounded drain -> StopRecord` 执行有界清理。
 - 数据先独占写入 `OUT.part`。只有采集、完整性检查和清理全部成功才无覆盖发布为 `OUT`；
   失败保留 `.part` 供诊断。
 - DCA1000 raw 短尾包可能延迟约 2 秒，因此默认 quiet window 为 2500 ms。

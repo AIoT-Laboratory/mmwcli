@@ -80,8 +80,9 @@
 - 保持 `radar`、`dca`、`session`、`capturefile` 和 `serialport` 的职责边界；平台差异只放在
   小型 OS transport 文件中。
 - 所有 CFG 与采集组合必须在创建输出文件和硬件 I/O 前完成预检。
-- 一体化采集顺序为：配置雷达、启动 DCA 记录、启动雷达；清理顺序为：停止雷达、有限
-  drain、停止 DCA、有限控制状态 drain。
+- 一体化采集顺序为：配置雷达、启动 DCA 记录、启动雷达。正常完成的有限 debug capture
+  消费固件的自然 frame-end 事件；其余路径先显式停止雷达，再有限 drain、停止 DCA 并有限
+  drain 控制状态。
 - 任何 start 的未知结果都不得自动重试。清理使用独立、有界 context。
 - 输出先独占创建为 `OUT.part`；仅在采集与清理全部成功后无覆盖发布为 `OUT`。失败保留
   `.part` 供诊断。
