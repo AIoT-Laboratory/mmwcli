@@ -6,7 +6,7 @@ mmwcli 将设备协议、采集状态机和操作系统 I/O 分开，使 Windows
 cmd/mmwcli
   -> internal/app          命令解析与退出码
   -> internal/firmware     单个 TI 设备固件的离线校验
-  -> internal/debugcapture SOP2 资产校验、Enhanced COM 固件提交与 D2XX MPSSE transport
+  -> internal/debugcapture SOP2 资产校验、固件提交、D2XX/mmWaveLink 控制器
   -> internal/d2xx         可选 FTDI D2XX 原生库边界
   -> internal/radar        CLI 方言、CFG 预检、应答解析
      -> internal/serialport
@@ -62,41 +62,43 @@ Advanced frame、monitor、continuous、test、loopback、软件 LVDS 和 LVDS h
 
 ## SOP2 直控边界
 
-SOP2 主机下载与直控路径使用独立入口 `debug-capture`，不属于文本 CLI 方言，也不接入
-当前 `session.Radar` 接口。MSS/BSS 固件必须由用户显式提供；该路径不得自动发现 TI 安装，
-不得依赖 mmWave Studio runtime、Lua 或 C#。当前实现离线资产校验、RPRC 解析、xWR68xx
-内存窗口检查和每块不超过 4096 字节的内存写计划。非公开的 Enhanced COM 层只以冷启动
-115200 baud 打开操作者指定的端口，不扫描或 fallback；固定三次 `x0` 握手后还会读取
-TOPRCM part number，只允许受支持的非安全 xWR68xx。门禁通过后再按 xWR6843 的 BSS→MSS
-寄存器、轮询与 payload 顺序提交已校验固件。轮询最多读取 11 次；任何未知写结果都禁止
-重试，失败也不会自动 release 或 reset。Enhanced COM 没有逐写 ACK，因此完整提交仍记为
-未验证，不能等同于固件已运行。
+SOP2 主机下载与直控路径使用独立入口 `debug-capture`，不属于文本 CLI 方言；其控制器实现
+`session.Radar`，以便复用同一 DCA1000 采集状态机。MSS/BSS 固件必须由用户显式提供；程序
+不会自动发现 TI 安装，也不依赖 mmWave Studio runtime、Lua 或 C#。资产预检包括严格哈希、
+RPRC、xWR68xx 内存窗口和每块不超过 4096 字节的写计划。
 
-D2XX 层以显式 serial/description 选择同一 FTDI 的 A/B 接口，初始化 MPSSE 并执行有界
-SPI/IRQ I/O；设备选择不使用枚举、索引或 location。Enhanced COM 与 D2XX 路径目前只经过
-fake 离线测试，尚未接入公开 `debug-capture` 硬件命令。`debug-capture native-check` 只确认
-D2XX 库边界可用；Windows 读取库版本，Linux 当前不报告版本，并且该命令不会查询或打开
-USB 设备。
+Enhanced COM 只以冷启动 115200 baud 打开显式端口，不扫描或 fallback。固定三次 `x0`
+握手及 TOPRCM part number 门禁通过后，按 xWR6843 的 BSS→MSS 顺序提交固件；未知写结果
+不重试，也不自动 release 或 reset。随后以显式 serial/description 选择同一 FTDI 的 D2XX
+A/B 接口，通过 MPSSE SPI/IRQ 完成 mmWaveLink 启动门禁，再关闭 Enhanced COM。设备选择
+不使用枚举、索引或 location，主机也不实现 raw USB。
 
-TI 参考流程在 Enhanced COM 上完成 MSS/BSS 内存写，随后通过 FTDI MPSSE SPI/IRQ 承载
-mmWaveLink；因此 COM 不能单独完成直控采集。主机 USB transport 固定采用 FTDI D2XX，
-不实现 raw USB，也不依赖 mmWave Studio DLL。mmWaveLink 设备身份与固件版本门禁、公开
-命令整合及 ADC 采集尚未实现，也没有 Enhanced COM 或 D2XX 的实机兼容性结论。
+mmWaveLink 启动门禁要求 MSS 与 RF 固件均为 `6.2.1.5`。主机将通过 `studio-cli` 合同预检的
+CFG 翻译为固定的 RF、LVDS、profile、chirp、frame 与 apply 消息；CFG 不作为文本发送。
+RF 初始化必须报告完整校准 mask，frame start/stop 都只发送一次 trigger 并验证对应事件，
+未知结果不会重试。该路线不支持 `--no-reconfig`。
+
+`debug-capture native-check` 只加载 D2XX 库，不查询或打开 USB 设备。公开 capture 命令也在
+固件提交前执行同一 library-only 门禁。协议、失败状态和编排目前经过 fake 离线测试；本轮
+没有 Enhanced COM、D2XX 或 ADC 采集的实机兼容性结论。
 
 ## 一体化采集状态机
 
 ```text
-预检 CFG 与输出路径
-  -> 打开显式串口和 DCA 控制端
-  -> sensorStop + StopRecord，收敛上次会话
+预检 CFG、资产、原生边界与输出路径
+  -> 打开显式雷达 transport 和 DCA 控制端
+  -> radar stop + StopRecord，收敛上次会话
   -> 配置 DCA1000（默认不 reset）
   -> 下发雷达配置
   -> arm 数据接收并发送一次 StartRecord
-  -> StartRecord status=0 后发送一次 sensorStart
+  -> StartRecord status=0 后发送一次 radar start
   -> 接收并验证数据
-  -> sensorStop -> bounded data drain -> StopRecord -> control drain
+  -> radar stop -> bounded data drain -> StopRecord -> control drain
   -> sync/close -> 发布 OUT
 ```
+
+functional/application 路线把 radar start/stop 映射为固件文本命令；debug 路线映射为
+mmWaveLink frame trigger。两条路线不会同时打开或混用。
 
 StartRecord 应答缺失代表卡端状态未知。实现不重发 Start，只允许一次独立、有界的
 StopRecord 收敛。取消和主流程错误同样使用独立清理 context；即使数据持续到达，drain
@@ -131,6 +133,8 @@ Windows 使用不替换目标的同卷移动，支持 NTFS、exFAT 和 FAT32，�
 
 ## 支持证据
 
-离线测试覆盖协议、CFG、loopback、取消和清理，但不能证明硬件兼容。一个硬件组合至少要
-用相同固件和 CFG 完成两次有限帧采集：第一次全量配置，第二次 `--no-reconfig`，两次都
-不 reset DCA1000。验收步骤见 [hardware-smoke-test.md](hardware-smoke-test.md)。
+离线测试覆盖协议、CFG、loopback、取消和清理，但不能证明硬件兼容。functional/application
+组合至少要用相同固件和 CFG 完成两次有限帧采集：第一次全量配置，第二次
+`--no-reconfig`，两次都不 reset DCA1000；步骤见
+[hardware-smoke-test.md](hardware-smoke-test.md)。debug 组合不支持复用雷达配置，必须用
+相同 MSS/BSS、CFG、D2XX 库和硬件连续完成完整采集，并单独记录实机证据。

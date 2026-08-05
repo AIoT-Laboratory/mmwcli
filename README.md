@@ -25,11 +25,21 @@ LVDS。functional/application 路线使用 TI `studio_cli` 设备固件，SDK de
 Radar Toolbox 或 mmWave Studio。固件和 TI 文档不随本仓库分发。
 
 SOP2 主机下载与直控路线统一命名为 `debug-capture`，并与上述文本 CLI 路线分离。可用
-范围以 CLI 帮助中的实际命令为准。
+范围以 CLI 帮助中的实际命令为准。该路线使用用户显式提供的 MSS/BSS 固件和 FTDI D2XX，
+不需要安装 mmWave Studio 主机运行时。
 
 ## 构建
 
 需要 Go 1.26 或更高版本。仓库没有第三方 Go 模块。
+
+在提供 POSIX `make` 的环境中，核心构建可直接运行：
+
+```sh
+make check
+make build
+```
+
+这些目标固定使用 `CGO_ENABLED=0`；可选的原生 D2XX 变体仍按下面的平台命令构建。
 
 Windows PowerShell：
 
@@ -82,8 +92,9 @@ mmwcli studio-cli check hardware/studio-cli-xwr6843-raw.cfg
 `firmware verify` 只读取显式给出的文件，并按已知大小与 SHA-256 严格校验；它不查找或
 校验 Toolbox metadata、profile、manifest。若不需要验证固件，`doctor` 无需任何 TI 路径。
 `debug-capture check` 核对用户显式提供的 MSS/BSS 固件，解析 RPRC 并生成 xWR68xx
-内存写计划，全程不访问硬件；它不表示 SOP2 下载、mmWaveLink 控制或 ADC 采集
-已经完成。`debug-capture native-check` 只确认当前构建的 D2XX 库边界可用；Windows 读取
+内存写计划，全程不访问硬件；通过只表示资产与下载计划有效，不代表 SOP2 下载、
+mmWaveLink 控制或 ADC 采集已经通过实机验收。`debug-capture native-check` 只确认当前构建
+的 D2XX 库边界可用；Windows 读取
 库版本，Linux 当前不报告版本。该命令不查询或打开 USB 设备；未使用 `ftd2xx` build tag
 的核心版本会明确报告 backend 不可用。
 
@@ -103,12 +114,18 @@ mmwcli repl --port PORT
 
 ## xWR6843 + DCA1000 快速开始
 
-1. 按 TI 板卡文档烧录 `mmwave_Studio_cli_xwr68xx.bin`。已知校验值及来源见
+两条路线都通过 DCA1000 的以太网数据口接收原始 ADC。默认主机地址为
+`192.168.33.30/24`，DCA 地址为 `192.168.33.180`，控制/数据端口为 UDP `4096/4098`。
+根据雷达启动模式只选择下面一条流程；functional/application 与 debug 的端口、固件和
+控制协议不能混用。
+
+### Functional/application mode：设备内文本 CLI
+
+1. 按 TI 板卡文档烧录 `mmwave_Studio_cli_xwr68xx.bin`，并让雷达从正常的
+   functional/application 模式启动。已知校验值及来源见
    [TI 资料地图](docs/ti-reference-map.md)。
-2. 让雷达从 functional/application 模式启动；SOP2 主机下载模式不能用于文本 CLI 采集。
-3. 将 DCA1000 接到独立网卡。默认主机地址为 `192.168.33.30/24`，DCA 地址为
-   `192.168.33.180`，控制/数据端口为 UDP `4096/4098`。
-4. 明确确认 CLI 串口并传给 `--port`。程序不会扫描或猜测端口。
+2. 明确确认设备固件的 CLI UART，并传给 `--port`。程序不会扫描或猜测串口。
+3. 将 DCA1000 接到已配置上述静态地址的独立网卡。
 
 首次采集下发完整配置：
 
@@ -125,9 +142,33 @@ mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-02.bin --p
 两轮都不要使用 `--reset`。第二轮仍解析 CFG 以建立完整性门槛，但不重发雷达配置，只使用
 `sensorStart 0`；DCA1000 会重新 configure/start/stop，而不会 reset FPGA。
 
-仓库示例配置产生 100 帧，每轮预期原始 payload 为 `26,214,400` bytes。只有两轮文件
-大小都精确匹配、无 missing/discarded 数据且没有遗留 `.part`，才算通过该硬件组合的
-复用验收。完整步骤见 [硬件冒烟测试](docs/hardware-smoke-test.md)。
+仓库示例配置产生 100 帧，每轮预期原始 payload 为 `26,214,400` bytes。只有两轮文件大小
+都精确匹配、无 missing/discarded 数据且没有遗留 `.part`，才算通过该 functional/application
+组合的复用验收。完整步骤见 [硬件冒烟测试](docs/hardware-smoke-test.md)。
+
+### Debug mode：SOP2 主机下载与直控
+
+1. 使用带 `ftd2xx` build tag 的构建，并按[构建](#构建)一节安装与目标架构匹配的 FTDI
+   D2XX 驱动和原生库。
+2. 让 xWR6843 进入 SOP2；显式确认 Enhanced COM 端口，以及同一 FTDI 的 D2XX A/B 接口
+   所共有的 serial base 或 description base。程序不会枚举或猜测设备。
+3. 从自己的 TI 安装中取得 xWR68xx RF evaluation firmware 的 BSS 与 MSS 文件；已知文件名、
+   大小和校验值见 [TI 资料地图](docs/ti-reference-map.md)。
+4. 将 DCA1000 接到已配置上述静态地址的独立网卡，然后执行：
+
+```text
+mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg capture-debug.bin --enhanced-port PORT --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin --d2xx-serial BASE
+```
+
+若设备使用 description 标识，以 `--d2xx-description BASE` 替代 `--d2xx-serial BASE`；两者
+不能同时使用。Enhanced COM 只负责将 BSS/MSS 固件提交到内存，随后 D2XX A/B 承载
+mmWaveLink 配置、启动和停止，DCA1000 仍通过以太网传输 ADC 数据。CFG 在主机端严格预检
+并翻译成 mmWaveLink 消息，不会作为文本发送给固件。
+
+`debug-capture capture` 不支持 `--no-reconfig`；每次采集都执行完整的固件下载和雷达配置。
+不要在 SOP2 下使用 `studio-cli capture`，也不要把 Enhanced COM 当作设备固件的 CLI UART。
+当前公开验证记录仅覆盖离线测试与 fake transport；这条路线仍需用上述命令完成可复现的
+xWR6843 ES2 + DCA1000 实机验收后，才能声明对应原生库与硬件组合兼容。
 
 ## CLI 概览
 
@@ -138,6 +179,7 @@ mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-02.bin --p
 | `firmware verify FILE` | 严格校验单个 `studio_cli` 固件文件 |
 | `debug-capture check` | 离线校验直控路线所需的 MSS/BSS 固件 |
 | `debug-capture native-check` | 只检查可选 D2XX 动态库，不访问设备 |
+| `debug-capture capture` | SOP2 下载 MSS/BSS，并通过 D2XX/mmWaveLink 配置与采集 |
 | `repl --port PORT` | 发送符合 `studio_cli` 行协议的单行固件命令 |
 | `studio-cli check` | 离线预检 `studio_cli` CFG |
 | `studio-cli version\|apply\|start\|stop\|capture` | 控制 `studio_cli` 固件 |

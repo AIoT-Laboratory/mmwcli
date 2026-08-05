@@ -1,7 +1,9 @@
 # TI 资料与版本地图
 
-mmwcli 不下载或分发 TI 资产。文本 CLI 路线唯一需要的是用户自行烧录的
-`mmwave_Studio_cli_xwr68xx.bin`；运行时不读取 Toolbox 安装。
+mmwcli 不下载或分发 TI 资产。functional/application 文本 CLI 路线只需要用户自行烧录的
+`mmwave_Studio_cli_xwr68xx.bin`；debug mode 则使用用户显式提供的 RF evaluation MSS/BSS
+固件。除显式给出的固件文件外，两条路线都不会自动发现 TI 安装或调用 Toolbox、
+mmWave Studio runtime。
 
 ## `studio_cli` 设备固件
 
@@ -25,8 +27,13 @@ mmwcli 不下载或分发 TI 资产。文本 CLI 路线唯一需要的是用户�
 | MSS `rf_eval_firmware/masterss/xwr68xx_masterss.bin` | 92992 | `316911D4A8DBA1762714A3A107071BD0CF06A135FAE29BFBBC92B037592DE060` |
 
 `mmwcli debug-capture check --bss-fw FILE --mss-fw FILE` 还会解析 RPRC、检查 xWR68xx
-内存窗口并生成内存写计划；它不会打开雷达、DCA1000 或 USB 设备。命令通过不代表
-直控采集链已经实现。
+内存窗口并生成内存写计划；它不会打开雷达、DCA1000 或 USB 设备。命令通过只证明资产与
+下载计划满足离线合同，不代表对应 D2XX 原生库、雷达和 DCA1000 组合已经通过实机验收。
+
+在 `debug-capture capture` 中，Enhanced COM 只用于将这两个文件提交到 SOP2 设备内存；
+随后主机切换到 FTDI D2XX A/B，以 SPI/IRQ 承载 mmWaveLink 配置、启动和停止。采集 CFG
+由主机翻译为 mmWaveLink 消息，不会作为文本命令发送，也不需要 mmWave Studio runtime。
+当前公开验证记录仅覆盖离线测试与 fake transport，实机兼容性仍需可复现的采集记录确认。
 
 ## 开发参考
 
