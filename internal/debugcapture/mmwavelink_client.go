@@ -41,11 +41,13 @@ type mmWaveLinkClient struct {
 
 type mmWaveLinkStatusError struct {
 	statusCode uint16
+	// subblockID is rlErrorResp_t.sbcID: the RHCP unique sub-block ID,
+	// not the command-local five-bit sub-block number.
 	subblockID uint16
 }
 
 func (status *mmWaveLinkStatusError) Error() string {
-	return fmt.Sprintf("mmWaveLink status %#04x for sub-block %#04x", status.statusCode, status.subblockID)
+	return fmt.Sprintf("mmWaveLink status %#04x for unique sub-block %#04x", status.statusCode, status.subblockID)
 }
 
 type mmWaveLinkAsyncFaultError struct {
@@ -187,7 +189,23 @@ func (client *mmWaveLinkClient) validateResponseLocked(
 	if status.statusCode == 0 {
 		return mmWaveLinkMessage{}, client.poisonLocked(errors.New("mmWaveLink error response has zero status"))
 	}
+	if !mmWaveLinkCommandContainsUniqueSubblock(command, status.subblockID) {
+		return mmWaveLinkMessage{}, client.poisonLocked(fmt.Errorf(
+			"mmWaveLink error response unique sub-block %#04x does not belong to command %#03x",
+			status.subblockID,
+			command.messageID,
+		))
+	}
 	return mmWaveLinkMessage{}, status
+}
+
+func mmWaveLinkCommandContainsUniqueSubblock(command mmWaveLinkCommand, uniqueSubblockID uint16) bool {
+	for _, subblock := range command.subblocks {
+		if command.messageID*rhcpMaxSubblocks+subblock.id == uniqueSubblockID {
+			return true
+		}
+	}
+	return false
 }
 
 func (client *mmWaveLinkClient) waitEventLocked(

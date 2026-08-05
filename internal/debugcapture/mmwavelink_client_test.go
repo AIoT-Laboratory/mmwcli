@@ -159,14 +159,14 @@ func TestMMWaveLinkStatusErrorKeepsClientUsable(t *testing.T) {
 			mmWaveLinkRFResponseErrorMessageID,
 			0,
 			0,
-			[]mmWaveLinkSubblock{{id: 0, data: []byte{0x34, 0x12, 0x78, 0x56}}},
+			[]mmWaveLinkSubblock{{id: 0, data: []byte{0x34, 0x12, 0x40, 0x01}}},
 		),
-		clientTestInboundFrame(rhcpDirectionBSSToHost, rhcpMessageClassResponse, 0x11, 1, 0, nil),
+		clientTestInboundFrame(rhcpDirectionBSSToHost, rhcpMessageClassResponse, 0x0a, 1, 0, nil),
 	)
 	client := mustMMWaveLinkClient(t, transport)
 	command := mmWaveLinkCommand{
 		direction: rhcpDirectionHostToBSS,
-		messageID: 0x11,
+		messageID: 0x0a,
 		subblocks: []mmWaveLinkSubblock{{id: 0}},
 	}
 	_, err := client.execute(context.Background(), command)
@@ -174,7 +174,7 @@ func TestMMWaveLinkStatusErrorKeepsClientUsable(t *testing.T) {
 	if !errors.As(err, &status) {
 		t.Fatalf("first error = %v", err)
 	}
-	if status.statusCode != 0x1234 || status.subblockID != 0x5678 {
+	if status.statusCode != 0x1234 || status.subblockID != 0x0140 {
 		t.Fatalf("status = %+v", status)
 	}
 	if errors.Is(err, errMMWaveLinkClientPoisoned) {
@@ -202,16 +202,89 @@ func TestMMWaveLinkStatusErrorAcceptsExpectedMSSDirection(t *testing.T) {
 		mmWaveLinkRFResponseErrorMessageID,
 		0,
 		0,
-		[]mmWaveLinkSubblock{{id: 0, data: []byte{1, 0, 2, 0}}},
+		[]mmWaveLinkSubblock{{id: 0, data: []byte{1, 0, 0xe0, 0x40}}},
 	))
 	client := mustMMWaveLinkClient(t, transport)
 	_, err := client.execute(context.Background(), mmWaveLinkCommand{
 		direction: rhcpDirectionHostToMSS,
 		messageID: 0x207,
+		subblocks: []mmWaveLinkSubblock{{id: 0}},
 	})
 	var status *mmWaveLinkStatusError
 	if !errors.As(err, &status) || errors.Is(err, errMMWaveLinkClientPoisoned) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestMMWaveLinkStatusErrorMatchesAnyCurrentCommandSubblock(t *testing.T) {
+	transport := &fakeMMWaveLinkTransport{}
+	transport.queueFrames(clientTestInboundFrame(
+		rhcpDirectionBSSToHost,
+		rhcpMessageClassResponse,
+		mmWaveLinkRFResponseErrorMessageID,
+		0,
+		0,
+		[]mmWaveLinkSubblock{{id: 0, data: []byte{1, 0, 0x82, 0}}},
+	))
+	client := mustMMWaveLinkClient(t, transport)
+	_, err := client.execute(context.Background(), mmWaveLinkCommand{
+		direction: rhcpDirectionHostToBSS,
+		messageID: 0x04,
+		subblocks: []mmWaveLinkSubblock{{id: 0}, {id: 2}, {id: 3}},
+	})
+	var status *mmWaveLinkStatusError
+	if !errors.As(err, &status) || errors.Is(err, errMMWaveLinkClientPoisoned) {
+		t.Fatalf("error = %v", err)
+	}
+	if status.subblockID != 0x82 {
+		t.Fatalf("unique status sub-block = %#04x, want %#04x", status.subblockID, uint16(0x82))
+	}
+}
+
+func TestMMWaveLinkClientPoisonsForeignStatusSubblock(t *testing.T) {
+	tests := []struct {
+		name       string
+		subblockID uint16
+	}{
+		{name: "unsent local sub-block", subblockID: 0x0141},
+		{name: "different message", subblockID: 0x0160},
+		{name: "local ID instead of unique ID", subblockID: 0x0000},
+		{name: "unrelated value", subblockID: 0x5678},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := &fakeMMWaveLinkTransport{}
+			transport.queueFrames(clientTestInboundFrame(
+				rhcpDirectionBSSToHost,
+				rhcpMessageClassResponse,
+				mmWaveLinkRFResponseErrorMessageID,
+				0,
+				0,
+				[]mmWaveLinkSubblock{{id: 0, data: []byte{1, 0, byte(test.subblockID), byte(test.subblockID >> 8)}}},
+			))
+			client := mustMMWaveLinkClient(t, transport)
+			command := mmWaveLinkCommand{
+				direction: rhcpDirectionHostToBSS,
+				messageID: 0x0a,
+				subblocks: []mmWaveLinkSubblock{{id: 0}, {id: 2}},
+			}
+			_, err := client.execute(context.Background(), command)
+			if !errors.Is(err, errMMWaveLinkClientPoisoned) || !strings.Contains(err.Error(), "does not belong") {
+				t.Fatalf("error = %v", err)
+			}
+			var status *mmWaveLinkStatusError
+			if errors.As(err, &status) {
+				t.Fatalf("foreign status surfaced as known API rejection: %+v", status)
+			}
+
+			callsBeforeRetry := len(transport.calls)
+			if _, err := client.execute(context.Background(), command); !errors.Is(err, errMMWaveLinkClientPoisoned) {
+				t.Fatalf("second error = %v", err)
+			}
+			if len(transport.calls) != callsBeforeRetry {
+				t.Fatalf("poisoned client retried I/O: %v", transport.calls[callsBeforeRetry:])
+			}
+		})
 	}
 }
 
@@ -223,12 +296,13 @@ func TestMMWaveLinkClientPoisonsZeroStatusResponse(t *testing.T) {
 		mmWaveLinkRFResponseErrorMessageID,
 		0,
 		0,
-		[]mmWaveLinkSubblock{{id: 0, data: []byte{0, 0, 2, 0}}},
+		[]mmWaveLinkSubblock{{id: 0, data: []byte{0, 0, 0x20, 0x02}}},
 	))
 	client := mustMMWaveLinkClient(t, transport)
 	_, err := client.execute(context.Background(), mmWaveLinkCommand{
 		direction: rhcpDirectionHostToBSS,
 		messageID: 0x11,
+		subblocks: []mmWaveLinkSubblock{{id: 0}},
 	})
 	if !errors.Is(err, errMMWaveLinkClientPoisoned) || !strings.Contains(err.Error(), "zero status") {
 		t.Fatalf("error = %v", err)
