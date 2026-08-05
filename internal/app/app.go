@@ -81,7 +81,7 @@ func captureInvocationHasCleanup(arguments []string) bool {
 		return false
 	}
 	switch strings.ToLower(arguments[0]) {
-	case "demo", "studio-cli", "dca":
+	case "demo", "studio-cli", "dca", "debug-capture":
 		return true
 	default:
 		return false
@@ -154,7 +154,7 @@ func runFirmware(arguments []string, stdout, stderr io.Writer) error {
 
 func runDebugCapture(arguments []string, stdout, stderr io.Writer) error {
 	if len(arguments) == 0 {
-		return usageError{message: "debug-capture requires check or native-check"}
+		return usageError{message: "debug-capture requires check, native-check, or capture"}
 	}
 	if isHelp(arguments[0]) {
 		printDebugCaptureHelp(stdout)
@@ -165,6 +165,8 @@ func runDebugCapture(arguments []string, stdout, stderr io.Writer) error {
 		return runDebugCaptureCheck(arguments[1:], stdout, stderr)
 	case "native-check":
 		return runDebugCaptureNativeCheck(arguments[1:], stdout, stderr, loadNativeD2XX)
+	case "capture":
+		return runDebugCaptureCapture(arguments[1:], stdout, stderr)
 	default:
 		return usageError{message: "unknown debug-capture command: " + arguments[0]}
 	}
@@ -259,6 +261,7 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "  mmwcli firmware verify FILE")
 	fmt.Fprintln(writer, "  mmwcli debug-capture check --bss-fw FILE --mss-fw FILE")
 	fmt.Fprintln(writer, "  mmwcli debug-capture native-check")
+	fmt.Fprintln(writer, "  mmwcli debug-capture capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE)")
 	fmt.Fprintln(writer, "  mmwcli repl --port PORT [options]")
 	fmt.Fprintln(writer, "  mmwcli demo check|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli studio-cli check|version|apply|start|stop|capture ...")
@@ -291,6 +294,7 @@ func printFirmwareHelp(writer io.Writer) {
 func printDebugCaptureHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "usage: mmwcli debug-capture check --bss-fw FILE --mss-fw FILE")
 	fmt.Fprintln(writer, "       mmwcli debug-capture native-check")
+	fmt.Fprintln(writer, "       mmwcli debug-capture capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [options]")
 }
 
 func printREPLHelp(writer io.Writer) {
