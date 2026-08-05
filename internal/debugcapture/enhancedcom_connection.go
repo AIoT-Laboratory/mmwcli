@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	enhancedCOMBaud             = 115200
+	enhancedCOMBaud             = 921600
 	enhancedCOMPreOpenWait      = 400 * time.Millisecond
 	enhancedCOMOpenTimeout      = time.Second
 	enhancedCOMOperationTimeout = 5 * time.Second
@@ -36,7 +36,7 @@ type enhancedCOMConnection struct {
 }
 
 // openEnhancedCOMConnection opens only the explicitly named port at the
-// xWR68xx cold-start boot-monitor baud. It deliberately does not scan ports,
+// TI xWR68xx debug-monitor baud. It deliberately does not scan ports,
 // probe an alternate baud rate, or perform Studio's fallback/reconnect flow.
 func openEnhancedCOMConnection(ctx context.Context, portName string) (*enhancedCOMConnection, error) {
 	return openEnhancedCOMConnectionWithBackend(ctx, portName, enhancedCOMBackend{

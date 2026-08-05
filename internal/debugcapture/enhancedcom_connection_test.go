@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestOpenEnhancedCOMConnectionUsesColdStartBaudAndGatesPart(t *testing.T) {
+func TestOpenEnhancedCOMConnectionUsesTIDebugBaudAndGatesPart(t *testing.T) {
 	transport := &fakeEnhancedCOMTransport{reads: [][]byte{
 		[]byte("00001234\r\n"), nil,
 		[]byte("03880000\r\n"), nil,
@@ -22,7 +22,7 @@ func TestOpenEnhancedCOMConnectionUsesColdStartBaudAndGatesPart(t *testing.T) {
 		enhancedCOMBackend{
 			open: func(name string, baud int, timeout time.Duration) (enhancedCOMTransport, error) {
 				openCalls++
-				if name != "COM3" || baud != enhancedCOMBaud || timeout != enhancedCOMOpenTimeout {
+				if name != "COM3" || baud != 921600 || timeout != enhancedCOMOpenTimeout {
 					t.Fatalf("open arguments = %q, %d, %s", name, baud, timeout)
 				}
 				return transport, nil

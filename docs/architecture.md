@@ -67,7 +67,8 @@ SOP2 主机下载与直控路径使用独立入口 `debug-capture`，不属于�
 不会自动发现 TI 安装，也不依赖 mmWave Studio runtime、Lua 或 C#。资产预检包括严格哈希、
 RPRC、xWR68xx 内存窗口和每块不超过 4096 字节的写计划。
 
-Enhanced COM 只以冷启动 115200 baud 打开显式端口，不扫描或 fallback。固定三次 `x0`
+Enhanced COM 只以 TI xWR68xx debug monitor 的 921600 baud 打开显式端口，不扫描或
+fallback。固定三次 `x0`
 握手及 TOPRCM part number 门禁通过后，按 xWR6843 的 BSS→MSS 顺序提交固件；未知写结果
 不重试，也不自动 release 或 reset。随后以显式 serial/description 选择同一 FTDI 的 D2XX
 A/B 接口，通过 MPSSE SPI/IRQ 完成 mmWaveLink 启动门禁，再关闭 Enhanced COM。设备选择
