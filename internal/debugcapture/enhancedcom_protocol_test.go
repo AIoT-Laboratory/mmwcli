@@ -7,6 +7,9 @@ import (
 )
 
 func TestEnhancedCOMCommandEncodingMatchesStudioWireFormat(t *testing.T) {
+	if got, want := string(encodeEnhancedCOMWake()), "x0 \r\n"; got != want {
+		t.Fatalf("wake command = %q, want %q", got, want)
+	}
 	if got, want := string(encodeEnhancedCOMRead(0xffffe1dc)), "rd ffffe1dc\r"; got != want {
 		t.Fatalf("read command = %q, want %q", got, want)
 	}

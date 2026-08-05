@@ -10,6 +10,10 @@ import (
 
 const enhancedCOMMaximumBlockSize = 4096
 
+func encodeEnhancedCOMWake() []byte {
+	return []byte("x0 \r\n")
+}
+
 func encodeEnhancedCOMRead(address uint32) []byte {
 	return []byte(fmt.Sprintf("rd %08x\r", address))
 }
