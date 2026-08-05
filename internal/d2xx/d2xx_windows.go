@@ -29,6 +29,8 @@ type windowsDeviceProcedures struct {
 	setChars         *syscall.Proc
 	setLatencyTimer  *syscall.Proc
 	setBitMode       *syscall.Proc
+	getBitMode       *syscall.Proc
+	setBaudRate      *syscall.Proc
 	setUSBParameters *syscall.Proc
 }
 
@@ -62,6 +64,8 @@ func openNative() (nativeLibrary, error) {
 		{name: "FT_SetChars", target: &native.device.setChars},
 		{name: "FT_SetLatencyTimer", target: &native.device.setLatencyTimer},
 		{name: "FT_SetBitMode", target: &native.device.setBitMode},
+		{name: "FT_GetBitMode", target: &native.device.getBitMode},
+		{name: "FT_SetBaudRate", target: &native.device.setBaudRate},
 		{name: "FT_SetUSBParameters", target: &native.device.setUSBParameters},
 	}
 	for _, binding := range bindings {
@@ -172,6 +176,16 @@ func (device *windowsDevice) setLatencyTimer(milliseconds byte) Status {
 
 func (device *windowsDevice) setBitMode(mask, mode byte) Status {
 	return callD2XX(device.procedures.setBitMode, device.handle, uintptr(mask), uintptr(mode))
+}
+
+func (device *windowsDevice) getBitMode() (byte, Status) {
+	var mode byte
+	status := callD2XX(device.procedures.getBitMode, device.handle, uintptr(unsafe.Pointer(&mode)))
+	return mode, status
+}
+
+func (device *windowsDevice) setBaudRate(baud uint32) Status {
+	return callD2XX(device.procedures.setBaudRate, device.handle, uintptr(baud))
 }
 
 func (device *windowsDevice) setUSBParameters(inputSize, outputSize uint32) Status {

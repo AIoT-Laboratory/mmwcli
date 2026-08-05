@@ -91,6 +91,16 @@ func (device *linuxDevice) setBitMode(mask, mode byte) Status {
 	return Status(C.FT_SetBitMode(device.handle, C.UCHAR(mask), C.UCHAR(mode)))
 }
 
+func (device *linuxDevice) getBitMode() (byte, Status) {
+	var mode C.UCHAR
+	status := Status(C.FT_GetBitMode(device.handle, &mode))
+	return byte(mode), status
+}
+
+func (device *linuxDevice) setBaudRate(baud uint32) Status {
+	return Status(C.FT_SetBaudRate(device.handle, C.ULONG(baud)))
+}
+
 func (device *linuxDevice) setUSBParameters(inputSize, outputSize uint32) Status {
 	return Status(C.FT_SetUSBParameters(device.handle, C.ULONG(inputSize), C.ULONG(outputSize)))
 }

@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	BitModeReset = byte(0x00)
-	BitModeMPSSE = byte(0x02)
+	BitModeReset        = byte(0x00)
+	BitModeAsyncBitBang = byte(0x01)
+	BitModeMPSSE        = byte(0x02)
 )
 
 type nativeDevice interface {
@@ -20,6 +21,8 @@ type nativeDevice interface {
 	setChars(byte, byte, byte, byte) Status
 	setLatencyTimer(byte) Status
 	setBitMode(byte, byte) Status
+	getBitMode() (byte, Status)
+	setBaudRate(uint32) Status
 	setUSBParameters(uint32, uint32) Status
 }
 
@@ -131,6 +134,25 @@ func (device *Device) SetLatencyTimer(milliseconds byte) error {
 func (device *Device) SetBitMode(mask, mode byte) error {
 	return device.apply("FT_SetBitMode", func(native nativeDevice) Status {
 		return native.setBitMode(mask, mode)
+	})
+}
+
+func (device *Device) GetBitMode() (byte, error) {
+	if device == nil {
+		return 0, ErrDeviceClosed
+	}
+	device.mu.Lock()
+	defer device.mu.Unlock()
+	if device.native == nil {
+		return 0, ErrDeviceClosed
+	}
+	mode, status := device.native.getBitMode()
+	return mode, statusError("FT_GetBitMode", status)
+}
+
+func (device *Device) SetBaudRate(baud uint32) error {
+	return device.apply("FT_SetBaudRate", func(native nativeDevice) Status {
+		return native.setBaudRate(baud)
 	})
 }
 

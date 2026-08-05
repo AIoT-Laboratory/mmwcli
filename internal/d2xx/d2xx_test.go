@@ -127,7 +127,7 @@ func TestLibraryRejectsInvalidSelectorsBeforeNativeOpen(t *testing.T) {
 }
 
 func TestDeviceIOAndConfiguration(t *testing.T) {
-	native := &fakeNativeDevice{readData: []byte{0xFA, 0xAB}}
+	native := &fakeNativeDevice{readData: []byte{0xFA, 0xAB}, bitModeValue: 0xA5}
 	device := &Device{native: native, release: func() {}}
 
 	buffer := make([]byte, 2)
@@ -156,6 +156,12 @@ func TestDeviceIOAndConfiguration(t *testing.T) {
 	if err := device.SetBitMode(0x5B, BitModeMPSSE); err != nil {
 		t.Fatal(err)
 	}
+	if mode, err := device.GetBitMode(); err != nil || mode != 0xA5 {
+		t.Fatalf("GetBitMode() = 0x%02X, %v", mode, err)
+	}
+	if err := device.SetBaudRate(115200); err != nil {
+		t.Fatal(err)
+	}
 	if err := device.SetUSBParameters(4096, 4096); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +169,7 @@ func TestDeviceIOAndConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if native.timeouts != [2]uint32{500, 0} || native.chars != [4]byte{} ||
-		native.latency != 1 || native.bitMode != [2]byte{0x5B, BitModeMPSSE} ||
+		native.latency != 1 || native.bitMode != [2]byte{0x5B, BitModeMPSSE} || native.baud != 115200 ||
 		native.usb != [2]uint32{4096, 0} {
 		t.Fatalf("configuration = %+v", native)
 	}
@@ -211,6 +217,9 @@ func TestNilDeviceMethodsReturnClosed(t *testing.T) {
 	if _, err := device.QueueStatus(); !errors.Is(err, ErrDeviceClosed) {
 		t.Fatalf("QueueStatus() = %v", err)
 	}
+	if _, err := device.GetBitMode(); !errors.Is(err, ErrDeviceClosed) {
+		t.Fatalf("GetBitMode() = %v", err)
+	}
 }
 
 func TestDeviceReportsShortWriteAndStatus(t *testing.T) {
@@ -222,6 +231,17 @@ func TestDeviceReportsShortWriteAndStatus(t *testing.T) {
 	native.writeStatus = StatusIOError
 	if count, err := device.Write([]byte{1, 2}); count != 1 || err == nil || !strings.Contains(err.Error(), "I/O error") {
 		t.Fatalf("failed Write() = %d, %v", count, err)
+	}
+}
+
+func TestDeviceBitBangConfigurationReportsNativeStatus(t *testing.T) {
+	native := &fakeNativeDevice{bitModeStatus: StatusIOError, baudStatus: StatusInvalidBaudRate}
+	device := &Device{native: native, release: func() {}}
+	if _, err := device.GetBitMode(); err == nil || !strings.Contains(err.Error(), "FT_GetBitMode") {
+		t.Fatalf("GetBitMode() error = %v", err)
+	}
+	if err := device.SetBaudRate(115200); err == nil || !strings.Contains(err.Error(), "FT_SetBaudRate") {
+		t.Fatalf("SetBaudRate() error = %v", err)
 	}
 }
 
@@ -261,6 +281,10 @@ type fakeNativeDevice struct {
 	chars            [4]byte
 	latency          byte
 	bitMode          [2]byte
+	bitModeValue     byte
+	bitModeStatus    Status
+	baud             uint32
+	baudStatus       Status
 	usb              [2]uint32
 }
 
@@ -302,6 +326,15 @@ func (device *fakeNativeDevice) setLatencyTimer(milliseconds byte) Status {
 func (device *fakeNativeDevice) setBitMode(mask, mode byte) Status {
 	device.bitMode = [2]byte{mask, mode}
 	return StatusOK
+}
+
+func (device *fakeNativeDevice) getBitMode() (byte, Status) {
+	return device.bitModeValue, device.bitModeStatus
+}
+
+func (device *fakeNativeDevice) setBaudRate(baud uint32) Status {
+	device.baud = baud
+	return device.baudStatus
 }
 
 func (device *fakeNativeDevice) setUSBParameters(inputSize, outputSize uint32) Status {
