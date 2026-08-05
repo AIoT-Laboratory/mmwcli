@@ -65,11 +65,12 @@ Advanced frame、monitor、continuous、test、loopback、软件 LVDS 和 LVDS h
 SOP2 主机下载与直控路径使用独立入口 `debug-capture`，不属于文本 CLI 方言，也不接入
 当前 `session.Radar` 接口。MSS/BSS 固件必须由用户显式提供；该路径不得自动发现 TI 安装，
 不得依赖 mmWave Studio runtime、Lua 或 C#。当前实现离线资产校验、RPRC 解析、xWR68xx
-内存窗口检查和每块不超过 4096 字节的内存写计划。非公开的 Enhanced COM 层只打开
-操作者指定的 921600 baud 端口，执行固定三次 `x0` 握手和有界 `rd`/`wr`，再按 xWR6843
-的 BSS→MSS 寄存器、轮询与 payload 顺序提交已校验固件。轮询最多读取 11 次；任何未知
-写结果都禁止重试，失败也不会自动 release 或 reset。Enhanced COM 没有逐写 ACK，因此
-完整提交仍记为未验证，不能等同于固件已运行。
+内存窗口检查和每块不超过 4096 字节的内存写计划。非公开的 Enhanced COM 层只以冷启动
+115200 baud 打开操作者指定的端口，不扫描或 fallback；固定三次 `x0` 握手后还会读取
+TOPRCM part number，只允许受支持的非安全 xWR68xx。门禁通过后再按 xWR6843 的 BSS→MSS
+寄存器、轮询与 payload 顺序提交已校验固件。轮询最多读取 11 次；任何未知写结果都禁止
+重试，失败也不会自动 release 或 reset。Enhanced COM 没有逐写 ACK，因此完整提交仍记为
+未验证，不能等同于固件已运行。
 
 D2XX 层以显式 serial/description 选择同一 FTDI 的 A/B 接口，初始化 MPSSE 并执行有界
 SPI/IRQ I/O；设备选择不使用枚举、索引或 location。Enhanced COM 与 D2XX 路径目前只经过

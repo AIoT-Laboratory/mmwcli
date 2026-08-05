@@ -10,11 +10,17 @@ import (
 )
 
 const (
-	enhancedCOMBaud             = 921600
+	enhancedCOMBaud             = 115200
 	enhancedCOMPreOpenWait      = 400 * time.Millisecond
 	enhancedCOMOpenTimeout      = time.Second
 	enhancedCOMOperationTimeout = 5 * time.Second
 	enhancedCOMFirmwareTimeout  = 2 * time.Minute
+
+	xwr68xxEFUSERow10Address = uint32(0xffffe214)
+	xwr68xxPartNumberShift   = 18
+	xwr68xxPartNumberMask    = uint32(0xff)
+	iwr68xxES2PartNumber     = uint8(0xe2)
+	awr68xxPartNumber        = uint8(0x51)
 )
 
 type enhancedCOMBackend struct {
@@ -25,11 +31,12 @@ type enhancedCOMBackend struct {
 type enhancedCOMConnection struct {
 	client     *enhancedCOMClient
 	probeValue uint32
+	partNumber uint8
 }
 
 // openEnhancedCOMConnection opens only the explicitly named port at the
-// standard xWR68xx Studio debug baud. It deliberately does not scan ports or
-// probe an alternate baud rate.
+// xWR68xx cold-start boot-monitor baud. It deliberately does not scan ports,
+// probe an alternate baud rate, or perform Studio's fallback/reconnect flow.
 func openEnhancedCOMConnection(ctx context.Context, portName string) (*enhancedCOMConnection, error) {
 	return openEnhancedCOMConnectionWithBackend(ctx, portName, enhancedCOMBackend{
 		open: func(name string, baud int, timeout time.Duration) (enhancedCOMTransport, error) {
@@ -73,7 +80,28 @@ func openEnhancedCOMConnectionWithBackend(
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("initialize Enhanced COM port %q: %w", portName, err), client.close())
 	}
-	return &enhancedCOMConnection{client: client, probeValue: probeValue}, nil
+	efuseRow10, err := client.readRegister(ctx, xwr68xxEFUSERow10Address)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("read xWR68xx part identity on %q: %w", portName, err), client.close())
+	}
+	partNumber := uint8((efuseRow10 >> xwr68xxPartNumberShift) & xwr68xxPartNumberMask)
+	if !supportedXWR6843Part(partNumber) {
+		return nil, errors.Join(
+			fmt.Errorf(
+				"Enhanced COM target on %q has unsupported part number 0x%02X; expected IWR68xx ES2 0x%02X or AWR68xx 0x%02X",
+				portName,
+				partNumber,
+				iwr68xxES2PartNumber,
+				awr68xxPartNumber,
+			),
+			client.close(),
+		)
+	}
+	return &enhancedCOMConnection{client: client, probeValue: probeValue, partNumber: partNumber}, nil
+}
+
+func supportedXWR6843Part(partNumber uint8) bool {
+	return partNumber == iwr68xxES2PartNumber || partNumber == awr68xxPartNumber
 }
 
 func (connection *enhancedCOMConnection) close() error {

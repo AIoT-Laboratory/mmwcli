@@ -9,8 +9,11 @@ import (
 	"time"
 )
 
-func TestOpenEnhancedCOMConnectionUsesFixedBaudAndInitializes(t *testing.T) {
-	transport := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("00001234\r\n"), nil}}
+func TestOpenEnhancedCOMConnectionUsesColdStartBaudAndGatesPart(t *testing.T) {
+	transport := &fakeEnhancedCOMTransport{reads: [][]byte{
+		[]byte("00001234\r\n"), nil,
+		[]byte("03880000\r\n"), nil,
+	}}
 	openCalls := 0
 	var waits []time.Duration
 	connection, err := openEnhancedCOMConnectionWithBackend(
@@ -33,15 +36,21 @@ func TestOpenEnhancedCOMConnectionUsesFixedBaudAndInitializes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if openCalls != 1 || connection.probeValue != 0x1234 {
-		t.Fatalf("open calls/probe = %d/0x%08X", openCalls, connection.probeValue)
+	if openCalls != 1 || connection.probeValue != 0x1234 || connection.partNumber != iwr68xxES2PartNumber {
+		t.Fatalf("open calls/probe/part = %d/0x%08X/0x%02X", openCalls, connection.probeValue, connection.partNumber)
 	}
-	wantWaits := []time.Duration{400 * time.Millisecond, 400 * time.Millisecond, 100 * time.Millisecond, 100 * time.Millisecond}
+	wantWaits := []time.Duration{
+		400 * time.Millisecond,
+		400 * time.Millisecond,
+		100 * time.Millisecond,
+		100 * time.Millisecond,
+		100 * time.Millisecond,
+	}
 	if !slices.Equal(waits, wantWaits) {
 		t.Fatalf("waits = %v, want %v", waits, wantWaits)
 	}
-	if transport.writeCalls != 4 {
-		t.Fatalf("initialization writes = %d, want 4", transport.writeCalls)
+	if transport.writeCalls != 5 {
+		t.Fatalf("initialization and gate writes = %d, want 5", transport.writeCalls)
 	}
 	if err := connection.close(); err != nil {
 		t.Fatal(err)
@@ -96,6 +105,39 @@ func TestOpenEnhancedCOMConnectionDoesNotOwnFailedOpen(t *testing.T) {
 	}
 }
 
+func TestOpenEnhancedCOMConnectionRejectsUnsupportedPartBeforeRegisterWrites(t *testing.T) {
+	transport := &fakeEnhancedCOMTransport{reads: [][]byte{
+		[]byte("00000002"), nil,
+		[]byte("03400000"), nil,
+	}}
+	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+		open: func(string, int, time.Duration) (enhancedCOMTransport, error) { return transport, nil },
+		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported part number 0xD0") {
+		t.Fatalf("error = %v", err)
+	}
+	if transport.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+	for _, write := range transport.writes {
+		if strings.HasPrefix(string(write), "wr ") {
+			t.Fatalf("unsupported part received a register write: %q", write)
+		}
+	}
+}
+
+func TestSupportedXWR6843PartNumbers(t *testing.T) {
+	if !supportedXWR6843Part(iwr68xxES2PartNumber) || !supportedXWR6843Part(awr68xxPartNumber) {
+		t.Fatal("supported xWR6843 part number was rejected")
+	}
+	for _, partNumber := range []uint8{0, 0xe0, 0xd0, 0xe3, 0x53} {
+		if supportedXWR6843Part(partNumber) {
+			t.Fatalf("unsupported part number 0x%02X was accepted", partNumber)
+		}
+	}
+}
+
 func TestOpenEnhancedCOMConnectionCancelsDuringPreOpenWait(t *testing.T) {
 	openCalls := 0
 	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
@@ -113,6 +155,7 @@ func TestOpenEnhancedCOMConnectionCancelsDuringPreOpenWait(t *testing.T) {
 func TestEnhancedCOMConnectionSubmitsFirmwareAndStaysOpenForVerification(t *testing.T) {
 	transport := &fakeEnhancedCOMTransport{reads: [][]byte{
 		[]byte("00000002"), nil,
+		[]byte("03880000"), nil,
 		[]byte("ad010100"), nil,
 		[]byte("00000000"), nil,
 		[]byte("000000c0"), nil,
