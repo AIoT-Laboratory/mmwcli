@@ -67,6 +67,10 @@ SOP2 主机下载与直控路径使用独立入口 `debug-capture`，不属于�
 不会自动发现 TI 安装，也不依赖 mmWave Studio runtime、Lua 或 C#。资产预检包括严格哈希、
 RPRC、xWR68xx 内存窗口和每块不超过 4096 字节的写计划。
 
+操作者显式传入 `--sop2-reset` 时，控制器先从已验证的 A/B selector 同源派生 D/C：D 以
+async bit-bang 设置 SOP2，保持到 C 将 NRST 拉低再释放，随后按 C→D 关闭；任一未知写入或
+关闭错误都停止，且不会打开 Enhanced COM。默认不执行该目标复位，程序也不枚举 C/D。
+
 Enhanced COM 只打开操作者显式指定的端口，不扫描设备。连接先探测 TI monitor 的
 921600 baud；只有该探测完全没有收到字节且端口已成功关闭时，才执行一次固定的 115200
 冷启动协商：验证 monitor、保留 `0xFFFFE144` 原值并置位 `0x7800`、写入 TI 的 921600

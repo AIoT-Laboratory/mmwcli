@@ -22,7 +22,13 @@ func TestOpenControllerUsesFixedTransportOrder(t *testing.T) {
 	link := &fakeControllerLink{}
 	diagnostics := validControllerDiagnostics()
 
-	controller, err := openControllerWithBackend(context.Background(), validControllerOptions(t), controllerBackend{
+	options := validControllerOptions(t)
+	options.ResetSOP2 = true
+	controller, err := openControllerWithBackend(context.Background(), options, controllerBackend{
+		prepareSOP2: func(context.Context, D2XXSelectors) error {
+			calls = append(calls, "prepare-sop2")
+			return nil
+		},
 		openEnhanced: func(context.Context, string) (controllerEnhancedConnection, error) {
 			calls = append(calls, "open-enhanced")
 			return enhanced, nil
@@ -39,7 +45,7 @@ func TestOpenControllerUsesFixedTransportOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openControllerWithBackend: %v", err)
 	}
-	want := []string{"open-enhanced", "submit-firmware", "open-d2xx", "bootstrap", "close-enhanced"}
+	want := []string{"prepare-sop2", "open-enhanced", "submit-firmware", "open-d2xx", "bootstrap", "close-enhanced"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("open calls = %v, want %v", calls, want)
 	}
@@ -59,6 +65,68 @@ func TestOpenControllerUsesFixedTransportOrder(t *testing.T) {
 	}
 	if transport.closeCalls != 1 {
 		t.Fatalf("D2XX close calls = %d, want 1", transport.closeCalls)
+	}
+}
+
+func TestOpenControllerSkipsSOP2ResetByDefault(t *testing.T) {
+	prepareCalls := 0
+	options := validControllerOptions(t)
+	_, err := openControllerWithBackend(context.Background(), options, controllerBackend{
+		prepareSOP2: func(context.Context, D2XXSelectors) error {
+			prepareCalls++
+			return errors.New("unexpected SOP2 reset")
+		},
+		openEnhanced: func(context.Context, string) (controllerEnhancedConnection, error) {
+			return nil, errors.New("stop after default gate")
+		},
+		openD2XX: func(context.Context, D2XXSelectors) (controllerTransport, error) {
+			return nil, errors.New("unexpected D2XX open")
+		},
+		bootstrap: func(context.Context, controllerTransport) (controllerLink, mmWaveLinkDeviceDiagnostics, error) {
+			return nil, mmWaveLinkDeviceDiagnostics{}, errors.New("unexpected bootstrap")
+		},
+	})
+	if err == nil || prepareCalls != 0 {
+		t.Fatalf("error/prepare calls = %v/%d, want open failure/0", err, prepareCalls)
+	}
+}
+
+func TestOpenControllerStopsBeforeEnhancedAfterSOP2Failure(t *testing.T) {
+	want := errors.New("injected SOP2 failure")
+	tests := []struct {
+		name            string
+		prepareError    error
+		wantTargetState bool
+	}{
+		{name: "before target change", prepareError: want},
+		{name: "unknown target state", prepareError: &sop2ResetStateError{err: want}, wantTargetState: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := validControllerOptions(t)
+			options.ResetSOP2 = true
+			enhancedOpens := 0
+			_, err := openControllerWithBackend(context.Background(), options, controllerBackend{
+				prepareSOP2: func(context.Context, D2XXSelectors) error { return test.prepareError },
+				openEnhanced: func(context.Context, string) (controllerEnhancedConnection, error) {
+					enhancedOpens++
+					return nil, errors.New("unexpected Enhanced open")
+				},
+				openD2XX: func(context.Context, D2XXSelectors) (controllerTransport, error) {
+					return nil, errors.New("unexpected D2XX open")
+				},
+				bootstrap: func(context.Context, controllerTransport) (controllerLink, mmWaveLinkDeviceDiagnostics, error) {
+					return nil, mmWaveLinkDeviceDiagnostics{}, errors.New("unexpected bootstrap")
+				},
+			})
+			if !errors.Is(err, want) || enhancedOpens != 0 {
+				t.Fatalf("error/Enhanced opens = %v/%d", err, enhancedOpens)
+			}
+			var stateFailure *TargetStateError
+			if errors.As(err, &stateFailure) != test.wantTargetState {
+				t.Fatalf("TargetStateError = %v, want %v; error=%v", errors.As(err, &stateFailure), test.wantTargetState, err)
+			}
+		})
 	}
 }
 
@@ -86,8 +154,13 @@ func TestOpenControllerPreflightsBeforeHardware(t *testing.T) {
 				operations: valid.Plan.operationsCopy(),
 			}
 			test.mutate(&options)
+			options.ResetSOP2 = true
 			opens := 0
 			_, err := openControllerWithBackend(context.Background(), options, controllerBackend{
+				prepareSOP2: func(context.Context, D2XXSelectors) error {
+					opens++
+					return errors.New("must not prepare")
+				},
 				openEnhanced: func(context.Context, string) (controllerEnhancedConnection, error) {
 					opens++
 					return nil, errors.New("must not open")

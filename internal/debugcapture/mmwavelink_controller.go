@@ -34,11 +34,12 @@ type ControllerOptions struct {
 	Assets       Assets
 	Selectors    D2XXSelectors
 	Plan         Plan
+	ResetSOP2    bool
 }
 
-// TargetStateError marks a failure after firmware submission. The controller
-// never resets the target automatically; an operator must explicitly restore a
-// known boot state before trying another debug-capture session.
+// TargetStateError marks a failure after a target-facing state change. The
+// controller never retries or resets automatically; an operator must explicitly
+// restore a known boot state before trying another debug-capture session.
 type TargetStateError struct{ Err error }
 
 func (failure *TargetStateError) Error() string {
@@ -64,6 +65,7 @@ type controllerTransport interface {
 }
 
 type controllerBackend struct {
+	prepareSOP2  func(context.Context, D2XXSelectors) error
 	openEnhanced func(context.Context, string) (controllerEnhancedConnection, error)
 	openD2XX     func(context.Context, D2XXSelectors) (controllerTransport, error)
 	bootstrap    func(context.Context, controllerTransport) (controllerLink, mmWaveLinkDeviceDiagnostics, error)
@@ -91,12 +93,13 @@ type Controller struct {
 	closeErr    error
 }
 
-// OpenController submits BSS then MSS firmware over the explicit Enhanced COM
-// port, opens the explicit D2XX A/B interfaces, and completes the mmWaveLink
-// identity/version bootstrap. Every offline preflight runs before either
-// hardware transport is opened.
+// OpenController optionally performs one explicit SOP2 target reset, submits
+// BSS then MSS firmware over the explicit Enhanced COM port, opens the explicit
+// D2XX A/B interfaces, and completes the mmWaveLink identity/version bootstrap.
+// Every offline preflight runs before any hardware transport is opened.
 func OpenController(ctx context.Context, options ControllerOptions) (*Controller, error) {
 	return openControllerWithBackend(ctx, options, controllerBackend{
+		prepareSOP2: prepareSOP2Target,
 		openEnhanced: func(ctx context.Context, port string) (controllerEnhancedConnection, error) {
 			return openEnhancedCOMConnection(ctx, port)
 		},
@@ -131,8 +134,18 @@ func openControllerWithBackend(
 	if err := preflightControllerOptions(options); err != nil {
 		return nil, err
 	}
-	if backend.openEnhanced == nil || backend.openD2XX == nil || backend.bootstrap == nil {
+	if backend.openEnhanced == nil || backend.openD2XX == nil || backend.bootstrap == nil ||
+		(options.ResetSOP2 && backend.prepareSOP2 == nil) {
 		return nil, errors.New("debug-capture controller backend is incomplete")
+	}
+	if options.ResetSOP2 {
+		if err := backend.prepareSOP2(ctx, options.Selectors); err != nil {
+			var stateFailure *sop2ResetStateError
+			if errors.As(err, &stateFailure) {
+				return nil, targetStateFailure(err)
+			}
+			return nil, err
+		}
 	}
 
 	enhanced, err := backend.openEnhanced(ctx, options.EnhancedPort)

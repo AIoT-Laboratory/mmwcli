@@ -90,13 +90,14 @@ func runDebugCaptureCaptureWithDependencies(
 	flags := newCommandFlagSet(
 		"debug-capture capture",
 		stderr,
-		"mmwcli debug-capture capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [options]",
+		"mmwcli debug-capture capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]",
 	)
 	enhancedPort := flags.String("enhanced-port", "", "Enhanced COM port used for SOP2 firmware submission")
 	bssPath := flags.String("bss-fw", "", "xWR68xx BSS/RadarSS firmware file")
 	mssPath := flags.String("mss-fw", "", "xWR68xx MSS/MasterSS firmware file")
 	serialBase := flags.String("d2xx-serial", "", "D2XX serial-number base for the A/B interfaces")
 	descriptionBase := flags.String("d2xx-description", "", "D2XX description base for the A/B interfaces")
+	sop2Reset := flags.Bool("sop2-reset", false, "set SOP2 with D2XX C/D and pulse target reset before Enhanced COM")
 	dcaValues := addDCAFlags(flags, "dca-timeout-ms", dcaConfigurationFlags|dcaReceiverFlags)
 
 	if len(arguments) != 0 && isHelp(arguments[0]) {
@@ -166,6 +167,7 @@ func runDebugCaptureCaptureWithDependencies(
 		*enhancedPort,
 		assets,
 		selectors,
+		*sop2Reset,
 		linkPlan,
 		plan,
 		dcaOptions,
@@ -308,6 +310,7 @@ func runDebugCaptureHardware(
 	outputPath, enhancedPort string,
 	assets debugcapture.Assets,
 	selectors debugcapture.D2XXSelectors,
+	resetSOP2 bool,
 	linkPlan debugcapture.Plan,
 	plan radar.CapturePlan,
 	dcaOptions dcaCommandOptions,
@@ -337,6 +340,7 @@ func runDebugCaptureHardware(
 		Assets:       assets,
 		Selectors:    selectors,
 		Plan:         linkPlan,
+		ResetSOP2:    resetSOP2,
 	})
 	if err != nil {
 		return stats, err

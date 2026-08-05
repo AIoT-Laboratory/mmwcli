@@ -176,6 +176,9 @@ func TestDebugCaptureCaptureUsesDCAThenControllerAndSession(t *testing.T) {
 		if options.EnhancedPort != "COM3" {
 			t.Fatalf("EnhancedPort = %q", options.EnhancedPort)
 		}
+		if !options.ResetSOP2 {
+			t.Fatal("ResetSOP2 was not enabled by --sop2-reset")
+		}
 		if options.Selectors.SPI != (d2xx.Selector{By: d2xx.SelectBySerialNumber, Value: "FT1234A"}) ||
 			options.Selectors.IRQ != (d2xx.Selector{By: d2xx.SelectBySerialNumber, Value: "FT1234B"}) {
 			t.Fatalf("selectors = %+v", options.Selectors)
@@ -209,7 +212,7 @@ func TestDebugCaptureCaptureUsesDCAThenControllerAndSession(t *testing.T) {
 	}
 
 	if err := runDebugCaptureCaptureWithDependencies(
-		debugCaptureArguments(config, outputPath),
+		append(debugCaptureArguments(config, outputPath), "--sop2-reset"),
 		io.Discard,
 		io.Discard,
 		dependencies,
@@ -232,7 +235,7 @@ func TestDebugCaptureCaptureHelpHasNoTextCLIRouteFlags(t *testing.T) {
 		t.Fatalf("Run returned %d: %s", code, stderr.String())
 	}
 	help := stdout.String() + stderr.String()
-	for _, expected := range []string{"--enhanced-port", "--bss-fw", "--mss-fw", "--d2xx-serial", "--d2xx-description"} {
+	for _, expected := range []string{"--enhanced-port", "--bss-fw", "--mss-fw", "--d2xx-serial", "--d2xx-description", "--sop2-reset"} {
 		if !strings.Contains(help, expected) {
 			t.Errorf("help does not contain %s: %s", expected, help)
 		}

@@ -150,18 +150,22 @@ mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-02.bin --p
 
 1. 使用带 `ftd2xx` build tag 的构建，并按[构建](#构建)一节安装与目标架构匹配的 FTDI
    D2XX 驱动和原生库。
-2. 让 xWR6843 进入 SOP2；显式确认 Enhanced COM 端口，以及同一 FTDI 的 D2XX A/B 接口
-   所共有的 serial base 或 description base。程序不会枚举或猜测设备。
+2. 显式确认 Enhanced COM 端口，以及同一 FTDI 的 D2XX A/B 接口所共有的 serial base 或
+   description base。若板卡把 SOP/NRST 接到该 FTDI 的 C/D 接口，使用下面的
+   `--sop2-reset` 让程序设置 SOP2 并脉冲一次目标复位；否则按板卡文档手工进入 SOP2，省略
+   该参数。程序不会枚举或猜测设备。
 3. 从自己的 TI 安装中取得 xWR68xx RF evaluation firmware 的 BSS 与 MSS 文件；已知文件名、
    大小和校验值见 [TI 资料地图](docs/ti-reference-map.md)。
 4. 将 DCA1000 接到已配置上述静态地址的独立网卡，然后执行：
 
 ```text
-mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg capture-debug.bin --enhanced-port PORT --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin --d2xx-serial BASE
+mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg capture-debug.bin --enhanced-port PORT --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin --d2xx-serial BASE --sop2-reset
 ```
 
 若设备使用 description 标识，以 `--d2xx-description BASE` 替代 `--d2xx-serial BASE`；两者
-不能同时使用。Enhanced COM 只负责将 BSS/MSS 固件提交到内存，随后 D2XX A/B 承载
+不能同时使用。`--sop2-reset` 是显式的雷达目标复位，只在 Enhanced COM 之前使用同一
+base 派生的 D/C 接口各执行一次 SOP2/NRST 流程；它与控制 DCA FPGA 的 `--reset` 无关。
+Enhanced COM 只负责将 BSS/MSS 固件提交到内存，随后 D2XX A/B 承载
 mmWaveLink 配置、启动和停止，DCA1000 仍通过以太网传输 ADC 数据。CFG 在主机端严格预检
 并翻译成 mmWaveLink 消息，不会作为文本发送给固件。
 
