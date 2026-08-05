@@ -127,7 +127,7 @@ func TestParseDataPacketAndVersion(t *testing.T) {
 	}
 }
 
-func TestSystemAsyncStatusClassificationUsesEnumValues(t *testing.T) {
+func TestSystemAsyncStatusClassificationUsesWireBitMask(t *testing.T) {
 	tests := []struct {
 		status uint16
 		fatal  bool
@@ -144,11 +144,14 @@ func TestSystemAsyncStatusClassificationUsesEnumValues(t *testing.T) {
 		{SystemStatusLVDSBufferFull, true},
 		{SystemStatusPlaybackCompleted, false},
 		{SystemStatusPlaybackOutOfSequence, false},
-		{0xffff, true},
+		{SystemStatusRecordCompleted | SystemStatusSDCardDetected, false},
+		{SystemStatusRecordCompleted | SystemStatusDDRFull, true},
+		{0, true},
+		{0x8000, true},
 	}
 	for _, test := range tests {
 		if got := IsFatalSystemStatus(test.status); got != test.fatal {
-			t.Fatalf("IsFatalSystemStatus(%d) = %t, want %t", test.status, got, test.fatal)
+			t.Fatalf("IsFatalSystemStatus(0x%04X) = %t, want %t", test.status, got, test.fatal)
 		}
 	}
 }

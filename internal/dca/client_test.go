@@ -139,7 +139,7 @@ func TestClientDrainsAsyncStatusesToQuietWindow(t *testing.T) {
 	client := dialTestClient(t, server, time.Second)
 	defer client.Close()
 	destination := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: client.LocalEndpoint().Port}
-	if _, err := sender.WriteToUDP(testResponse(CommandAsyncStatus, 8), destination); err != nil {
+	if _, err := sender.WriteToUDP(testResponse(CommandAsyncStatus, SystemStatusRecordCompleted), destination); err != nil {
 		t.Fatal(err)
 	}
 	contextWithLimit, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -148,7 +148,7 @@ func TestClientDrainsAsyncStatusesToQuietWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(statuses) != 1 || statuses[0].Status != 8 || statuses[0].Source == nil {
+	if len(statuses) != 1 || statuses[0].Status != SystemStatusRecordCompleted || statuses[0].Source == nil {
 		t.Fatalf("drained statuses = %+v", statuses)
 	}
 	if statuses[0].Source.Port != sender.LocalAddr().(*net.UDPAddr).Port {

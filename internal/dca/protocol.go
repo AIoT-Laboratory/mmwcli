@@ -38,11 +38,11 @@ const (
 	CommandReadFPGAVersion Command = 0x0E
 )
 
-// System async status values are enum ordinals carried directly in the
-// response status field; they are not a bit mask. These values match TI's
-// DCA1000 SYS_ASYNC_STATUS definition.
+// System async status values are bits in the raw FPGA response status field.
+// TI's host library converts each set bit back to a SYS_ASYNC_STATUS ordinal
+// before invoking its callback, but mmwcli consumes the UDP wire format.
 const (
-	SystemStatusNoLVDSData uint16 = iota
+	SystemStatusNoLVDSData uint16 = 1 << iota
 	SystemStatusNoHeader
 	SystemStatusEEPROMFailure
 	SystemStatusSDCardDetected
@@ -56,28 +56,27 @@ const (
 	SystemStatusPlaybackOutOfSequence
 )
 
+const (
+	systemStatusFatalMask = SystemStatusNoLVDSData |
+		SystemStatusNoHeader |
+		SystemStatusEEPROMFailure |
+		SystemStatusModeConfigFailure |
+		SystemStatusDDRFull |
+		SystemStatusLVDSBufferFull
+	systemStatusBenignMask = SystemStatusSDCardDetected |
+		SystemStatusSDCardRemoved |
+		SystemStatusSDCardFull |
+		SystemStatusRecordCompleted |
+		SystemStatusPlaybackCompleted |
+		SystemStatusPlaybackOutOfSequence
+	systemStatusKnownMask = systemStatusFatalMask | systemStatusBenignMask
+)
+
 // IsFatalSystemStatus identifies FPGA statuses that make raw Ethernet capture
 // unsafe. Known SD/playback/completion notifications are irrelevant or benign
 // for this mode; unknown values fail closed for the audited FPGA contract.
 func IsFatalSystemStatus(status uint16) bool {
-	switch status {
-	case SystemStatusSDCardDetected,
-		SystemStatusSDCardRemoved,
-		SystemStatusSDCardFull,
-		SystemStatusRecordCompleted,
-		SystemStatusPlaybackCompleted,
-		SystemStatusPlaybackOutOfSequence:
-		return false
-	case SystemStatusNoLVDSData,
-		SystemStatusNoHeader,
-		SystemStatusEEPROMFailure,
-		SystemStatusModeConfigFailure,
-		SystemStatusDDRFull,
-		SystemStatusLVDSBufferFull:
-		return true
-	default:
-		return true
-	}
+	return status == 0 || status&systemStatusFatalMask != 0 || status&^systemStatusKnownMask != 0
 }
 
 func (c Command) String() string {
