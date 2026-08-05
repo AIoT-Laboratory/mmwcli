@@ -83,8 +83,9 @@ TOPRCM part number 门禁通过后，按 xWR6843 的 BSS→MSS 顺序提交固�
 接口，通过 MPSSE SPI/IRQ 完成 mmWaveLink 启动门禁，再关闭 Enhanced COM。设备选择不使用
 枚举、索引或 location，主机也不实现 raw USB。
 
-mmWaveLink 启动门禁要求 MSS 与 RF 固件均为 `6.2.1.5`。主机将通过 `studio-cli` 合同预检的
-CFG 翻译为固定的 RF、LVDS、profile、chirp、frame 与 apply 消息；CFG 不作为文本发送。
+mmWaveLink 启动门禁要求 MSS 固件为 `2.0.0.3`、RF 固件为 `6.2.1.5`。通过 `studio-cli`
+合同预检的 CFG 会由主机翻译为固定的 RF、LVDS、profile、chirp、frame 与 apply 消息；
+CFG 不作为文本发送。
 RF 初始化必须报告完整校准 mask，frame start/stop 都只发送一次 trigger 并验证对应事件，
 未知结果不会重试。该路线不支持 `--no-reconfig`。
 

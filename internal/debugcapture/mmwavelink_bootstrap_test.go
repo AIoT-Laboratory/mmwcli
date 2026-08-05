@@ -27,10 +27,10 @@ func TestBootstrapMMWaveLinkUsesFixedOrderingAndGoldenCommands(t *testing.T) {
 		HardwareVariant: 9,
 		HardwareMajor:   7,
 		HardwareMinor:   3,
-		FirmwareMajor:   6,
-		FirmwareMinor:   2,
-		FirmwareBuild:   1,
-		FirmwareDebug:   5,
+		FirmwareMajor:   2,
+		FirmwareMinor:   0,
+		FirmwareBuild:   0,
+		FirmwareDebug:   3,
 		FirmwareYear:    24,
 		FirmwareMonth:   8,
 		FirmwareDay:     5,
@@ -139,20 +139,18 @@ func TestBootstrapMMWaveLinkStopsAtEveryFailedGate(t *testing.T) {
 			wantCommands: 1,
 		},
 		{
-			name: "MSS firmware mismatch",
+			name: "MSS rejects RF firmware release",
 			mutate: func(frames [][]byte) {
-				version := validMSSVersion()
-				version[6] = 4
 				frames[1] = clientTestInboundFrame(
 					rhcpDirectionMSSToHost,
 					rhcpMessageClassResponse,
 					mmWaveLinkDeviceStatusGetMessageID,
 					0,
 					0,
-					[]mmWaveLinkSubblock{{id: 0, data: version}},
+					[]mmWaveLinkSubblock{{id: 0, data: validRFVersion()}},
 				)
 			},
-			wantErr:      "expected 6.2.1.5",
+			wantErr:      "expected 2.0.0.3",
 			wantCommands: 1,
 		},
 		{
@@ -218,17 +216,15 @@ func TestBootstrapMMWaveLinkStopsAtEveryFailedGate(t *testing.T) {
 			wantCommands: 3,
 		},
 		{
-			name: "RF firmware mismatch",
+			name: "RF rejects MSS firmware release",
 			mutate: func(frames [][]byte) {
-				version := validRFVersion()
-				version[3] = 5
 				frames[4] = clientTestInboundFrame(
 					rhcpDirectionBSSToHost,
 					rhcpMessageClassResponse,
 					mmWaveLinkRFStatusGetMessageID,
 					2,
 					0,
-					[]mmWaveLinkSubblock{{id: 0, data: version}},
+					[]mmWaveLinkSubblock{{id: 0, data: validMSSVersion()}},
 				)
 			},
 			wantErr:      "expected 6.2.1.5",
@@ -305,7 +301,7 @@ func validBootstrapFrames() [][]byte {
 }
 
 func validMSSVersion() []byte {
-	return []byte{9, 7, 3, 6, 2, 1, 5, 24, 8, 5, 10, 11, 25, 1, 2, 0xa3}
+	return []byte{9, 7, 3, 2, 0, 0, 3, 24, 8, 5, 10, 11, 25, 1, 2, 0xa3}
 }
 
 func validRFVersion() []byte {

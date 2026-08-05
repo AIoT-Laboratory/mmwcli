@@ -54,7 +54,7 @@ func TestOpenControllerUsesFixedTransportOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyPlatformContext: %v", err)
 	}
-	if !strings.Contains(platform, "MSS 6.2.1.5 RF 6.2.1.5") {
+	if !strings.Contains(platform, "MSS 2.0.0.3 RF 6.2.1.5") {
 		t.Fatalf("platform report = %q", platform)
 	}
 	if err := controller.Close(); err != nil {
@@ -466,8 +466,9 @@ func validFirmwareReceipt() firmwareSubmissionReceipt {
 }
 
 func validControllerDiagnostics() mmWaveLinkDeviceDiagnostics {
-	version := mmWaveLinkFirmwareVersion{FirmwareMajor: 6, FirmwareMinor: 2, FirmwareBuild: 1, FirmwareDebug: 5}
-	return mmWaveLinkDeviceDiagnostics{MSS: version, RF: version, RFPowerupStatus: mmWaveLinkRFPowerupStatusDone}
+	mss := mmWaveLinkFirmwareVersion{FirmwareMajor: 2, FirmwareMinor: 0, FirmwareBuild: 0, FirmwareDebug: 3}
+	rf := mmWaveLinkFirmwareVersion{FirmwareMajor: 6, FirmwareMinor: 2, FirmwareBuild: 1, FirmwareDebug: 5}
+	return mmWaveLinkDeviceDiagnostics{MSS: mss, RF: rf, RFPowerupStatus: mmWaveLinkRFPowerupStatusDone}
 }
 
 func newFakeController(plan Plan, link controllerLink) *Controller {

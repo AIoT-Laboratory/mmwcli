@@ -36,6 +36,31 @@ type mmWaveLinkFirmwareVersion struct {
 	PatchBuildDebug uint8
 }
 
+type mmWaveLinkFirmwareRelease struct {
+	Major uint8
+	Minor uint8
+	Build uint8
+	Debug uint8
+}
+
+var (
+	expectedMSSFirmwareRelease = mmWaveLinkFirmwareRelease{Major: 2, Minor: 0, Build: 0, Debug: 3}
+	expectedRFFirmwareRelease  = mmWaveLinkFirmwareRelease{Major: 6, Minor: 2, Build: 1, Debug: 5}
+)
+
+func (version mmWaveLinkFirmwareVersion) release() mmWaveLinkFirmwareRelease {
+	return mmWaveLinkFirmwareRelease{
+		Major: version.FirmwareMajor,
+		Minor: version.FirmwareMinor,
+		Build: version.FirmwareBuild,
+		Debug: version.FirmwareDebug,
+	}
+}
+
+func (release mmWaveLinkFirmwareRelease) String() string {
+	return fmt.Sprintf("%d.%d.%d.%d", release.Major, release.Minor, release.Build, release.Debug)
+}
+
 type mmWaveLinkDeviceDiagnostics struct {
 	MSS             mmWaveLinkFirmwareVersion
 	RF              mmWaveLinkFirmwareVersion
@@ -69,6 +94,7 @@ func bootstrapMMWaveLink(
 		"MSS",
 		rhcpDirectionHostToMSS,
 		mmWaveLinkDeviceStatusGetMessageID,
+		expectedMSSFirmwareRelease,
 	)
 	if err != nil {
 		return diagnostics, err
@@ -113,6 +139,7 @@ func bootstrapMMWaveLink(
 		"RF",
 		rhcpDirectionHostToBSS,
 		mmWaveLinkRFStatusGetMessageID,
+		expectedRFFirmwareRelease,
 	)
 	if err != nil {
 		return diagnostics, err
@@ -141,6 +168,7 @@ func queryMMWaveLinkVersion(
 	component string,
 	direction rhcpDirection,
 	messageID uint16,
+	expected mmWaveLinkFirmwareRelease,
 ) (mmWaveLinkFirmwareVersion, error) {
 	var version mmWaveLinkFirmwareVersion
 	response, err := client.execute(ctx, mmWaveLinkCommand{
@@ -162,17 +190,13 @@ func queryMMWaveLinkVersion(
 	if err != nil {
 		return version, fmt.Errorf("decode %s version: %w", component, err)
 	}
-	if version.FirmwareMajor != 6 ||
-		version.FirmwareMinor != 2 ||
-		version.FirmwareBuild != 1 ||
-		version.FirmwareDebug != 5 {
+	actual := version.release()
+	if actual != expected {
 		return version, fmt.Errorf(
-			"unsupported %s firmware %d.%d.%d.%d; expected 6.2.1.5",
+			"unsupported %s firmware %s; expected %s",
 			component,
-			version.FirmwareMajor,
-			version.FirmwareMinor,
-			version.FirmwareBuild,
-			version.FirmwareDebug,
+			actual,
+			expected,
 		)
 	}
 	return version, nil
