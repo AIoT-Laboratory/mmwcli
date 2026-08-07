@@ -159,6 +159,92 @@ func TestClientDrainsAsyncStatusesToQuietWindow(t *testing.T) {
 	}
 }
 
+func TestClientExecutePoisonsOnAsyncStatusQueueOverflow(t *testing.T) {
+	server := listenUDP(t, net.IPv4(127, 0, 0, 1))
+	serverErr := make(chan error, 1)
+	go func() {
+		buffer := make([]byte, 1024)
+		length, destination, err := server.ReadFromUDP(buffer)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		command, _, err := parseTestRequest(buffer[:length])
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		if command != CommandSystemAlive {
+			serverErr <- errors.New("fake received unexpected command")
+			return
+		}
+		for index := 0; index <= asyncStatusQueueLimit; index++ {
+			if _, err := server.WriteToUDP(testResponse(CommandAsyncStatus, uint16(index)), destination); err != nil {
+				serverErr <- err
+				return
+			}
+		}
+		serverErr <- nil
+	}()
+
+	client := dialTestClient(t, server, time.Second)
+	defer client.Close()
+	if _, err := client.Ping(context.Background()); !errors.Is(err, ErrClientPoisoned) || !errors.Is(err, ErrAsyncStatusQueueOverflow) {
+		t.Fatalf("overflow error = %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+	statuses := client.TakeAsyncStatuses()
+	if len(statuses) != asyncStatusQueueLimit {
+		t.Fatalf("queued statuses = %d, want %d", len(statuses), asyncStatusQueueLimit)
+	}
+	for index, status := range statuses {
+		if status.Status != uint16(index) {
+			t.Fatalf("status[%d] = %#04x, want %#04x", index, status.Status, index)
+		}
+	}
+	if _, err := client.Ping(context.Background()); !errors.Is(err, ErrClientPoisoned) || !errors.Is(err, ErrAsyncStatusQueueOverflow) {
+		t.Fatalf("poisoned retry error = %v", err)
+	}
+	assertNoUDPRequest(t, server)
+}
+
+func TestClientDrainPoisonsOnAsyncStatusQueueOverflow(t *testing.T) {
+	sender := listenUDP(t, net.IPv4(127, 0, 0, 2))
+	server := listenUDP(t, net.IPv4(127, 0, 0, 1))
+	client := dialTestClient(t, server, time.Second)
+	defer client.Close()
+	destination := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: client.LocalEndpoint().Port}
+	for index := 0; index <= asyncStatusQueueLimit; index++ {
+		if _, err := sender.WriteToUDP(testResponse(CommandAsyncStatus, uint16(index)), destination); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	statuses, err := client.DrainAsyncStatuses(ctx, 100*time.Millisecond)
+	if !errors.Is(err, ErrClientPoisoned) || !errors.Is(err, ErrAsyncStatusQueueOverflow) {
+		t.Fatalf("overflow error = %v", err)
+	}
+	if len(statuses) != asyncStatusQueueLimit {
+		t.Fatalf("drained statuses = %d, want %d", len(statuses), asyncStatusQueueLimit)
+	}
+	for index, status := range statuses {
+		if status.Status != uint16(index) {
+			t.Fatalf("status[%d] = %#04x, want %#04x", index, status.Status, index)
+		}
+	}
+	if remaining := client.TakeAsyncStatuses(); len(remaining) != 0 {
+		t.Fatalf("overflow drain did not clear queue: %+v", remaining)
+	}
+	if _, err := client.Ping(context.Background()); !errors.Is(err, ErrClientPoisoned) || !errors.Is(err, ErrAsyncStatusQueueOverflow) {
+		t.Fatalf("poisoned retry error = %v", err)
+	}
+	assertNoUDPRequest(t, server)
+}
+
 func TestStartTimeoutSendsOneStopAndNeverRetriesStart(t *testing.T) {
 	server := listenUDP(t, net.IPv4(127, 0, 0, 1))
 	var starts atomic.Int32
@@ -244,6 +330,19 @@ func dialTestClient(t *testing.T, server *net.UDPConn, timeout time.Duration) *C
 		t.Fatal(err)
 	}
 	return client
+}
+
+func assertNoUDPRequest(t *testing.T, server *net.UDPConn) {
+	t.Helper()
+	if err := server.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 1024)
+	if _, _, err := server.ReadFromUDP(buffer); err == nil {
+		t.Fatal("poisoned client sent another UDP request")
+	} else if networkError, ok := err.(net.Error); !ok || !networkError.Timeout() {
+		t.Fatalf("check for unexpected UDP request: %v", err)
+	}
 }
 
 func parseTestRequest(packet []byte) (Command, []byte, error) {

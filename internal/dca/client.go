@@ -9,9 +9,16 @@ import (
 	"time"
 )
 
-const controlReadPollInterval = 100 * time.Millisecond
+const (
+	controlReadPollInterval = 100 * time.Millisecond
+	asyncStatusQueueLimit   = 32
+)
 
-var ErrCommandTimeout = errors.New("DCA1000 command response timeout")
+var (
+	ErrCommandTimeout           = errors.New("DCA1000 command response timeout")
+	ErrClientPoisoned           = errors.New("DCA1000 control client state is unknown")
+	ErrAsyncStatusQueueOverflow = errors.New("DCA1000 async status queue overflow")
+)
 
 // Options configures the DCA1000 UDP control client. DefaultOptions binds the
 // control socket to 0.0.0.0:4096, matching TI's reference implementation.
@@ -99,11 +106,12 @@ type Client struct {
 	destination *net.UDPAddr
 	timeout     time.Duration
 
-	executeMu sync.Mutex
-	stateMu   sync.Mutex
-	closed    bool
-	last      *net.UDPAddr
-	async     []Response
+	executeMu   sync.Mutex
+	stateMu     sync.Mutex
+	closed      bool
+	last        *net.UDPAddr
+	async       []Response
+	poisonCause error
 }
 
 // Dial binds the UDP control socket immediately. Callers should normally pass
@@ -183,7 +191,7 @@ func (client *Client) DrainAsyncStatuses(ctx context.Context, quietWindow time.D
 	}
 	client.executeMu.Lock()
 	defer client.executeMu.Unlock()
-	if err := client.closedError(); err != nil {
+	if err := client.usabilityError(); err != nil {
 		return client.TakeAsyncStatuses(), err
 	}
 
@@ -226,9 +234,9 @@ func (client *Client) DrainAsyncStatuses(ctx context.Context, quietWindow time.D
 			continue
 		}
 		response.Source = cloneUDPAddr(source)
-		client.stateMu.Lock()
-		client.async = append(client.async, response)
-		client.stateMu.Unlock()
+		if err := client.enqueueAsyncStatus(response); err != nil {
+			return client.TakeAsyncStatuses(), err
+		}
 	}
 }
 
@@ -250,7 +258,7 @@ func (client *Client) Execute(ctx context.Context, command Command, payload []by
 
 	client.executeMu.Lock()
 	defer client.executeMu.Unlock()
-	if err := client.closedError(); err != nil {
+	if err := client.usabilityError(); err != nil {
 		return Response{}, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -308,9 +316,9 @@ func (client *Client) Execute(ctx context.Context, command Command, payload []by
 		}
 		response.Source = cloneUDPAddr(source)
 		if response.Command == CommandAsyncStatus {
-			client.stateMu.Lock()
-			client.async = append(client.async, response)
-			client.stateMu.Unlock()
+			if err := client.enqueueAsyncStatus(response); err != nil {
+				return Response{}, err
+			}
 			continue
 		}
 		if response.Command != command {
@@ -430,12 +438,34 @@ func (client *Client) Close() error {
 	return client.conn.Close()
 }
 
-func (client *Client) closedError() error {
+func (client *Client) usabilityError() error {
 	client.stateMu.Lock()
 	defer client.stateMu.Unlock()
 	if client.closed {
 		return net.ErrClosed
 	}
+	if client.poisonCause != nil {
+		return fmt.Errorf("%w: previous failure: %w", ErrClientPoisoned, client.poisonCause)
+	}
+	return nil
+}
+
+func (client *Client) enqueueAsyncStatus(response Response) error {
+	client.stateMu.Lock()
+	defer client.stateMu.Unlock()
+	if len(client.async) >= asyncStatusQueueLimit {
+		cause := fmt.Errorf(
+			"%w: reached the %d-status limit before status 0x%04X",
+			ErrAsyncStatusQueueOverflow,
+			asyncStatusQueueLimit,
+			response.Status,
+		)
+		if client.poisonCause == nil {
+			client.poisonCause = cause
+		}
+		return fmt.Errorf("%w: %w", ErrClientPoisoned, client.poisonCause)
+	}
+	client.async = append(client.async, response)
 	return nil
 }
 
