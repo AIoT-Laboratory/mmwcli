@@ -12,6 +12,14 @@ import (
 // already exists. Unlike hard-link publication, it also works on Windows
 // filesystems such as exFAT and FAT32.
 func publishNoReplace(partPath, finalPath string) error {
+	return moveNoReplace(partPath, finalPath)
+}
+
+func publishDirectoryNoReplace(partPath, finalPath string) error {
+	return moveNoReplace(partPath, finalPath)
+}
+
+func moveNoReplace(partPath, finalPath string) error {
 	from, err := syscall.UTF16PtrFromString(windowsAPIPath(partPath))
 	if err != nil {
 		return &os.LinkError{Op: "move", Old: partPath, New: finalPath, Err: err}
