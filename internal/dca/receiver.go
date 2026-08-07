@@ -14,6 +14,10 @@ import (
 
 const dataReadPollInterval = 100 * time.Millisecond
 
+// maxTrackedOutputRanges bounds both coverage memory and per-packet range
+// scans. Exceeding it means the capture is too sparse to preserve faithfully.
+const maxTrackedOutputRanges = 4096
+
 // RawModeTailFlushGuard is longer than the DCA1000 FPGA's fixed two-second
 // raw-mode partial-packet flush interval. A receiver that declares the stream
 // idle sooner can lose the final payload whenever the capture size is not an
@@ -24,6 +28,8 @@ var (
 	ErrFirstPacketTimeout = errors.New("DCA1000 first data packet timeout")
 	ErrReceiverClosed     = errors.New("DCA1000 data receiver closed")
 	ErrReceiverAlreadyRun = errors.New("DCA1000 data receiver can only run once")
+	errOutputRangeOverlap = errors.New("DCA1000 packet overlaps previously written output")
+	errSparseRangeLimit   = errors.New("DCA1000 sparse output range limit exceeded")
 )
 
 // ReceiverConfig configures the raw ADC UDP receiver. The data socket is bound
@@ -503,14 +509,13 @@ func (receiver *Receiver) receive(ctx context.Context, output io.WriterAt) (Capt
 			)
 		}
 		addition := byteRange{start: relativeOffset, end: packetEnd}
-		if overlapsRange(ranges, addition) {
-			stats.OverlappingPackets++
+		if err := preflightRangeAddition(ranges, addition); err != nil {
+			if errors.Is(err, errOutputRangeOverlap) {
+				stats.OverlappingPackets++
+			}
+			stats = finalizeStats(stats, ranges, highestOutputOffset)
 			receiver.publishStats(stats)
-			return stats, fmt.Errorf(
-				"DCA1000 packet [%d,%d) overlaps previously written output",
-				addition.start,
-				addition.end,
-			)
+			return stats, err
 		}
 		written, err := output.WriteAt(packet.Payload, relativeOffset)
 		if err != nil {
@@ -624,17 +629,36 @@ func addRange(ranges []byteRange, addition byteRange) []byteRange {
 	return ranges
 }
 
-func overlapsRange(ranges []byteRange, addition byteRange) bool {
+func preflightRangeAddition(ranges []byteRange, addition byteRange) error {
+	resultingCount := len(ranges) + 1
 	for _, current := range ranges {
-		if current.end <= addition.start {
+		if current.end < addition.start {
 			continue
 		}
-		if current.start >= addition.end {
-			return false
+		if current.start > addition.end {
+			break
 		}
-		return true
+		if current.end > addition.start && current.start < addition.end {
+			return fmt.Errorf(
+				"%w: packet [%d,%d)",
+				errOutputRangeOverlap,
+				addition.start,
+				addition.end,
+			)
+		}
+		// Exact adjacency is merged without concealing a gap.
+		resultingCount--
 	}
-	return false
+	if resultingCount > maxTrackedOutputRanges {
+		return fmt.Errorf(
+			"%w: limit=%d, refusing packet [%d,%d)",
+			errSparseRangeLimit,
+			maxTrackedOutputRanges,
+			addition.start,
+			addition.end,
+		)
+	}
+	return nil
 }
 
 func rangesComplete(ranges []byteRange, expected int64) bool {

@@ -461,6 +461,37 @@ func TestReceiverRejectsOverlappingPayload(t *testing.T) {
 	}
 }
 
+func TestSparseRangePreflightHasFixedLimit(t *testing.T) {
+	ranges := make([]byteRange, maxTrackedOutputRanges)
+	for index := range ranges {
+		start := int64(index * 4)
+		ranges[index] = byteRange{start: start, end: start + 1}
+	}
+	isolated := byteRange{
+		start: int64(maxTrackedOutputRanges * 4),
+		end:   int64(maxTrackedOutputRanges*4 + 1),
+	}
+	if err := preflightRangeAddition(ranges[:len(ranges)-1], isolated); err != nil {
+		t.Fatalf("range at fixed limit rejected: %v", err)
+	}
+	if err := preflightRangeAddition(ranges, isolated); !errors.Is(err, errSparseRangeLimit) ||
+		!strings.Contains(err.Error(), "refusing packet") {
+		t.Fatalf("range beyond fixed limit error = %v", err)
+	}
+
+	bridge := byteRange{start: ranges[0].end, end: ranges[1].start}
+	if err := preflightRangeAddition(ranges, bridge); err != nil {
+		t.Fatalf("gap-closing range at fixed limit rejected: %v", err)
+	}
+	if got := len(addRange(append([]byteRange(nil), ranges...), bridge)); got != maxTrackedOutputRanges-1 {
+		t.Fatalf("gap-closing range count = %d, want %d", got, maxTrackedOutputRanges-1)
+	}
+
+	if err := preflightRangeAddition(ranges, ranges[0]); !errors.Is(err, errOutputRangeOverlap) {
+		t.Fatalf("overlap error = %v", err)
+	}
+}
+
 func sendDataPacket(t *testing.T, socket *net.UDPConn, destination *net.UDPAddr, sequence uint32, offset uint64, payload []byte) {
 	t.Helper()
 	if offset > 0xFFFFFFFFFFFF {
