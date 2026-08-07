@@ -1,14 +1,16 @@
 # mmwcli
 
-`mmwcli` is a command-line acquisition runtime for TI xWR68xx radars and DCA1000. It applies
-radar configurations, coordinates capture lifecycles, and writes raw ADC data with finite-capture
-integrity checks. It does not include a GUI, MATLAB, a Lua host, the mmWave Studio host runtime, or
-a data-processing pipeline.
+`mmwcli` is a command-line acquisition runtime for TI xWR radars and DCA1000. It applies radar
+configurations, coordinates capture lifecycles, and writes raw ADC data with finite-capture integrity
+checks. It does not include a GUI, MATLAB, a Lua host, the mmWave Studio host runtime, or a
+data-processing pipeline.
 
 ## Supported scope
 
 - 0.1 baseline: xWR6843 ES2, single chip, legacy frame, 16-bit complex ADC, and two hardware LVDS lanes.
-- Functional/application mode: text serial control through the SDK demo CLI or TI `studio_cli` device firmware.
+- SDK demo functional/application mode supports ordinary xWR16xx, xWR18xx, xWR64xx, and xWR68xx
+  platforms selected with `--radar-family`; xWR68xx is the default. AOP platforms are not included.
+- TI `studio_cli`, REPL, and debug-mode control remain xWR68xx-only.
 - Debug mode: download user-supplied MSS/BSS firmware in SOP2, then control the radar through FTDI D2XX and mmWaveLink.
 - DCA1000 data is written at its byte offset without reordering, parsing, or repair.
 - Advanced frame, cascade, LVDS headers, software LVDS, RF monitor UART, CSI-2, and TSW1400 are not supported.
@@ -21,8 +23,9 @@ Version 0.1 has hardware validation only for debug mode with Windows/amd64, FTDI
 IWR6843 ES2, and DCA1000. Other combinations remain unvalidated; see the
 [hardware smoke test](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record).
 
-Both text CLI routes verify `Platform: xWR68xx` before their first radar state change on each
-connection. Query the SDK demo explicitly with `mmwcli demo version --port PORT`.
+The additional SDK demo families are based on TI SDK source and offline tests, not hardware
+validation. Each demo connection verifies the selected `Platform` before its first radar state
+change; `studio-cli` continues to require `Platform: xWR68xx`.
 
 ## Download
 
@@ -58,6 +61,7 @@ The repository and release archives do not distribute FTDI libraries, headers, d
 ```text
 mmwcli doctor
 mmwcli firmware verify PATH/mmwave_Studio_cli_xwr68xx.bin
+mmwcli demo check PATH/profile.cfg --radar-family xwr18xx
 mmwcli studio-cli check hardware/studio-cli-xwr6843-raw.cfg
 mmwcli debug-capture check --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin
 mmwcli debug-capture native-check
@@ -65,6 +69,15 @@ mmwcli debug-capture native-check
 
 These commands do not open devices; `native-check` only loads the D2XX library. A successful check
 does not validate a hardware combination.
+
+The `--radar-family` option is available on all `demo` actions: `check`, `version`, `apply`, `start`,
+`stop`, and `capture`. For example:
+
+```text
+mmwcli demo capture PATH/profile.cfg capture.bin --port PORT --radar-family xwr18xx
+```
+
+The SDK demo profile must enable compatible hardware ADC LVDS output explicitly.
 
 ## REPL
 

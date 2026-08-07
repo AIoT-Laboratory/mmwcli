@@ -5,11 +5,15 @@ defined by `README.md` and `docs/`.
 
 ## Project boundaries
 
-- `mmwcli` is a cross-platform command-line controller and DCA1000 raw-ADC acquisition tool for TI xWR68xx.
+- `mmwcli` is a cross-platform command-line controller and DCA1000 raw-ADC acquisition tool for TI xWR radars.
 - The initial baseline is xWR6843 ES2, legacy frame, 16-bit complex ADC, and two LVDS lanes.
-- The implemented functional/application workflows use text serial control only, through SDK demo
-  CLI firmware or TI `studio_cli` device firmware. The `studio_cli` workflow requires only the user
-  to flash `mmwave_Studio_cli_xwr68xx.bin`; a complete Radar Toolbox installation is unnecessary.
+- The SDK demo functional/application workflow supports only the ordinary xWR16xx, xWR18xx,
+  xWR64xx, and xWR68xx family names through `--radar-family`; xWR68xx is the default. Do not add AOP
+  aliases without a separate evidence and validation batch. TI `studio_cli`, REPL, and
+  `debug-capture` remain xWR68xx-specific.
+- Functional/application workflows use text serial control only, through SDK demo CLI firmware or
+  TI `studio_cli` device firmware. The `studio_cli` workflow requires only the user to flash
+  `mmwave_Studio_cli_xwr68xx.bin`; a complete Radar Toolbox installation is unnecessary.
 - The top-level `repl` is fixed to the `studio_cli` line protocol and xWR68xx `version` validation.
   It must not provide a selectable custom dialect or a way to bypass validation. It may send
   single-line extension commands from compatible firmware, but that does not make the firmware a

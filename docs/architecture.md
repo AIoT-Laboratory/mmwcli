@@ -28,12 +28,14 @@ architecture requires separate hardware validation.
 | Dialect | Command prefix | Default baud | Device firmware |
 | --- | --- | ---: | --- |
 | TI `studio_cli` | `studio-cli` | 921600 | `mmwave_Studio_cli_xwr68xx.bin` |
-| mmWave SDK demo | `demo` | 115200 | xWR68xx SDK demo or compatible firmware |
+| mmWave SDK demo | `demo` | 115200 | ordinary xWR16xx, xWR18xx, xWR64xx, or xWR68xx SDK demo firmware |
 
 The dialects share a transport layer, but their command sets and start semantics remain isolated.
-Both `studio-cli version` and the SDK demo's common `version` extension must report an xWR68xx
-platform. Each connection performs this check before its first apply, start, stop, or capture state
-write. The operator must specify the serial port explicitly; mmwcli does not enumerate or probe ports.
+The `--radar-family` option on `demo` actions selects one strict ordinary family name and defaults to
+`xwr68xx`; AOP platform responses are not accepted. The SDK demo's common `version` extension must
+report the selected platform, while `studio-cli version` remains fixed to xWR68xx. Each connection
+performs this check before its first apply, start, stop, or capture state write. The operator must
+specify the serial port explicitly; mmwcli does not enumerate or probe ports.
 
 The top-level `repl` does not add a third dialect. It always creates a `StudioCLI` client, runs the
 same xWR68xx `version` validation, and then sends commands line by line using CFG lexical rules.
@@ -49,10 +51,13 @@ this prevents a late response from completing the wrong command.
 ## CFG preflight
 
 Integrated capture builds an immutable capture plan before it creates output or opens hardware. The
-0.1 contract requires:
+SDK demo descriptors are derived from TI SDK source and covered by offline tests. They permit four
+receivers and two LVDS lanes on all four ordinary families; xWR16xx permits TX0..TX1 and 76..81 GHz,
+xWR18xx permits TX0..TX2 and 76..81 GHz, and xWR64xx/xWR68xx permit TX0..TX2 and 57..64 GHz. The
+common capture contract requires:
 
-- xWR68xx, one chip, `dfeDataOutputMode 1`, and software-triggered legacy frames;
-- an xWR68xx profile start frequency in the 57–64 GHz device band;
+- one chip, `dfeDataOutputMode 1`, and software-triggered legacy frames;
+- a profile start frequency within the selected family's device band;
 - 16-bit complex ADC with matching ADC and DCA data formats;
 - no LVDS header, hardware ADC stream enabled, and software stream disabled;
 - two-lane DCA LVDS-to-Ethernet raw mode;
@@ -68,7 +73,8 @@ but sends only `sensorStart 0`; it is available only for `studio-cli`.
 
 Preflight rejects advanced-frame, monitor, continuous, test, loopback, software-LVDS, and
 LVDS-header configurations. TI monitor profiles are not runtime dependencies and cannot be used for
-this project's raw-only capture path.
+this project's raw-only capture path. The multi-family SDK demo support is offline/source-validated;
+the `studio-cli`, REPL, capture-session v1, and `debug-capture` contracts remain xWR68xx-specific.
 
 ## SOP2 direct-control boundary
 

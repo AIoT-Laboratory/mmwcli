@@ -62,6 +62,115 @@ func TestStudioCLICheckIsOffline(t *testing.T) {
 	}
 }
 
+func TestDemoRadarFamilyCheckIsOffline(t *testing.T) {
+	defaultConfig := writeValidConfig(t)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"demo", "check", defaultConfig}, &stdout, &stderr); code != 0 {
+		t.Fatalf("default xwr68xx exit code = %d, stderr=%s", code, stderr.String())
+	}
+
+	xwr18Config := writeValidConfig(t)
+	contents, err := os.ReadFile(xwr18Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents = []byte(strings.Replace(string(contents), "profileCfg 0 60 ", "profileCfg 0 77 ", 1))
+	if err := os.WriteFile(xwr18Config, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(
+		[]string{"demo", "check", xwr18Config, "--radar-family", "xwr18xx"},
+		&stdout,
+		&stderr,
+	); code != 0 {
+		t.Fatalf("xwr18xx exit code = %d, stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "family=xwr18xx") {
+		t.Fatalf("xwr18xx preflight output = %s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(
+		[]string{"demo", "check", xwr18Config, "--radar-family", "xwr64xx"},
+		&stdout,
+		&stderr,
+	); code != 4 {
+		t.Fatalf("wrong-band exit code = %d, stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "outside 57..64 GHz") {
+		t.Fatalf("wrong-band error = %s", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(
+		[]string{"demo", "check", xwr18Config, "--radar-family", "xwr16xx"},
+		&stdout,
+		&stderr,
+	); code != 4 {
+		t.Fatalf("xwr16xx TX2 exit code = %d, stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "TX0..TX1") {
+		t.Fatalf("xwr16xx TX2 error = %s", stderr.String())
+	}
+}
+
+func TestDemoInvalidRadarFamilyFailsBeforeConfigOutputOrHardware(t *testing.T) {
+	root := t.TempDir()
+	missingConfig := filepath.Join(root, "missing.cfg")
+	missingPort := "__mmwcli_test_missing_port__"
+	output := filepath.Join(root, "capture.bin")
+	tests := [][]string{
+		{"demo", "check", missingConfig, "--radar-family", "XWR18XX"},
+		{"demo", "version", "--radar-family", "XWR18XX", "--port", missingPort},
+		{"demo", "apply", missingConfig, "--radar-family", "XWR18XX", "--port", missingPort},
+		{"demo", "start", "--radar-family", "XWR18XX", "--port", missingPort},
+		{"demo", "stop", "--radar-family", "XWR18XX", "--port", missingPort},
+		{"demo", "capture", missingConfig, output, "--radar-family", "XWR18XX", "--port", missingPort},
+	}
+	for _, arguments := range tests {
+		t.Run(strings.Join(arguments[1:2], " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := Run(arguments, &stdout, &stderr); code != 2 {
+				t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "unsupported device family") {
+				t.Fatalf("missing family error: %s", stderr.String())
+			}
+		})
+	}
+	assertPathDoesNotExist(t, output)
+	assertPathDoesNotExist(t, output+".part")
+}
+
+func TestStudioCLIRejectsRadarFamilyFlag(t *testing.T) {
+	root := t.TempDir()
+	missingConfig := filepath.Join(root, "missing.cfg")
+	missingPort := "__mmwcli_test_missing_port__"
+	output := filepath.Join(root, "capture.bin")
+	for _, arguments := range [][]string{
+		{"studio-cli", "check", missingConfig, "--radar-family", "xwr18xx"},
+		{"studio-cli", "version", "--radar-family", "xwr18xx", "--port", missingPort},
+		{"studio-cli", "capture", missingConfig, output, "--radar-family", "xwr18xx", "--port", missingPort},
+	} {
+		t.Run(arguments[1], func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := Run(arguments, &stdout, &stderr); code != 2 {
+				t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "flag provided but not defined: -radar-family") {
+				t.Fatalf("missing rejected flag error: %s", stderr.String())
+			}
+		})
+	}
+	assertPathDoesNotExist(t, output)
+	assertPathDoesNotExist(t, output+".part")
+}
+
 func TestCaptureRequiresPortBeforeCreatingPart(t *testing.T) {
 	config := writeValidConfig(t)
 	output := filepath.Join(t.TempDir(), "capture.bin")
@@ -157,7 +266,13 @@ func TestCommandHelpDoesNotRequirePositionalsOrHardware(t *testing.T) {
 		{"studio-cli", "check", "--help"},
 		{"studio-cli", "apply", "--help"},
 		{"studio-cli", "capture", "--help"},
+		{"demo", "--help"},
+		{"demo", "check", "--help"},
 		{"demo", "version", "--help"},
+		{"demo", "apply", "--help"},
+		{"demo", "start", "--help"},
+		{"demo", "stop", "--help"},
+		{"demo", "capture", "--help"},
 		{"dca", "--help"},
 		{"dca", "capture", "--help"},
 		{"firmware", "--help"},
@@ -170,6 +285,9 @@ func TestCommandHelpDoesNotRequirePositionalsOrHardware(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			if code := Run(arguments, &stdout, &stderr); code != 0 {
 				t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			if arguments[0] == "demo" && !strings.Contains(stdout.String()+stderr.String(), "radar-family") {
+				t.Fatalf("demo help does not contain radar-family: stdout=%s stderr=%s", stdout.String(), stderr.String())
 			}
 		})
 	}
