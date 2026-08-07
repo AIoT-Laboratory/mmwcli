@@ -262,7 +262,7 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "  mmwcli firmware verify FILE")
 	fmt.Fprintln(writer, "  mmwcli debug-capture check --bss-fw FILE --mss-fw FILE")
 	fmt.Fprintln(writer, "  mmwcli debug-capture native-check")
-	fmt.Fprintln(writer, "  mmwcli debug-capture capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset]")
+	fmt.Fprintln(writer, "  mmwcli debug-capture capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
 	fmt.Fprintln(writer, "  mmwcli repl --port PORT [options]")
 	fmt.Fprintln(writer, "  mmwcli demo check|version|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli studio-cli check|version|apply|start|stop|capture ...")

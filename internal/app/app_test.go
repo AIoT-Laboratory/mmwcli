@@ -30,6 +30,9 @@ func TestHelpContainsOnlyCLIBackends(t *testing.T) {
 			t.Fatalf("help does not contain %q:\n%s", expected, text)
 		}
 	}
+	if !strings.Contains(text, "[--sop2-reset] [options]") {
+		t.Fatalf("top-level debug-capture synopsis omits capture options:\n%s", text)
+	}
 	for _, removed := range []string{"studio lua", "--studio-root", "--legacy-studio", ".NET"} {
 		if strings.Contains(text, removed) {
 			t.Fatalf("help still contains removed backend %q:\n%s", removed, text)
