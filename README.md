@@ -1,37 +1,40 @@
 # mmwcli
 
-`mmwcli` 是 TI xWR68xx 与 DCA1000 的命令行工具，用于发送雷达配置、控制采集并保存
-原始 ADC 数据。它不包含 GUI、MATLAB、Lua host、mmWave Studio 主机运行时或数据处理链。
+`mmwcli` is a command-line acquisition runtime for TI xWR68xx radars and DCA1000. It applies
+radar configurations, coordinates capture lifecycles, and writes raw ADC data with finite-capture
+integrity checks. It does not include a GUI, MATLAB, a Lua host, the mmWave Studio host runtime, or
+a data-processing pipeline.
 
-## 支持范围
+## Supported scope
 
-- 0.1 基线：xWR6843 ES2、单芯片、legacy frame、16-bit complex ADC、两路硬件 LVDS。
-- Functional/application mode：通过 SDK demo CLI 或 TI `studio_cli` 设备固件的文本串口控制。
-- Debug mode：在 SOP2 下下载用户提供的 MSS/BSS 固件，再通过 FTDI D2XX 与 mmWaveLink 控制。
-- DCA1000 数据按字节偏移原样写入，不重排、解析或修补。
-- Advanced frame、级联、LVDS header、软件 LVDS、RF monitor UART、CSI-2 和 TSW1400 暂不支持。
+- 0.1 baseline: xWR6843 ES2, single chip, legacy frame, 16-bit complex ADC, and two hardware LVDS lanes.
+- Functional/application mode: text serial control through the SDK demo CLI or TI `studio_cli` device firmware.
+- Debug mode: download user-supplied MSS/BSS firmware in SOP2, then control the radar through FTDI D2XX and mmWaveLink.
+- DCA1000 data is written at its byte offset without reordering, parsing, or repair.
+- Advanced frame, cascade, LVDS headers, software LVDS, RF monitor UART, CSI-2, and TSW1400 are not supported.
 
-`studio_cli` 路线只需用户自行烧录 `mmwave_Studio_cli_xwr68xx.bin`；运行时不需要 Radar Toolbox
-或 mmWave Studio。Debug 路线也不依赖 mmWave Studio 主机组件。
+The `studio_cli` route only requires the user to flash `mmwave_Studio_cli_xwr68xx.bin`; neither Radar
+Toolbox nor mmWave Studio is required at runtime. The debug route also has no dependency on mmWave
+Studio host components.
 
-0.1 仅完成 Windows/amd64、FTDI D2XX 3.2.14、IWR6843 ES2 与 DCA1000 的 debug mode
-实机验收。其它组合尚未经过实机验证，记录见
-[硬件冒烟测试](docs/hardware-smoke-test.md#debug-mode-01-实机验收记录)。
+Version 0.1 has hardware validation only for debug mode with Windows/amd64, FTDI D2XX 3.2.14,
+IWR6843 ES2, and DCA1000. Other combinations remain unvalidated; see the
+[hardware smoke test](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record).
 
-## 下载
+## Download
 
-预编译文件与校验值见 [GitHub Releases](https://github.com/AIoT-Laboratory/mmwcli/releases/latest)。
+Prebuilt binaries and checksums are available from [GitHub Releases](https://github.com/AIoT-Laboratory/mmwcli/releases/latest).
 
-## 构建
+## Build
 
-需要 Go 1.26 或更高版本。仓库没有第三方 Go 模块。
+Go 1.26 or newer is required. The repository has no third-party Go modules.
 
 ```sh
 make check
 make build
 ```
 
-核心版本固定 `CGO_ENABLED=0`。Windows D2XX backend 加载系统安装的 `ftd2xx.dll`：
+Core builds use `CGO_ENABLED=0`. The Windows D2XX backend loads the system-installed `ftd2xx.dll`:
 
 ```powershell
 $env:CGO_ENABLED = '0'
@@ -39,15 +42,15 @@ go build -trimpath -tags ftd2xx -o bin/mmwcli.exe ./cmd/mmwcli
 Remove-Item Env:CGO_ENABLED
 ```
 
-Linux D2XX backend 需要匹配目标架构的官方 `ftd2xx.h` 和 `libftd2xx.so`：
+The Linux D2XX backend requires the official `ftd2xx.h` and `libftd2xx.so` for the target architecture:
 
 ```sh
 CGO_ENABLED=1 go build -trimpath -tags ftd2xx -o bin/mmwcli ./cmd/mmwcli
 ```
 
-仓库与发布包不分发 FTDI 库、header、驱动或 TI 固件。
+The repository and release archives do not distribute FTDI libraries, headers, drivers, or TI firmware.
 
-## 离线检查
+## Offline checks
 
 ```text
 mmwcli doctor
@@ -57,7 +60,8 @@ mmwcli debug-capture check --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68
 mmwcli debug-capture native-check
 ```
 
-这些命令不打开设备；`native-check` 只加载 D2XX 库。检查通过不代表硬件组合已经验证。
+These commands do not open devices; `native-check` only loads the D2XX library. A successful check
+does not validate a hardware combination.
 
 ## REPL
 
@@ -65,68 +69,75 @@ mmwcli debug-capture native-check
 mmwcli repl --port PORT
 ```
 
-`repl` 只接受通过 xWR68xx `version` 门禁并实现 TI `studio_cli` 行协议的固件。未知响应会关闭
-会话，不自动重试。它允许发送兼容固件扩展的单行命令，但不声明该固件是受支持的采集后端。
+`repl` accepts only firmware that passes the xWR68xx `version` gate and implements the TI
+`studio_cli` line protocol. An unknown response closes the session without an automatic retry. The
+REPL can send extension commands from compatible firmware, but that does not make the firmware a
+supported capture backend.
 
-## xWR6843 + DCA1000 快速开始
+## xWR6843 + DCA1000 quick start
 
-默认主机地址为 `192.168.33.30/24`，DCA1000 地址为 `192.168.33.180`，控制/数据端口为
-UDP `4096/4098`。以下两种模式使用不同固件、端口和控制协议，不能混用。
+The default host address is `192.168.33.30/24`; the DCA1000 address is `192.168.33.180`; the UDP
+control/data ports are `4096/4098`. The two modes below use different firmware, ports, and control
+protocols and must not be mixed.
 
 ### Functional/application mode
 
-烧录 `mmwave_Studio_cli_xwr68xx.bin`，以正常 functional/application mode 启动雷达，并
-显式提供该固件的 CLI UART。首次采集下发完整配置：
+Flash `mmwave_Studio_cli_xwr68xx.bin`, boot the radar in normal functional/application mode, and
+explicitly provide that firmware's CLI UART. The first capture sends the complete configuration:
 
 ```text
 mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-01.bin --port PORT
 ```
 
-保持固件、SOP、CFG、串口和 DCA1000 连接不变，可检查无重配复用：
+Without changing the firmware, SOP, CFG, serial port, or DCA1000 connection, test reuse without
+reconfiguration:
 
 ```text
 mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-02.bin --port PORT --no-reconfig
 ```
 
-两轮都不要使用 `--reset`。示例 CFG 每轮应产生 `26,214,400` bytes；文件大小必须精确
-匹配，且没有 missing/discarded 数据或遗留 `.part`。此路线尚未完成实机验收。
+Do not use `--reset` for either run. The example CFG should produce exactly `26,214,400` bytes per
+capture, with no missing/discarded data or leftover `.part` file. This route has not completed
+hardware validation.
 
 ### Debug mode
 
-使用 `ftd2xx` 构建，准备 xWR68xx RF evaluation firmware 的 BSS/MSS 文件，并明确提供
-Enhanced COM 与同一 FTDI 的 D2XX base：
+Use a build with the `ftd2xx` tag, obtain the BSS/MSS files from the xWR68xx RF evaluation firmware,
+and explicitly provide the Enhanced COM port and the D2XX base for the same FTDI device:
 
 ```text
 mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg capture-debug.bin --enhanced-port PORT --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin --d2xx-description AR-DevPack-EVM-012 --sop2-reset
 ```
 
-`AR-DevPack-EVM-012` 是 0.1 实机验收使用的 description base；程序由它派生接口
-`AR-DevPack-EVM-012 A/B`，启用 `--sop2-reset` 时还会派生 C/D。
+`AR-DevPack-EVM-012` is the description base used for the 0.1 hardware validation. The program
+derives `AR-DevPack-EVM-012 A/B`, plus C/D when `--sop2-reset` is enabled.
 
-也可按 serial number 选择设备。例如 D2XX 显示接口 serial 为 `FT1234A`、`FT1234B`、
-`FT1234C`、`FT1234D`，参数应写作 `--d2xx-serial FT1234`。这是格式示例，不是 0.1
-实机验收设备的 serial。description 与 serial 选择器不能同时使用。
+Serial-number selection is also supported. For example, if D2XX reports interface serials
+`FT1234A`, `FT1234B`, `FT1234C`, and `FT1234D`, use `--d2xx-serial FT1234`. This is a format example,
+not the serial of the 0.1 validation device. The description and serial selectors are mutually
+exclusive.
 
-Enhanced COM 只下载 MSS/BSS；随后 D2XX A/B 承载 mmWaveLink 控制，DCA1000 通过以太网
-传输 ADC。`--sop2-reset` 使用 D/C 接口设置 SOP2 并复位雷达目标，与 DCA FPGA 的
-`--reset` 无关。每次 debug capture 都重新下载固件并配置雷达，不支持 `--no-reconfig`。
+Enhanced COM only downloads MSS/BSS. D2XX A/B then carries mmWaveLink control, while DCA1000 sends
+ADC data over Ethernet. `--sop2-reset` uses D/C to select SOP2 and reset the radar target; it is
+unrelated to the DCA FPGA `--reset`. Every debug capture downloads and configures the radar again;
+`--no-reconfig` is not supported.
 
-不要在 SOP2 下使用 `studio-cli capture`，也不要把 Enhanced COM 当作文本 CLI UART。
-TI 资产文件名与校验值见 [TI 资料地图](docs/ti-reference-map.md)。
+Do not use `studio-cli capture` in SOP2 or treat Enhanced COM as a text CLI UART. TI asset names and
+checksums are listed in the [TI reference map](docs/ti-reference-map.md).
 
-## 运行语义
+## Runtime semantics
 
-- CFG、模式、预期字节数和输出路径在硬件 I/O 前检查。
-- Start 结果未知时不重试；失败路径执行有界清理。
-- 有限采集必须精确匹配 CFG 推导的字节数。
-- 数据先写入 `OUT.part`；全部成功后才无覆盖发布为 `OUT`，失败时保留 `.part`。
-- 低层 `dca` 命令不得并行；`dca ping` 不是采集前置检查；reset 仅由显式命令或参数触发。
-- `sensorStop` 只停止传感器，不会关闭雷达板或 RF 电源。
+- CFG, mode, expected byte count, and output paths are checked before hardware I/O.
+- An unknown Start result is not retried; failure paths use bounded cleanup.
+- A finite capture must match the exact byte count derived from its CFG.
+- Data is written to `OUT.part` and published without overwrite as `OUT` only after full success; failures retain `.part`.
+- Low-level `dca` commands must not run concurrently; `dca ping` is not a capture prerequisite; reset requires an explicit command or option.
+- `sensorStop` stops the sensor only; it does not power off the radar board or RF domain.
 
-运行 `mmwcli help` 或子命令的 `--help` 查看命令与参数。设计细节见
-[架构](docs/architecture.md)。
+Run `mmwcli help` or a subcommand's `--help` for commands and options. See the
+[architecture](docs/architecture.md) for design details.
 
-## 许可证
+## License
 
-mmwcli 采用 [MIT License](LICENSE)。TI 与 FTDI 资产受各自条款约束，见
-[第三方声明](THIRD_PARTY_NOTICES.md)。
+mmwcli is licensed under the [MIT License](LICENSE). TI and FTDI assets remain subject to their own
+terms; see the [third-party notices](THIRD_PARTY_NOTICES.md).

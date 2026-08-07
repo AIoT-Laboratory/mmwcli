@@ -1,81 +1,87 @@
-# TI 资料与版本地图
+# TI assets and version map
 
-mmwcli 不下载或分发 TI 资产。functional/application 文本 CLI 路线只需要用户自行烧录的
-`mmwave_Studio_cli_xwr68xx.bin`；debug mode 则使用用户显式提供的 RF evaluation MSS/BSS
-固件。除显式给出的固件文件外，两条路线都不会自动发现 TI 安装或调用 Toolbox、
-mmWave Studio runtime。
+mmwcli does not download or distribute TI assets. The functional/application text-CLI path only
+requires the user-flashed `mmwave_Studio_cli_xwr68xx.bin`; debug mode uses RF evaluation MSS/BSS
+firmware supplied explicitly by the user. Apart from the named firmware files, neither path
+discovers a TI installation or invokes Toolbox or the mmWave Studio runtime.
 
-## `studio_cli` 设备固件
+## `studio_cli` device firmware
 
-0.1 已知固件来自 Radar Toolbox 4.00.00.05。`mmwcli firmware verify FILE` 只校验以下
-资产：
+The known 0.1 firmware comes from Radar Toolbox 4.00.00.05. `mmwcli firmware verify FILE` checks only
+this asset:
 
-| 相对路径 | 字节数 | SHA-256 |
+| Relative path | Bytes | SHA-256 |
 | --- | ---: | --- |
 | `tools/studio_cli/prebuilt_binaries/mmwave_Studio_cli_xwr68xx.bin` | 358660 | `24BDAE9662AA8E611DBEDAE65709B7589CDCFB6E3F71B8E0E7FA78C5DD4A18BF` |
 
-完整 Toolbox、package metadata、manifest、profile 和源码都不是校验或采集前置条件。
+The complete Toolbox, package metadata, manifests, profiles, and source are not verification or
+capture prerequisites.
 
-## `debug-capture` MSS/BSS 固件
+## `debug-capture` MSS/BSS firmware
 
-离线资产合同来自 mmWave Studio 2.1.1 的 RF evaluation firmware。只需用户显式提供下列
-两个文件，不需要安装或调用 mmWave Studio runtime：
+The offline asset contract comes from the mmWave Studio 2.1.1 RF evaluation firmware. The user only
+needs to supply these two files; installing or invoking the mmWave Studio runtime is unnecessary:
 
-| 角色与相对路径 | 字节数 | SHA-256 |
+| Role and relative path | Bytes | SHA-256 |
 | --- | ---: | --- |
 | BSS `rf_eval_firmware/radarss/xwr68xx_radarss.bin` | 240072 | `E2C69405394E35BA376EFE1A52305EE74DBD19F8BAB72BD5A9078878853CD77F` |
 | MSS `rf_eval_firmware/masterss/xwr68xx_masterss.bin` | 92992 | `316911D4A8DBA1762714A3A107071BD0CF06A135FAE29BFBBC92B037592DE060` |
 
-`mmwcli debug-capture check --bss-fw FILE --mss-fw FILE` 还会解析 RPRC、检查 xWR68xx
-内存窗口并生成内存写计划；它不会打开雷达、DCA1000 或 USB 设备。命令通过只证明资产与
-下载计划满足离线合同，不代表对应 D2XX 原生库、雷达和 DCA1000 组合已经通过实机验收。
+`mmwcli debug-capture check --bss-fw FILE --mss-fw FILE` also parses RPRC, validates xWR68xx memory
+windows, and builds the memory-write plan. It does not open the radar, DCA1000, or a USB device. A
+successful command establishes only that the assets and write plan satisfy the offline contract; it
+does not validate the D2XX library, radar, and DCA1000 combination.
 
-在 `debug-capture capture` 中，Enhanced COM 只用于将这两个文件提交到 SOP2 设备内存；
-随后主机切换到 FTDI D2XX A/B，以 SPI/IRQ 承载 mmWaveLink 配置、启动和停止。采集 CFG
-由主机翻译为 mmWaveLink 消息，不会作为文本命令发送，也不需要 mmWave Studio runtime。
-表中的两个确切哈希已用于 2026-08-05 的 debug mode 实机验收；其它固件版本不在该结论内。
-完整组合与结果见[硬件冒烟测试](hardware-smoke-test.md#debug-mode-01-实机验收记录)。
+During `debug-capture capture`, Enhanced COM only submits these files to SOP2 device memory. The host
+then switches to FTDI D2XX A/B and carries mmWaveLink configuration, start, and stop over SPI/IRQ.
+The host translates the capture CFG into mmWaveLink messages rather than sending it as text. No
+mmWave Studio runtime is required. The two exact hashes in the table were used for the 2026-08-05
+debug-mode hardware validation; no other firmware version is covered. See the complete combination
+and result in the
+[hardware smoke test](hardware-smoke-test.md#debug-mode-01-hardware-validation-record).
 
-## 开发参考
+## Development references
 
-协议核对曾参考 `tools/studio_cli` 中的下列资料：
+Protocol checks referred to these files under `tools/studio_cli`:
 
-- `src/mss/mmw_cli.c`、`mss_main.c`：文本命令和设备状态机；
-- `src/common/mmw_rfparser.c`：ADCBuf 容量计算；
-- `gui/mmw_cli_tool/mmw_main.c` 与 `serial_comm`：UART 参考实现；
-- `gui/mmw_cli_tool/dca_comm/dca_control.c`：DCA1000 调用顺序；
-- `docs`：Studio CLI 指南与发布说明。
+- `src/mss/mmw_cli.c` and `mss_main.c`: text commands and device state machine;
+- `src/common/mmw_rfparser.c`: ADCBuf capacity calculations;
+- `gui/mmw_cli_tool/mmw_main.c` and `serial_comm`: UART reference implementation;
+- `gui/mmw_cli_tool/dca_comm/dca_control.c`: DCA1000 call order;
+- `docs`: Studio CLI guide and release notes.
 
-`tools/studio_cli/src/6843/studio_cli_xwr68xx.projectspec` 指定该固件的构建组合：
+`tools/studio_cli/src/6843/studio_cli_xwr68xx.projectspec` declares this firmware build combination:
 
 - mmWave SDK 3.5.0.01
 - SYS/BIOS 6.73.1.01
 - XDCtools 3.55.2.22_core
 - ARM CGT 16.9.6.LTS
 
-不同版本的 SDK 不能视为可直接替换的等价构建环境。0.1 functional/application 资产合同
-锁定通过上述单文件校验的预编译固件，但当前只完成离线校验，尚无该路线的实机验收记录；
-这些源码与构建工具不参与 mmwcli 运行。
+Different SDK versions are not assumed to be interchangeable build environments. The 0.1
+functional/application asset contract pins the prebuilt firmware through the single-file check
+above. That path currently has offline validation only and no hardware-validation record. These
+sources and build tools do not participate in mmwcli runtime operation.
 
-## mmWave SDK 3.6.2 参考
+## mmWave SDK 3.6.2 references
 
-SDK demo 方言的主要参考路径为：
+The SDK demo dialect primarily refers to:
 
-- `packages/ti/demo/xwr68xx/mmw/mss/mmw_cli.c`：115200 baud CLI 与启动语义；
-- `packages/ti/demo/xwr68xx/mmw/profiles`：官方 demo profiles；
-- `packages/ti/common/sys_common_xwr68xx.h`：xWR68xx 32 KiB ADCBuf；
-- `packages/ti/drivers/cbuff/include/cbuff_internal.h`：CBUFF 约束；
-- `packages/ti/utils/sbl/include/image_parser.h`、`src/image_parser.c` 与
-  `platform/sbl_xwr68xx.c`：RPRC 格式、补齐和 xWR68xx 内存窗口；
-- `packages/ti/control/mmwavelink`：transport-neutral mmWaveLink/RHCP 协议；
-- `docs/mmwave_sdk_software_manifest.html`：版本和许可清单。
+- `packages/ti/demo/xwr68xx/mmw/mss/mmw_cli.c`: 115200-baud CLI and start semantics;
+- `packages/ti/demo/xwr68xx/mmw/profiles`: official demo profiles;
+- `packages/ti/common/sys_common_xwr68xx.h`: xWR68xx 32 KiB ADCBuf;
+- `packages/ti/drivers/cbuff/include/cbuff_internal.h`: CBUFF constraints;
+- `packages/ti/utils/sbl/include/image_parser.h`, `src/image_parser.c`, and
+  `platform/sbl_xwr68xx.c`: RPRC format, padding, and xWR68xx memory windows;
+- `packages/ti/control/mmwavelink`: transport-neutral mmWaveLink/RHCP protocol;
+- `docs/mmwave_sdk_software_manifest.html`: version and license manifest.
 
-普通 demo profile 不一定开启硬件 LVDS。用于 DCA1000 capture 的配置必须显式满足
-mmwcli 的 raw-only 预检。
+An ordinary demo profile does not necessarily enable hardware LVDS. A configuration used for
+DCA1000 capture must explicitly satisfy mmwcli's raw-only preflight.
 
-## 许可边界
+## License scope
 
-TI manifest 和源文件可能包含不同许可条款，不能从单个文件推断整个 Toolbox 或 SDK 的
-许可证。mmwcli 只在用户显式要求校验时读取固件文件，不读取 metadata、manifest、profile
-或参考源码，也不将 TI 资产复制到仓库或发布包。详见
-[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
+TI manifests and source files may use different licenses; one file does not establish the license
+for the whole Toolbox or SDK. mmwcli reads a firmware file only when the user explicitly requests
+verification. It does not read metadata, manifests, profiles, or reference source, and it does not
+copy TI assets into the repository or release archives. See
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
