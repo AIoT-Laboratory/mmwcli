@@ -22,15 +22,14 @@ const (
 	FullConfiguration ConfigurationMode = iota
 	ReuseConfiguration
 
-	xwr68xxADCBufBytes        = uint64(32 * 1024)
-	adcBufChannelAlignment    = uint64(16)
-	complex16BytesPerSample   = uint64(4)
-	cbuffMinimumTransferSize  = uint64(64)
-	cbuffMaximumTransferSize  = uint64(0x3fff * 2)
-	xwr68xxMaximumChirpIndex  = uint64(511)
-	xwr68xxMaximumFrameLoops  = uint64(255)
-	xwr68xxMinimumFramePeriod = 300 * time.Microsecond
-	xwr68xxMaximumFramePeriod = 1342 * time.Millisecond
+	adcBufChannelAlignment   = uint64(16)
+	complex16BytesPerSample  = uint64(4)
+	cbuffMinimumTransferSize = uint64(64)
+	cbuffMaximumTransferSize = uint64(0x3fff * 2)
+	maximumChirpIndex        = uint64(511)
+	maximumFrameLoops        = uint64(255)
+	minimumFramePeriod       = 300 * time.Microsecond
+	maximumFramePeriod       = 1342 * time.Millisecond
 )
 
 // CapturePlan is the hardware-independent result of CFG parsing and preflight.
@@ -144,7 +143,7 @@ func BuildCapturePlan(dialect Dialect, commands []string, mode ConfigurationMode
 	if err := validateHardwareLVDS(configuration); err != nil {
 		return CapturePlan{}, err
 	}
-	frame, err := parseFrame(configuration)
+	frame, err := parseFrameForFamily(dialect.family, configuration)
 	if err != nil {
 		return CapturePlan{}, err
 	}
@@ -344,7 +343,7 @@ func validateADCBuf(dialect Dialect, commands []string) error {
 			return fmt.Errorf("capture requires complex ADCBuf format (adcFmt=0): %s", command)
 		}
 		if values[4] != 1 {
-			return fmt.Errorf("xWR68xx CLI requires adcbufCfg chirpThreshold=1: %s", command)
+			return fmt.Errorf("%s CLI requires adcbufCfg chirpThreshold=1: %s", dialect.family.versionPlatforms[0], command)
 		}
 		if dialect == StudioCLI &&
 			(values[0] != -1 || values[2] != 1 || values[3] != 1) {
@@ -406,6 +405,10 @@ type chirpProfileRange struct {
 }
 
 func parseFrame(commands []string) (frameConfiguration, error) {
+	return parseFrameForFamily(xwr68xxFamily, commands)
+}
+
+func parseFrameForFamily(family DeviceFamily, commands []string) (frameConfiguration, error) {
 	count := 0
 	var result frameConfiguration
 	for _, command := range commands {
@@ -430,15 +433,15 @@ func parseFrame(commands []string) (frameConfiguration, error) {
 		if chirpEnd < chirpStart {
 			return frameConfiguration{}, fmt.Errorf("frameCfg chirp end index is before its start index: %s", command)
 		}
-		if chirpStart > xwr68xxMaximumChirpIndex || chirpEnd > xwr68xxMaximumChirpIndex {
-			return frameConfiguration{}, fmt.Errorf("xWR68xx frameCfg chirp indices must be in 0..511: %s", command)
+		if chirpStart > maximumChirpIndex || chirpEnd > maximumChirpIndex {
+			return frameConfiguration{}, fmt.Errorf("%s frameCfg chirp indices must be in 0..511: %s", family.versionPlatforms[0], command)
 		}
 		loops, err := parseUnsignedArgument(command, fields, 3, 16, "frame loop count")
 		if err != nil {
 			return frameConfiguration{}, err
 		}
-		if loops == 0 || loops > xwr68xxMaximumFrameLoops {
-			return frameConfiguration{}, fmt.Errorf("xWR68xx frameCfg loop count must be in 1..255: %s", command)
+		if loops == 0 || loops > maximumFrameLoops {
+			return frameConfiguration{}, fmt.Errorf("%s frameCfg loop count must be in 1..255: %s", family.versionPlatforms[0], command)
 		}
 		frameValue, err := strconv.ParseUint(fields[4], 10, 16)
 		if err != nil {
@@ -459,12 +462,12 @@ func parseFrame(commands []string) (frameConfiguration, error) {
 			return frameConfiguration{}, fmt.Errorf("only software-triggered frameCfg (triggerSelect=1) is supported: %s", command)
 		}
 		period := time.Duration(milliseconds * float64(time.Millisecond))
-		if period < xwr68xxMinimumFramePeriod || period > xwr68xxMaximumFramePeriod {
-			return frameConfiguration{}, fmt.Errorf("xWR68xx frame periodicity must be in 0.3..1342 ms: %s", command)
+		if period < minimumFramePeriod || period > maximumFramePeriod {
+			return frameConfiguration{}, fmt.Errorf("%s frame periodicity must be in 0.3..1342 ms: %s", family.versionPlatforms[0], command)
 		}
 		triggerDelay, err := strconv.ParseFloat(fields[7], 64)
 		if err != nil || math.IsNaN(triggerDelay) || math.IsInf(triggerDelay, 0) || triggerDelay != 0 {
-			return frameConfiguration{}, fmt.Errorf("initial xWR68xx single-chip capture requires frameTriggerDelay=0: %s", command)
+			return frameConfiguration{}, fmt.Errorf("initial %s single-chip capture requires frameTriggerDelay=0: %s", family.versionPlatforms[0], command)
 		}
 		result = frameConfiguration{
 			chirpStart: chirpStart,
@@ -482,7 +485,7 @@ func parseFrame(commands []string) (frameConfiguration, error) {
 }
 
 func deriveExpectedBytes(dialect Dialect, commands []string, frame frameConfiguration) (int64, int64, error) {
-	receivers, enabledTransmitters, err := parseChannelConfiguration(commands)
+	receivers, enabledTransmitters, err := parseChannelConfigurationForFamily(dialect.family, commands)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -494,10 +497,10 @@ func deriveExpectedBytes(dialect Dialect, commands []string, frame frameConfigur
 	if err != nil {
 		return 0, 0, err
 	}
-	// Both supported xWR68xx text CLI firmware families use a static
-	// 32-entry table while validating the unique chirps in a legacy frame.
+	// The supported text CLI firmware families use a 32-entry table while
+	// validating the unique chirps in a legacy frame.
 	if uniqueChirps > 32 {
-		return 0, 0, fmt.Errorf("xWR68xx text CLI supports at most 32 unique frame chirps, got %d", uniqueChirps)
+		return 0, 0, fmt.Errorf("%s text CLI supports at most 32 unique frame chirps, got %d", dialect.family.versionPlatforms[0], uniqueChirps)
 	}
 	if dialect == StudioCLI {
 		// The studio_cli source audited from Radar Toolbox 4.00.00.05
@@ -511,18 +514,18 @@ func deriveExpectedBytes(dialect Dialect, commands []string, frame frameConfigur
 			return 0, 0, errors.New("TI xWR68xx studio_cli firmware requires its only profileCfg to use profile ID 0")
 		}
 	}
-	ranges, err := parseChirpProfileRanges(commands, profiles, enabledTransmitters)
+	ranges, err := parseChirpProfileRangesForFamily(dialect.family, commands, profiles, enabledTransmitters)
 	if err != nil {
 		return 0, 0, err
 	}
 	if dialect == StudioCLI && len(ranges) > 5 {
 		return 0, 0, fmt.Errorf("TI xWR68xx studio_cli firmware stores at most five chirpCfg ranges, got %d", len(ranges))
 	}
-	samplesPerLoop, samplesPerChirp, err := mappedSamplesPerLoop(frame, profiles, ranges)
+	samplesPerLoop, samplesPerChirp, err := mappedSamplesPerLoop(dialect.family, frame, profiles, ranges)
 	if err != nil {
 		return 0, 0, err
 	}
-	if err := validateRawBufferSizes(samplesPerChirp, receivers); err != nil {
+	if err := validateRawBufferSizes(dialect.family, samplesPerChirp, receivers); err != nil {
 		return 0, 0, err
 	}
 
@@ -560,6 +563,10 @@ func deriveExpectedBytes(dialect Dialect, commands []string, frame frameConfigur
 }
 
 func parseChannelConfiguration(commands []string) (uint64, uint64, error) {
+	return parseChannelConfigurationForFamily(xwr68xxFamily, commands)
+}
+
+func parseChannelConfigurationForFamily(family DeviceFamily, commands []string) (uint64, uint64, error) {
 	count := 0
 	var mask uint64
 	var transmitters uint64
@@ -578,22 +585,32 @@ func parseChannelConfiguration(commands []string) (uint64, uint64, error) {
 		if err != nil {
 			return 0, 0, err
 		}
-		if value == 0 || value&^uint64(0x0f) != 0 {
-			return 0, 0, fmt.Errorf("xWR68xx channelCfg RX mask must enable one or more of RX0..RX3: %s", command)
+		if value == 0 || value&^family.receiverMask != 0 {
+			return 0, 0, fmt.Errorf(
+				"%s channelCfg RX mask must enable one or more of %s: %s",
+				family.versionPlatforms[0],
+				family.receiverRange(),
+				command,
+			)
 		}
 		txMask, err := parseUnsignedArgument(command, fields, 2, 32, "channelCfg TX mask")
 		if err != nil {
 			return 0, 0, err
 		}
-		if txMask == 0 || txMask&^uint64(0x07) != 0 {
-			return 0, 0, fmt.Errorf("xWR68xx channelCfg TX mask must enable one or more of TX0..TX2: %s", command)
+		if txMask == 0 || txMask&^family.transmitterMask != 0 {
+			return 0, 0, fmt.Errorf(
+				"%s channelCfg TX mask must enable one or more of %s: %s",
+				family.versionPlatforms[0],
+				family.transmitterRange(),
+				command,
+			)
 		}
 		cascade, err := parseUnsignedArgument(command, fields, 3, 32, "channelCfg cascading mode")
 		if err != nil {
 			return 0, 0, err
 		}
 		if cascade != 0 {
-			return 0, 0, fmt.Errorf("initial xWR68xx capture supports only single-chip channelCfg cascading=0: %s", command)
+			return 0, 0, fmt.Errorf("initial %s capture supports only single-chip channelCfg cascading=0: %s", family.versionPlatforms[0], command)
 		}
 		mask = value
 		transmitters = txMask
@@ -623,7 +640,27 @@ func parseProfileSamples(dialect Dialect, commands []string) (map[uint64]uint64,
 			return nil, err
 		}
 		if profileID >= 4 {
-			return nil, fmt.Errorf("xWR68xx profileCfg profile ID must be in 0..3: %s", command)
+			return nil, fmt.Errorf("%s profileCfg profile ID must be in 0..3: %s", dialect.family.versionPlatforms[0], command)
+		}
+		if strings.ContainsAny(fields[2], "xXpP_") {
+			return nil, fmt.Errorf("profileCfg start frequency must use decimal floating-point syntax: %s", command)
+		}
+		startFrequency, err := strconv.ParseFloat(fields[2], 64)
+		if err != nil || math.IsNaN(startFrequency) || math.IsInf(startFrequency, 0) {
+			return nil, fmt.Errorf("profileCfg start frequency must be finite decimal floating-point: %s", command)
+		}
+		if math.IsInf(startFrequency*1e9, 0) {
+			return nil, fmt.Errorf("scaled profileCfg start frequency overflows finite Hz representation: %s", command)
+		}
+		if startFrequency < dialect.family.minimumStartFrequencyGHz ||
+			startFrequency > dialect.family.maximumStartFrequencyGHz {
+			return nil, fmt.Errorf(
+				"%s profileCfg start frequency is outside %.0f..%.0f GHz: %s",
+				dialect.family.versionPlatforms[0],
+				dialect.family.minimumStartFrequencyGHz,
+				dialect.family.maximumStartFrequencyGHz,
+				command,
+			)
 		}
 		if dialect == StudioCLI {
 			frequencySlope, err := strconv.ParseFloat(fields[8], 64)
@@ -657,6 +694,15 @@ func parseChirpProfileRanges(
 	profiles map[uint64]uint64,
 	enabledTransmitters uint64,
 ) ([]chirpProfileRange, error) {
+	return parseChirpProfileRangesForFamily(xwr68xxFamily, commands, profiles, enabledTransmitters)
+}
+
+func parseChirpProfileRangesForFamily(
+	family DeviceFamily,
+	commands []string,
+	profiles map[uint64]uint64,
+	enabledTransmitters uint64,
+) ([]chirpProfileRange, error) {
 	var ranges []chirpProfileRange
 	for _, command := range commands {
 		if !isCommand(command, "chirpCfg") {
@@ -680,15 +726,15 @@ func parseChirpProfileRanges(
 		if end < start {
 			return nil, fmt.Errorf("chirpCfg end index is before its start index: %s", command)
 		}
-		if start > xwr68xxMaximumChirpIndex || end > xwr68xxMaximumChirpIndex {
-			return nil, fmt.Errorf("xWR68xx chirpCfg indices must be in 0..511: %s", command)
+		if start > maximumChirpIndex || end > maximumChirpIndex {
+			return nil, fmt.Errorf("%s chirpCfg indices must be in 0..511: %s", family.versionPlatforms[0], command)
 		}
 		profileID, err := parseUnsignedArgument(command, fields, 3, 16, "chirpCfg profile ID")
 		if err != nil {
 			return nil, err
 		}
 		if profileID >= 4 {
-			return nil, fmt.Errorf("xWR68xx chirpCfg profile ID must be in 0..3: %s", command)
+			return nil, fmt.Errorf("%s chirpCfg profile ID must be in 0..3: %s", family.versionPlatforms[0], command)
 		}
 		if _, found := profiles[profileID]; !found {
 			return nil, fmt.Errorf("chirpCfg range %d..%d references profile ID %d without a matching profileCfg", start, end, profileID)
@@ -697,14 +743,19 @@ func parseChirpProfileRanges(
 		if err != nil {
 			return nil, err
 		}
-		if txEnable&^uint64(0x07) != 0 {
-			return nil, fmt.Errorf("xWR68xx chirpCfg TX enable mask must use TX0..TX2 only: %s", command)
+		if txEnable&^family.transmitterMask != 0 {
+			return nil, fmt.Errorf(
+				"%s chirpCfg TX enable mask must use %s only: %s",
+				family.versionPlatforms[0],
+				family.transmitterRange(),
+				command,
+			)
 		}
 		if txEnable&^enabledTransmitters != 0 {
 			return nil, fmt.Errorf("chirpCfg TX enable mask must be a subset of channelCfg TX mask: %s", command)
 		}
 		if bits.OnesCount64(txEnable) > 2 {
-			return nil, fmt.Errorf("xWR68xx chirpCfg may enable at most two transmitters per chirp: %s", command)
+			return nil, fmt.Errorf("%s chirpCfg may enable at most two transmitters per chirp: %s", family.versionPlatforms[0], command)
 		}
 		ranges = append(ranges, chirpProfileRange{
 			start:     start,
@@ -737,6 +788,7 @@ func parseChirpProfileRanges(
 }
 
 func mappedSamplesPerLoop(
+	family DeviceFamily,
 	frame frameConfiguration,
 	profiles map[uint64]uint64,
 	ranges []chirpProfileRange,
@@ -764,9 +816,10 @@ func mappedSamplesPerLoop(
 			profileSelected = true
 		} else if configured.profileID != frameProfileID {
 			return 0, 0, fmt.Errorf(
-				"frameCfg chirps use mixed profile IDs %d and %d; xWR68xx requires one profile per frame",
+				"frameCfg chirps use mixed profile IDs %d and %d; %s requires one profile per frame",
 				frameProfileID,
 				configured.profileID,
+				family.versionPlatforms[0],
 			)
 		}
 		selectedTransmitters |= configured.txEnable
@@ -791,7 +844,7 @@ func mappedSamplesPerLoop(
 	return 0, 0, fmt.Errorf("frameCfg chirp index %d has no chirpCfg-to-profile mapping", nextChirp)
 }
 
-func validateRawBufferSizes(samplesPerChirp, receivers uint64) error {
+func validateRawBufferSizes(family DeviceFamily, samplesPerChirp, receivers uint64) error {
 	channelBytes, err := checkedExpectedMultiply(
 		samplesPerChirp,
 		complex16BytesPerSample,
@@ -802,7 +855,8 @@ func validateRawBufferSizes(samplesPerChirp, receivers uint64) error {
 	}
 	if channelBytes > cbuffMaximumTransferSize {
 		return fmt.Errorf(
-			"xWR68xx CBUFF complex16 linked-list transfer is %d bytes per RX; at most %d bytes are supported",
+			"%s CBUFF complex16 linked-list transfer is %d bytes per RX; at most %d bytes are supported",
+			family.versionPlatforms[0],
 			channelBytes,
 			cbuffMaximumTransferSize,
 		)
@@ -813,7 +867,8 @@ func validateRawBufferSizes(samplesPerChirp, receivers uint64) error {
 	}
 	if transferBytes < cbuffMinimumTransferSize {
 		return fmt.Errorf(
-			"xWR68xx CBUFF ADC-only transfer is %d bytes per chirp; at least %d bytes are required",
+			"%s CBUFF ADC-only transfer is %d bytes per chirp; at least %d bytes are required",
+			family.versionPlatforms[0],
 			transferBytes,
 			cbuffMinimumTransferSize,
 		)
@@ -827,11 +882,12 @@ func validateRawBufferSizes(samplesPerChirp, receivers uint64) error {
 	if err != nil {
 		return err
 	}
-	if adcBufBytes > xwr68xxADCBufBytes {
+	if adcBufBytes > family.adcBufBytes {
 		return fmt.Errorf(
-			"xWR68xx ADCBuf requires %d bytes (16-byte aligned per RX channel), exceeding its %d-byte capacity",
+			"%s ADCBuf requires %d bytes (16-byte aligned per RX channel), exceeding its %d-byte capacity",
+			family.versionPlatforms[0],
 			adcBufBytes,
-			xwr68xxADCBufBytes,
+			family.adcBufBytes,
 		)
 	}
 	return nil
@@ -885,7 +941,7 @@ func isCommand(command, expected string) bool {
 func requireExactName(command, expected string) error {
 	fields := strings.Fields(command)
 	if len(fields) == 0 || fields[0] != expected {
-		return fmt.Errorf("xWR68xx CLI command names are case-sensitive; use %s: %s", expected, command)
+		return fmt.Errorf("TI CLI command names are case-sensitive; use %s: %s", expected, command)
 	}
 	return nil
 }

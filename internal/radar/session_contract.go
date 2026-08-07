@@ -276,7 +276,7 @@ func validateCaptureSessionV1Chirps(
 			}
 		}
 	}
-	byIndex := make(map[uint64]chirpProfileRange, xwr68xxMaximumChirpIndex+1)
+	byIndex := make(map[uint64]chirpProfileRange, maximumChirpIndex+1)
 	for _, configured := range ranges {
 		for index := configured.start; index <= configured.end; index++ {
 			byIndex[index] = configured

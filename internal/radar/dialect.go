@@ -1,4 +1,4 @@
-// Package radar implements the host side of the xWR68xx text CLI protocols.
+// Package radar implements the host side of TI xWR text CLI protocols.
 //
 // It deliberately contains no serial-port implementation. Callers provide an
 // io.ReadWriteCloser that has already been opened and configured for the baud
@@ -18,11 +18,12 @@ type Dialect struct {
 	defaultBaud       int
 	requiresPlatform  bool
 	restrictToRawOnly bool
+	family            DeviceFamily
 }
 
 var (
 	// SDKDemo is the text CLI exposed by the mmWave SDK demo firmware.
-	SDKDemo = Dialect{name: "demo", defaultBaud: 115200, requiresPlatform: true}
+	SDKDemo = sdkDemoDialect(xwr68xxFamily)
 
 	// StudioCLI is TI's xWR68xx studio_cli device firmware dialect.
 	StudioCLI = Dialect{
@@ -30,8 +31,28 @@ var (
 		defaultBaud:       921600,
 		requiresPlatform:  true,
 		restrictToRawOnly: true,
+		family:            xwr68xxFamily,
 	}
 )
+
+func sdkDemoDialect(family DeviceFamily) Dialect {
+	return Dialect{
+		name:             "demo",
+		defaultBaud:      115200,
+		requiresPlatform: true,
+		family:           family,
+	}
+}
+
+// SDKDemoForFamily constructs the SDK demo dialect for one strict canonical
+// device-family name.
+func SDKDemoForFamily(name string) (Dialect, error) {
+	family, err := ParseDeviceFamily(name)
+	if err != nil {
+		return Dialect{}, err
+	}
+	return sdkDemoDialect(family), nil
+}
 
 func (d Dialect) Name() string { return d.name }
 
@@ -39,8 +60,11 @@ func (d Dialect) DefaultBaud() int { return d.defaultBaud }
 
 func (d Dialect) RequiresPlatformVerification() bool { return d.requiresPlatform }
 
+// DeviceFamily returns the hardware descriptor bound to the dialect.
+func (d Dialect) DeviceFamily() DeviceFamily { return d.family }
+
 func (d Dialect) valid() bool {
-	return d.name != "" && d.defaultBaud > 0
+	return d.name != "" && d.defaultBaud > 0 && d.family.valid()
 }
 
 // TerminalStatus is the state found while accumulating a command response.
@@ -144,8 +168,8 @@ func IsAlreadyStopped(err error) bool {
 		commandError.Code == -54 && commandError.Command == "sensorStop"
 }
 
-// VerifyPlatformResponse enforces the xWR68xx version gate for dialects that
-// require platform verification.
+// VerifyPlatformResponse enforces the selected family version gate for
+// dialects that require platform verification.
 func (d Dialect) VerifyPlatformResponse(response string) error {
 	if !d.valid() {
 		return errors.New("invalid radar CLI dialect")
@@ -159,12 +183,17 @@ func (d Dialect) VerifyPlatformResponse(response string) error {
 		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Platform") {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(value), "xWR68xx") {
+		platform := strings.TrimSpace(value)
+		if d.family.acceptsPlatform(platform) {
 			return nil
 		}
-		return fmt.Errorf("version response reported unsupported platform %q; expected xWR68xx", strings.TrimSpace(value))
+		return fmt.Errorf(
+			"version response reported unsupported platform %q; expected %s",
+			platform,
+			d.family.expectedPlatforms(),
+		)
 	}
-	return errors.New("version response did not contain Platform: xWR68xx")
+	return fmt.Errorf("version response did not contain Platform: %s", d.family.expectedPlatforms())
 }
 
 var studioRawCommands = map[string]string{

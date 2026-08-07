@@ -52,6 +52,7 @@ Integrated capture builds an immutable capture plan before it creates output or 
 0.1 contract requires:
 
 - xWR68xx, one chip, `dfeDataOutputMode 1`, and software-triggered legacy frames;
+- an xWR68xx profile start frequency in the 57–64 GHz device band;
 - 16-bit complex ADC with matching ADC and DCA data formats;
 - no LVDS header, hardware ADC stream enabled, and software stream disabled;
 - two-lane DCA LVDS-to-Ethernet raw mode;

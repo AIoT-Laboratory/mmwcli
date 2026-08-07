@@ -62,6 +62,80 @@ func TestBuildFullCapturePlan(t *testing.T) {
 	}
 }
 
+func TestSDKDemoDeviceFamilyCapturePreflight(t *testing.T) {
+	tests := []struct {
+		family         string
+		platform       string
+		startFrequency int
+		wrongFrequency int
+	}{
+		{family: "xwr16xx", platform: "xWR16xx", startFrequency: 77, wrongFrequency: 60},
+		{family: "xwr18xx", platform: "xWR18xx", startFrequency: 77, wrongFrequency: 60},
+		{family: "xwr64xx", platform: "xWR64xx", startFrequency: 60, wrongFrequency: 77},
+		{family: "xwr68xx", platform: "xWR68xx", startFrequency: 60, wrongFrequency: 77},
+	}
+	for _, test := range tests {
+		t.Run(test.family, func(t *testing.T) {
+			dialect, err := SDKDemoForFamily(test.family)
+			if err != nil {
+				t.Fatal(err)
+			}
+			commands := captureCommandsForFamily(test.family, test.startFrequency)
+			plan, err := BuildCapturePlan(dialect, commands, FullConfiguration)
+			if err != nil {
+				t.Fatalf("valid %s plan rejected: %v", test.family, err)
+			}
+			if plan.Dialect.DeviceFamily().Name() != test.family || plan.ExpectedBytes != 26_214_400 {
+				t.Fatalf("unexpected %s plan: %+v", test.family, plan)
+			}
+
+			commands = captureCommandsForFamily(test.family, test.wrongFrequency)
+			if _, err := BuildCapturePlan(dialect, commands, FullConfiguration); err == nil ||
+				!strings.Contains(err.Error(), "start frequency") {
+				t.Fatalf("wrong-band plan error = %v", err)
+			}
+
+			commands = replaceCommand(
+				captureCommandsForFamily(test.family, test.startFrequency),
+				"frameCfg",
+				"frameCfg 0 1 256 100 100 1 0",
+			)
+			if _, err := BuildCapturePlan(dialect, commands, FullConfiguration); err == nil ||
+				!strings.Contains(err.Error(), test.platform+" frameCfg loop count") {
+				t.Fatalf("family-specific frame error = %v", err)
+			}
+		})
+	}
+}
+
+func TestXWR16xxRejectsTX2(t *testing.T) {
+	dialect, err := SDKDemoForFamily("xwr16xx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name     string
+		commands []string
+	}{
+		{
+			name:     "channel mask",
+			commands: replaceCommand(captureCommandsForFamily("xwr16xx", 77), "channelCfg", "channelCfg 15 7 0"),
+		},
+		{
+			name:     "chirp mask",
+			commands: replaceCommand(captureCommandsForFamily("xwr16xx", 77), "chirpCfg", "chirpCfg 0 0 0 0 0 0 0 4"),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := BuildCapturePlan(dialect, test.commands, FullConfiguration); err == nil ||
+				!strings.Contains(err.Error(), "TX0..TX1") {
+				t.Fatalf("TX2 error = %v", err)
+			}
+		})
+	}
+}
+
 func TestBuildPlanSynthesizesAndSeparatesStart(t *testing.T) {
 	withoutStart := validCommands()[:len(validCommands())-1]
 	plan, err := BuildCapturePlan(StudioCLI, withoutStart, FullConfiguration)
@@ -485,6 +559,24 @@ func TestSDKDemoPlanDoesNotUseStudioAllowlistOrFlushRule(t *testing.T) {
 	if plan.Dialect != SDKDemo {
 		t.Fatalf("wrong plan dialect: %+v", plan.Dialect)
 	}
+}
+
+func captureCommandsForFamily(family string, startFrequency int) []string {
+	commands := replaceCommand(
+		validCommands(),
+		"profileCfg",
+		fmt.Sprintf("profileCfg 0 %d 7 3 24 0 0 166 1 256 12500 0 0 158", startFrequency),
+	)
+	if family != "xwr16xx" {
+		return commands
+	}
+	commands = replaceCommand(commands, "channelCfg", "channelCfg 15 3 0")
+	return replaceCommandsByName(
+		commands,
+		"chirpCfg",
+		"chirpCfg 0 0 0 0 0 0 0 1",
+		"chirpCfg 1 1 0 0 0 0 0 2",
+	)
 }
 
 func replaceCommand(commands []string, name, replacement string) []string {
