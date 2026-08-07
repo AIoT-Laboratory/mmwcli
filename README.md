@@ -1,62 +1,39 @@
 # mmwcli
 
-`mmwcli` is a command-line acquisition runtime for TI xWR radars and DCA1000. It applies radar
-configurations, coordinates capture lifecycles, and writes raw ADC data with finite-capture integrity
-checks. It does not include a GUI, MATLAB, a Lua host, the mmWave Studio host runtime, or a
-data-processing pipeline.
+`mmwcli` configures TI xWR radars, coordinates DCA1000 capture, and publishes raw ADC data with finite-capture integrity checks. It has no GUI, MATLAB, Lua host, mmWave Studio runtime, or signal-processing pipeline.
 
-## Supported scope
+## Scope
 
-- 0.1 baseline: xWR6843 ES2, single chip, legacy frame, 16-bit complex ADC, and two hardware LVDS lanes.
-- SDK demo functional/application mode supports ordinary xWR16xx, xWR18xx, xWR64xx, and xWR68xx
-  platforms selected with `--radar-family`; xWR68xx is the default. AOP platforms are not included.
-- TI `studio_cli`, REPL, and debug-mode control remain xWR68xx-only.
-- Debug mode: download user-supplied MSS/BSS firmware in SOP2, then control the radar through FTDI D2XX and mmWaveLink.
-- DCA1000 data is written at its byte offset without reordering, parsing, or repair.
-- Advanced frame, cascade, LVDS headers, software LVDS, RF monitor UART, CSI-2, and TSW1400 are not supported.
+- SDK demo mode supports ordinary xWR16xx, xWR18xx, xWR64xx, and xWR68xx firmware through `--radar-family`; xWR68xx is the default. AOP aliases are not supported.
+- TI `studio_cli`, REPL, `debug-capture`, and capture-session v1 remain xWR68xx-specific.
+- The debug baseline is IWR6843 ES2, legacy frames, complex16 ADC, two LVDS lanes, and DCA1000 raw capture.
+- Advanced frames, cascade, LVDS headers, software LVDS, CSI-2, and implicit ADC processing are outside the contract.
 
-The `studio_cli` route only requires the user to flash `mmwave_Studio_cli_xwr68xx.bin`; neither Radar
-Toolbox nor mmWave Studio is required at runtime. The debug route also has no dependency on mmWave
-Studio host components.
+Version 0.1 validated only `debug-capture` on Windows/amd64 with IWR6843 ES2, DCA1000, and FTDI D2XX 3.2.14. See the [hardware record](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record). The SDK demo families and `studio-cli` path currently have source-backed offline validation only.
 
-Version 0.1 has hardware validation only for debug mode with Windows/amd64, FTDI D2XX 3.2.14,
-IWR6843 ES2, and DCA1000. Other combinations remain unvalidated; see the
-[hardware smoke test](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record).
+## Download and build
 
-The additional SDK demo families are based on TI SDK source and offline tests, not hardware
-validation. Each demo connection verifies the selected `Platform` before its first radar state
-change; `studio-cli` continues to require `Platform: xWR68xx`.
-
-## Download
-
-Prebuilt binaries and checksums are available from [GitHub Releases](https://github.com/AIoT-Laboratory/mmwcli/releases/latest).
-
-## Build
+Download binaries and checksums from [GitHub Releases](https://github.com/AIoT-Laboratory/mmwcli/releases/latest).
 
 Go 1.26 or newer is required. The repository has no third-party Go modules.
 
 ```sh
 make check
-make build
+go build -trimpath ./cmd/mmwcli
 ```
 
-Core builds use `CGO_ENABLED=0`. The Windows D2XX backend loads the system-installed `ftd2xx.dll`:
+`make build VERSION=x.y.z` compiles all packages with an injected version; it does not create a command binary.
 
-```powershell
-$env:CGO_ENABLED = '0'
-go build -trimpath -tags ftd2xx -o bin/mmwcli.exe ./cmd/mmwcli
-Remove-Item Env:CGO_ENABLED
-```
+Default builds use `CGO_ENABLED=0`. Enable the D2XX backend with the `ftd2xx` build tag:
 
-The Linux D2XX backend requires the official `ftd2xx.h` and `libftd2xx.so` for the target architecture:
+- Windows remains pure Go and loads the installed `ftd2xx.dll`.
+- Linux is the only CGo variant and requires the user-installed official `ftd2xx.h` and `libftd2xx.so`.
 
-```sh
-CGO_ENABLED=1 go build -trimpath -tags ftd2xx -o bin/mmwcli ./cmd/mmwcli
-```
+Build the tagged command with `go build -tags ftd2xx ./cmd/mmwcli` on Windows or `CGO_ENABLED=1 go build -tags ftd2xx ./cmd/mmwcli` on Linux.
 
-The repository and release archives do not distribute FTDI libraries, headers, drivers, or TI firmware.
+The repository and release archives do not distribute FTDI or TI assets.
 
-## Offline checks
+## Offline validation
 
 ```text
 mmwcli doctor
@@ -67,94 +44,65 @@ mmwcli debug-capture check --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68
 mmwcli debug-capture native-check
 ```
 
-These commands do not open devices; `native-check` only loads the D2XX library. A successful check
-does not validate a hardware combination.
+These commands do not open radar or DCA devices. `native-check` only loads the D2XX library.
 
-The `--radar-family` option is available on all `demo` actions: `check`, `version`, `apply`, `start`,
-`stop`, and `capture`. For example:
+## Capture workflows
+
+### SDK demo firmware
 
 ```text
 mmwcli demo capture PATH/profile.cfg capture.bin --port PORT --radar-family xwr18xx
 ```
 
-The SDK demo profile must enable compatible hardware ADC LVDS output explicitly.
+The profile must explicitly enable compatible hardware ADC LVDS output.
 
-## REPL
+### xWR68xx `studio_cli`
+
+Flash `mmwave_Studio_cli_xwr68xx.bin`, boot in functional/application mode, and provide its CLI UART:
+
+```text
+mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture.bin --port PORT
+```
+
+The complete two-run `--no-reconfig` procedure is in the [hardware smoke test](docs/hardware-smoke-test.md).
+
+### xWR68xx debug mode
+
+Use an `ftd2xx` build and user-supplied xWR68xx RF-evaluation BSS/MSS firmware:
+
+```text
+mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg capture.bin \
+  --enhanced-port PORT \
+  --bss-fw PATH/xwr68xx_radarss.bin \
+  --mss-fw PATH/xwr68xx_masterss.bin \
+  --d2xx-description AR-DevPack-EVM-012 \
+  --sop2-reset
+```
+
+`AR-DevPack-EVM-012` is the D2XX description base used for the 0.1 validation. A serial-base example is `--d2xx-serial FT1234` for interfaces `FT1234A`/`FT1234B` and, with `--sop2-reset`, `FT1234C`/`FT1234D`. The example serial is not the validation board's serial.
+
+Enhanced COM downloads firmware; D2XX A/B carries mmWaveLink control. D/C is opened only for explicit `--sop2-reset`.
+
+### REPL
 
 ```text
 mmwcli repl --port PORT
 ```
 
-`repl` accepts only firmware that passes the xWR68xx `version` gate and implements the TI
-`studio_cli` line protocol. An unknown response closes the session without an automatic retry. The
-REPL can send extension commands from compatible firmware, but that does not make the firmware a
-supported capture backend.
+REPL accepts only the xWR68xx `studio_cli` line protocol. A response without explicit `Done` or numeric `Error` terminates the session.
 
-## xWR6843 + DCA1000 quick start
+## Output guarantees
 
-The default host address is `192.168.33.30/24`; the DCA1000 address is `192.168.33.180`; the UDP
-control/data ports are `4096/4098`. The two modes below use different firmware, ports, and control
-protocols and must not be mixed.
+- CFG, mode, size, and output checks complete before hardware access.
+- StartRecord is sent once; an indeterminate result is never retried.
+- Finite captures require exact byte coverage. Gaps, overlaps, short data, and extra data fail.
+- Output is staged as `OUT.part` and published as `OUT` without overwrite only after capture and cleanup succeed. Failure retains `.part`.
+- `studio-cli capture` and `debug-capture capture` accept `--session-dir`, publishing `adc.bin`, `radar.cfg`, and `capture.json` as one no-overwrite directory transaction.
+- Low-level DCA commands are serialized; `ping` is not a capture-readiness gate, and reset occurs only through an explicit command or option.
+- `sensorStop` stops the sensor only; it does not power off the radar or DCA1000.
 
-### Functional/application mode
-
-Flash `mmwave_Studio_cli_xwr68xx.bin`, boot the radar in normal functional/application mode, and
-explicitly provide that firmware's CLI UART. The first capture sends the complete configuration:
-
-```text
-mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-01.bin --port PORT
-```
-
-Without changing the firmware, SOP, CFG, serial port, or DCA1000 connection, test reuse without
-reconfiguration:
-
-```text
-mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-02.bin --port PORT --no-reconfig
-```
-
-Do not use `--reset` for either run. The example CFG should produce exactly `26,214,400` bytes per
-capture, with no missing/discarded data or leftover `.part` file. This route has not completed
-hardware validation.
-
-### Debug mode
-
-Use a build with the `ftd2xx` tag, obtain the BSS/MSS files from the xWR68xx RF evaluation firmware,
-and explicitly provide the Enhanced COM port and the D2XX base for the same FTDI device:
-
-```text
-mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg capture-debug.bin --enhanced-port PORT --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin --d2xx-description AR-DevPack-EVM-012 --sop2-reset
-```
-
-`AR-DevPack-EVM-012` is the description base used for the 0.1 hardware validation. The program
-derives `AR-DevPack-EVM-012 A/B`, plus C/D when `--sop2-reset` is enabled.
-
-Serial-number selection is also supported. For example, if D2XX reports interface serials
-`FT1234A`, `FT1234B`, `FT1234C`, and `FT1234D`, use `--d2xx-serial FT1234`. This is a format example,
-not the serial of the 0.1 validation device. The description and serial selectors are mutually
-exclusive.
-
-Enhanced COM only downloads MSS/BSS. D2XX A/B then carries mmWaveLink control, while DCA1000 sends
-ADC data over Ethernet. `--sop2-reset` uses D/C to select SOP2 and reset the radar target; it is
-unrelated to the DCA FPGA `--reset`. Every debug capture downloads and configures the radar again;
-`--no-reconfig` is not supported.
-
-Do not use `studio-cli capture` in SOP2 or treat Enhanced COM as a text CLI UART. TI asset names and
-checksums are listed in the [TI reference map](docs/ti-reference-map.md).
-
-## Runtime semantics
-
-- CFG, mode, expected byte count, and output paths are checked before hardware I/O.
-- An unknown Start result is not retried; failure paths use bounded cleanup.
-- A finite capture must match the exact byte count derived from its CFG.
-- Raw output is written to `OUT.part` and published without overwrite as `OUT` only after full success; failures retain `.part`.
-- `studio-cli capture` and `debug-capture capture` accept `--session-dir`. Success publishes `OUT/adc.bin`, `OUT/radar.cfg`, and `OUT/capture.json`; failure retains `OUT.part/`. Without the flag, output remains a raw file.
-- Low-level `dca` commands must not run concurrently; `dca ping` is not a capture prerequisite; reset requires an explicit command or option.
-- `sensorStop` stops the sensor only; it does not power off the radar board or RF domain.
-
-Run `mmwcli help` or a subcommand's `--help` for commands and options. See the
-[architecture](docs/architecture.md) for design details.
+See the [architecture](docs/architecture.md), [hardware smoke test](docs/hardware-smoke-test.md), and [TI reference map](docs/ti-reference-map.md).
 
 ## License
 
-mmwcli is licensed under the [MIT License](LICENSE). TI and FTDI assets remain subject to their own
-terms; see the [third-party notices](THIRD_PARTY_NOTICES.md).
+mmwcli is licensed under the [MIT License](LICENSE). TI and FTDI assets retain their own terms.
