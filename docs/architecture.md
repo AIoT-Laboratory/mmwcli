@@ -67,7 +67,8 @@ common capture contract requires:
 - enough Rx, sample, chirp, loop, and frame information to derive the exact output size for a finite capture.
 
 `sensorStart` may be omitted. When present, it must be unique and last; the coordinator removes it
-before applying the configuration. A full `studio_cli` configuration must start with `flushCfg` and
+before applying the configuration. Full SDK demo and `studio_cli` configurations begin with exactly
+one case-sensitive `flushCfg`. SDK demo then accepts firmware-specific commands; `studio_cli` must
 pass the raw-only allowlist. `--no-reconfig` still performs the complete preflight on the same CFG,
 but sends only `sensorStart 0`; it is available only for `studio-cli`.
 

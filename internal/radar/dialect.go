@@ -226,15 +226,19 @@ var studioOutOfScopeCommands = map[string]struct{}{
 	"psloopcfg": {}, "paloopcfg": {}, "misccfg": {},
 }
 
-// ValidateConfiguration enforces the audited raw-only command surface of the
-// studio_cli dialect. When full is true, flushCfg must occur exactly once
-// and be the first command. A flushCfg supplied in reuse mode must still be
-// first; reuse does not imply that flushCfg clears profile/chirp counters.
+// ValidateConfiguration enforces dialect-specific configuration boundaries.
+// A full SDK demo configuration begins with exactly one case-sensitive
+// flushCfg but otherwise accepts firmware-specific commands. The studio_cli
+// dialect additionally enforces its audited raw-only command surface. A
+// flushCfg supplied to studio_cli in reuse mode must still be first.
 func (d Dialect) ValidateConfiguration(commands []string, full bool) error {
 	if !d.valid() {
 		return errors.New("invalid radar CLI dialect")
 	}
 	if !d.restrictToRawOnly {
+		if full {
+			return validateSDKDemoFullConfiguration(commands)
+		}
 		return nil
 	}
 
@@ -275,6 +279,24 @@ func (d Dialect) ValidateConfiguration(commands []string, full bool) error {
 	}
 	if full && flushes != 1 {
 		return errors.New("full studio_cli configuration must begin with exactly one flushCfg; use reuse mode for a second capture")
+	}
+	return nil
+}
+
+func validateSDKDemoFullConfiguration(commands []string) error {
+	const requirement = "full SDK demo configuration must begin with exactly one case-sensitive flushCfg command"
+	if len(commands) == 0 {
+		return errors.New(requirement)
+	}
+	first := strings.Fields(commands[0])
+	if len(first) != 1 || first[0] != "flushCfg" {
+		return errors.New(requirement)
+	}
+	for _, command := range commands[1:] {
+		fields := strings.Fields(command)
+		if len(fields) != 0 && strings.EqualFold(fields[0], "flushCfg") {
+			return errors.New(requirement)
+		}
 	}
 	return nil
 }

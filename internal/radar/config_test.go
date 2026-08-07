@@ -564,15 +564,35 @@ func TestCapturePlanRejectsInvalidContracts(t *testing.T) {
 	}
 }
 
-func TestSDKDemoPlanDoesNotUseStudioAllowlistOrFlushRule(t *testing.T) {
-	commands := validCommands()[1:]
-	commands = append([]string{"customDemoCommand 1"}, commands...)
+func TestSDKDemoPlanAllowsDemoCommandAfterRequiredFlush(t *testing.T) {
+	commands := append([]string{"flushCfg", "customDemoCommand 1"}, validCommands()[1:]...)
 	plan, err := BuildCapturePlan(SDKDemo, commands, FullConfiguration)
 	if err != nil {
 		t.Fatalf("SDK demo plan rejected demo-specific command: %v", err)
 	}
 	if plan.Dialect != SDKDemo {
 		t.Fatalf("wrong plan dialect: %+v", plan.Dialect)
+	}
+}
+
+func TestSDKDemoFullConfigurationRequiresExactLeadingFlush(t *testing.T) {
+	tests := []struct {
+		name     string
+		commands []string
+	}{
+		{name: "missing", commands: validCommands()[1:]},
+		{name: "misplaced", commands: append([]string{"customDemoCommand 1"}, validCommands()...)},
+		{name: "wrong case", commands: replaceCommand(validCommands(), "flushCfg", "FlushCfg")},
+		{name: "arguments", commands: replaceCommand(validCommands(), "flushCfg", "flushCfg 1")},
+		{name: "duplicate", commands: append([]string{"flushCfg"}, validCommands()...)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := BuildCapturePlan(SDKDemo, test.commands, FullConfiguration)
+			if err == nil || !strings.Contains(err.Error(), "exactly one case-sensitive flushCfg") {
+				t.Fatalf("error = %v, want exact leading flushCfg rejection", err)
+			}
+		})
 	}
 }
 

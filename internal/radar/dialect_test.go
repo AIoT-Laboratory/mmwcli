@@ -201,7 +201,7 @@ func TestStudioRawOnlyAllowlist(t *testing.T) {
 	if err := StudioCLI.ValidateConfiguration(commands, true); err != nil {
 		t.Fatalf("valid raw-only commands rejected: %v", err)
 	}
-	if err := SDKDemo.ValidateConfiguration([]string{"unextendedDemoCommand 1"}, true); err != nil {
+	if err := SDKDemo.ValidateConfiguration([]string{"flushCfg", "unextendedDemoCommand 1"}, true); err != nil {
 		t.Fatalf("SDK demo command was subjected to studio allowlist: %v", err)
 	}
 }

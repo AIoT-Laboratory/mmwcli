@@ -234,7 +234,7 @@ func TestSDKDemoSendsVersionBeforeStart(t *testing.T) {
 }
 
 func TestSDKDemoPlatformMismatchBlocksStateWrites(t *testing.T) {
-	plan, err := BuildCapturePlan(SDKDemo, validCommands()[1:], FullConfiguration)
+	plan, err := BuildCapturePlan(SDKDemo, validCommands(), FullConfiguration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestSDKDemoPlatformMismatchBlocksStateWrites(t *testing.T) {
 }
 
 func TestSDKDemoCaptureLifecycleVerifiesBeforeFirstStateWrite(t *testing.T) {
-	plan, err := BuildCapturePlan(SDKDemo, validCommands()[1:], FullConfiguration)
+	plan, err := BuildCapturePlan(SDKDemo, validCommands(), FullConfiguration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestApplyRejectsReuseAndDialectMismatchWithoutIO(t *testing.T) {
 		t.Fatal("Apply touched transport for invalid reuse plan")
 	}
 
-	demoPlan, err := BuildCapturePlan(SDKDemo, validCommands()[1:], FullConfiguration)
+	demoPlan, err := BuildCapturePlan(SDKDemo, validCommands(), FullConfiguration)
 	if err != nil {
 		t.Fatal(err)
 	}
