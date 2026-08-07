@@ -1,101 +1,117 @@
 # mmwcli Agent Guide
 
-本文件约束仓库内的自动化开发。面向用户的行为与用法以 `README.md` 和 `docs/` 为准。
+This file governs automated development in this repository. User-facing behavior and usage are
+defined by `README.md` and `docs/`.
 
-## 项目边界
+## Project boundaries
 
-- `mmwcli` 是 TI xWR68xx 的跨平台命令行控制与 DCA1000 原始 ADC 采集工具。
-- 首期基线是 xWR6843 ES2、legacy frame、16-bit complex ADC、两路 LVDS。
-- 已实现的 functional/application 路线只通过 SDK demo CLI 或 TI `studio_cli` 设备固件的
-  文本串口控制。`studio_cli` 路线只需要用户自行烧录
-  `mmwave_Studio_cli_xwr68xx.bin`，不要求完整 Radar Toolbox 安装。
-- 顶层 `repl` 固定使用 `studio_cli` 行协议与 xWR68xx `version` 门禁，不提供可选的自定义
-  方言或跳过门禁模式。它可以发送兼容固件扩展的单行命令，但不因此把该固件声明为受支持
-  的配置或采集 backend；无明确 `Done`/`Error <code>` 的未知结果必须立即终止会话。
-- SOP2 主机下载与直控路线的公开命令固定为 `debug-capture`，不得提供其它架构或型号
-  别名。该路线可加载用户显式提供的 MSS/BSS 固件，但必须与文本 CLI 路线分层实现，
-  不能依赖 mmWave Studio 主机运行时。
-- TI 参考流程只在固件内存写阶段使用 Enhanced COM，随后切换到 FTDI MPSSE SPI/IRQ；
-  不得把 `debug-capture` 建模为纯 UART 路线。该路线的主机 USB transport 固定使用 FTDI
-  D2XX，不实现自有 raw-USB，也不绑定或复制 mmWave Studio DLL/FTDILib。
-- 主机端使用 Go 1.26+ 标准库；默认构建固定 `CGO_ENABLED=0`，支持 Windows/Linux amd64
-  与 arm64。D2XX backend 只在 `ftd2xx` build tag 下启用：Windows 仍使用纯 Go 并加载系统
-  安装的 DLL；Linux 是唯一允许的 CGo 例外，包含用户安装的官方 `ftd2xx.h` 并链接
-  `libftd2xx.so`。原生 backend 的架构支持取决于匹配的 FTDI 库，必须逐项实机验证。
-- 不引入 GUI、MATLAB、后处理链、C#/.NET、mmWave Studio 运行时、TI DCA CLI、Lua
-  host/interpreter 或第三方 Go 模块。除上述 Linux D2XX 适配层外禁止 CGo。
-- 仓库与发布包不分发 FTDI header、library、driver 或 installer；只绑定完成当前操作所需的
-  最小 D2XX ABI，不移植 TI 的完整 FTDILib。
-- TI 固件、配置和工具由用户从自己的 TI 安装中提供；不得复制到仓库或发布包。
-- `sensorStop` 只停止传感器，不代表雷达或采集卡断电。
+- `mmwcli` is a cross-platform command-line controller and DCA1000 raw-ADC acquisition tool for TI xWR68xx.
+- The initial baseline is xWR6843 ES2, legacy frame, 16-bit complex ADC, and two LVDS lanes.
+- The implemented functional/application workflows use text serial control only, through SDK demo
+  CLI firmware or TI `studio_cli` device firmware. The `studio_cli` workflow requires only the user
+  to flash `mmwave_Studio_cli_xwr68xx.bin`; a complete Radar Toolbox installation is unnecessary.
+- The top-level `repl` is fixed to the `studio_cli` line protocol and xWR68xx `version` validation.
+  It must not provide a selectable custom dialect or a way to bypass validation. It may send
+  single-line extension commands from compatible firmware, but that does not make the firmware a
+  supported configuration or capture backend. A response without an explicit `Done` or numeric
+  `Error <code>` must terminate the session immediately.
+- The public command for SOP2 host download and direct control is always `debug-capture`; do not add
+  architecture or device-family aliases. This workflow may load user-supplied MSS/BSS firmware, but
+  it must remain layered separately from the text CLI workflows and must not depend on the mmWave
+  Studio host runtime.
+- The TI reference workflow uses Enhanced COM only for firmware-memory writes and then switches to
+  FTDI MPSSE SPI/IRQ. Do not model `debug-capture` as a UART-only workflow. Its host USB transport is
+  fixed to FTDI D2XX; do not implement custom raw USB or bind/copy mmWave Studio DLLs or FTDILib.
+- Host code uses Go 1.26+ and the standard library. Default builds use `CGO_ENABLED=0` and support
+  Windows/Linux on amd64 and arm64. The D2XX backend is enabled only by the `ftd2xx` build tag:
+  Windows remains pure Go and loads the system-installed DLL; Linux is the only permitted CGo
+  exception, includes the user-installed official `ftd2xx.h`, and links `libftd2xx.so`. Native
+  backend architecture support depends on a matching FTDI library and must be validated separately.
+- Do not add a GUI, MATLAB, a processing pipeline, C#/.NET, the mmWave Studio runtime, TI's DCA CLI,
+  a Lua host/interpreter, or third-party Go modules. CGo is forbidden except for the Linux D2XX
+  adapter described above.
+- The repository and release archives must not distribute FTDI headers, libraries, drivers, or
+  installers. Bind only the minimum D2XX ABI needed for current operations; do not port TI's complete
+  FTDILib.
+- Users supply TI firmware, configurations, and tools from their own installations. Do not copy
+  these assets into the repository or release archives.
+- `sensorStop` stops the sensor only; it does not power off the radar or capture card.
 
-## 强制小批次
+## Mandatory small batches
 
-大型任务必须先拆分，禁止把实现、全库审计、文档重写和发布合并成一个批次。
+Large tasks must be split before implementation. Do not combine implementation, whole-repository
+audits, documentation rewrites, and releases into one batch.
 
-满足任一条件时，编辑前必须列出多个可独立验收的批次：
+Before editing, define multiple independently verifiable batches when any of these conditions apply:
 
-- 涉及超过 2 个 package 或 8 个仓库文件；
-- 改变超过 1 项公开行为；
-- 同时包含实现与仓库级文档、发布或迁移工作；
-- 预计连续工作超过 30 分钟。
+- more than two packages or eight repository files are affected;
+- more than one public behavior changes;
+- implementation is combined with repository-wide documentation, a release, or migration work;
+- continuous work is expected to exceed 30 minutes.
 
-每个批次必须遵守：
+Each batch must follow these rules:
 
-1. 只有一个主要目标，并写明退出条件。
-2. 只修改达成该目标所需的文件；行为变化同时带最窄相关测试。
-3. 完成后先运行窄验证、检查 diff，并向用户报告检查点；用户已授权提交时按批提交。
-4. 新问题跨越额外 package、文件数越界或改变既定方案时，立即停止扩张并重新拆分。
-5. 子代理只能承担边界明确、互不重叠的只读审计或小批实现，不能把拆分后的工作重新汇总成
-   一个超大改动。
+1. Give the batch one primary objective and a clear exit condition.
+2. Modify only the files required for that objective; add the narrowest relevant tests for behavior changes.
+3. Run narrow validation and inspect the diff before reporting the checkpoint. When commits are authorized, commit each batch separately.
+4. If a new issue crosses another package, exceeds the file limit, or changes the agreed design, stop expanding the batch and split again.
+5. Sub-agents may perform bounded, non-overlapping read-only audits or small implementations. They must not recombine split work into one large change.
 
-超过上述上限的例外必须在编辑前获得用户明确授权。机械生成文件不用于规避文件数限制。
+Exceptions to these limits require explicit user approval before editing. Mechanically generated files
+must not be used to evade the limits.
 
-## 开始工作
+## Starting work
 
-1. 阅读本文件、`README.md` 和与任务直接相关的 `docs/`。
-2. 用只读 Git 命令确认分支、工作树和上游；未提交内容默认属于用户。
-3. 声明当前批次、退出条件和是否涉及硬件。
-4. 优先查 TI 官方本地资料与随附源码，不凭记忆猜协议。
+1. Read this file, `README.md`, and the directly relevant files under `docs/`.
+2. Use read-only Git commands to inspect the branch, worktree, and upstream. Treat existing changes as user-owned.
+3. State the current batch, its exit condition, and whether it touches hardware.
+4. Prefer local official TI material and included reference source; do not guess protocol details from memory.
 
-## 硬件安全
+## Hardware safety
 
-- 默认只运行离线测试和 loopback fake。
-- 没有用户在当前任务中的明确授权，不打开串口，不发送雷达命令，也不运行任何
-  `dca ping/version/configure/start/stop/reset-*`。
-- 用户授权探测时，每个目标只尝试一次；首次超时、bind error 或无响应后停止。唯一例外是
-  同一次 `debug-capture` Enhanced COM 连接内的 TI 固定波特率协商；电源、线缆或占用状态
-  改变且用户要求后，才能重新发起连接。
-- 不扫描串口，不猜测 CLI 端口、固件或波特率。Enhanced COM 只允许 921600→115200→921600
-  的固定协商，且仅在初始只读探测超时或响应不符合 TI 的 1–8 位十六进制规则、端口成功
-  关闭时进入。115200 探测后必须在任何状态写入前通过 xWR6843 part number 门禁；低速探测
-  无效、状态写入未知或关闭失败都不得继续或重试。
-- 不并行执行两个 DCA 控制命令；它们默认竞争主机 UDP 4096。
-- `SystemAlive` 只属于显式 `dca ping`，不是 configure/capture 的自动前置条件。
-- StartRecord 结果未知时不得重发 Start；只允许一次有界 StopRecord 收敛。
-- reset 只能由显式参数或用户明确请求触发。常规采集必须允许 DCA1000 复用。
+- Run offline tests and loopback fakes by default.
+- Without explicit user authorization in the current task, do not open a serial port, send radar
+  commands, or run any `dca ping/version/configure/start/stop/reset-*` operation.
+- When the user authorizes a probe, attempt each target once. Stop after the first timeout, bind
+  error, or no response. The only exception is TI's fixed baud negotiation within one
+  `debug-capture` Enhanced COM connection. A new connection attempt requires a power, cable, or
+  ownership change followed by a user request.
+- Do not scan serial ports or guess the CLI port, firmware, or baud. Enhanced COM permits only the
+  fixed 921600-to-115200-to-921600 negotiation. It may enter that sequence only after the initial
+  read-only probe times out or violates TI's one-to-eight-digit hexadecimal rule and the port closes
+  successfully. After the 115200 probe, the xWR6843 part number must pass validation before any state
+  write. An invalid low-speed probe, indeterminate state write, or close failure must stop without
+  continuation or retry.
+- Do not run two DCA control commands concurrently; they contend for host UDP port 4096 by default.
+- `SystemAlive` belongs only to an explicit `dca ping`; it is not an automatic configure/capture prerequisite.
+- An indeterminate StartRecord result must not be retried. Only one bounded StopRecord recovery is allowed.
+- Reset requires an explicit option or user request. Normal capture must permit DCA1000 reuse.
 
-## 实现约束
+## Implementation constraints
 
-- 保持 `radar`、`dca`、`session`、`capturefile` 和 `serialport` 的职责边界；平台差异只放在
-  小型 OS transport 文件中。
-- 所有 CFG 与采集组合必须在创建输出文件和硬件 I/O 前完成预检。
-- 一体化采集顺序为：配置雷达、启动 DCA 记录、启动雷达。正常完成的有限 debug capture
-  消费固件的自然 frame-end 事件；其余路径先显式停止雷达，再有限 drain、停止 DCA 并有限
-  drain 控制状态。
-- 任何 start 的未知结果都不得自动重试。清理使用独立、有界 context。
-- 输出先独占创建为 `OUT.part`；仅在采集与清理全部成功后无覆盖发布为 `OUT`。失败保留
-  `.part` 供诊断。
-- 有限帧必须匹配 CFG 推导的精确字节数；空洞、重叠、前缀丢失、过短或过长流都失败。
-- DCA 响应必须按协议验证帧结构和命令；保持与 TI CLI 一致的未知来源响应兼容行为。
-- 原始输出保持原样，不做重排、解析、FFT、检测或隐式修复。
-- 离线测试不能证明硬件兼容；兼容性结论必须来自可复现的实机验收记录。
+- Preserve the responsibility boundaries of `radar`, `dca`, `session`, `capturefile`, and
+  `serialport`. Keep platform differences in small OS transport files.
+- Complete all CFG and capture-combination preflight before creating output or performing hardware I/O.
+- Integrated capture order is: configure the radar, start DCA recording, then start the radar. A
+  successful finite debug capture consumes the firmware's natural frame-end event. Other paths stop
+  the radar explicitly, perform bounded draining, stop DCA, and drain control status within a bound.
+- Never retry an indeterminate start. Cleanup uses an independent, bounded context.
+- Create output exclusively as `OUT.part`. Publish without overwrite as `OUT` only after capture and
+  cleanup both succeed. Retain `.part` on failure.
+- A finite frame sequence must match the exact byte count derived from its CFG. Gaps, overlaps,
+  missing prefixes, short streams, and long streams all fail.
+- Validate DCA response structure and command codes. Preserve TI CLI-compatible handling of
+  responses from an unknown source address.
+- Preserve raw output exactly. Do not reorder, parse, run FFT/detection, or repair data implicitly.
+- Offline tests cannot establish hardware compatibility. Compatibility claims require a reproducible
+  hardware-validation record.
 
-详细协议与状态机见 `docs/architecture.md`。
+See `docs/architecture.md` for protocol and state-machine details.
 
-## 验证
+## Validation
 
-普通改动从最窄相关命令开始；涉及协议、生命周期、并发或发布路径时再扩展到全库：
+Start with the narrowest relevant command. Expand to the full repository for protocol, lifecycle,
+concurrency, or release-path changes:
 
 ```text
 CGO_ENABLED=0 go test ./...
@@ -105,14 +121,16 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/mmwcli-linux-amd
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o bin/mmwcli-linux-arm64 ./cmd/mmwcli
 ```
 
-报告实际运行的命令，并区分离线验证、环境检查和实机验收。默认验证不得访问硬件、安装
-依赖或下载工具链。
+Report the commands actually run and distinguish offline validation, environment checks, and hardware
+validation. Default validation must not access hardware, install dependencies, or download toolchains.
 
-## Git 与公开文档
+## Git and public documentation
 
-- 默认开发分支是 `dev`；普通提交推送到 `origin/dev`，不得 force-push。
-- 未经用户明确要求，不 commit、push、切换分支、改写历史、打 tag 或发布。
-- 提交格式为 `<type>(<scope>): <description>`，一个提交只表达一个逻辑变化。
-- 公开文档只描述可复现的安装、能力、限制和验证方法；不写本机绝对路径、代理工作过程、
-  历史失误、临时状态或未验证的兼容性声明。
-- 代码行为变化必须同步更新测试和直接相关文档，避免在多份文档重复同一段细节。
+- The default development branch is `dev`. Push ordinary commits to `origin/dev`; never force-push.
+- Do not commit, push, switch branches, rewrite history, create tags, or publish a release without explicit user authorization.
+- Commit messages use `<type>(<scope>): <description>`, with one logical change per commit.
+- Public documentation describes only reproducible installation, capabilities, limitations, and
+  validation. Do not include local absolute paths, agent work history, past mistakes, temporary state,
+  or unvalidated compatibility claims.
+- A behavior change must update its tests and directly related documentation. Avoid repeating the same
+  details across multiple documents.
