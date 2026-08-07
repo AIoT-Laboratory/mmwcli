@@ -32,7 +32,7 @@ type debugCaptureSessionRunner func(
 	session.DCAControl,
 	session.ReceiverFactory,
 	radar.CapturePlan,
-	*capturefile.File,
+	capturefile.Output,
 	session.Options,
 ) (dca.CaptureStats, error)
 

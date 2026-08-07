@@ -191,7 +191,7 @@ func TestDebugCaptureCaptureUsesDCAThenControllerAndSession(t *testing.T) {
 		_ session.DCAControl,
 		_ session.ReceiverFactory,
 		plan radar.CapturePlan,
-		output *capturefile.File,
+		output capturefile.Output,
 		options session.Options,
 	) (dca.CaptureStats, error) {
 		events = append(events, "session")
@@ -308,7 +308,7 @@ func preflightOnlyDebugCaptureDependencies(hardwareCalls *int) debugCaptureDepen
 			session.DCAControl,
 			session.ReceiverFactory,
 			radar.CapturePlan,
-			*capturefile.File,
+			capturefile.Output,
 			session.Options,
 		) (dca.CaptureStats, error) {
 			return dca.CaptureStats{}, errors.New("unexpected session access")

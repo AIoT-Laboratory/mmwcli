@@ -160,6 +160,29 @@ func (f *fakeReceiver) Close() error {
 	return f.closeErr
 }
 
+func TestRunRejectsTypedNilOutputBeforeHardware(t *testing.T) {
+	events := []string{}
+	var output *capturefile.File
+	_, err := Run(
+		context.Background(),
+		&fakeRadar{events: &events},
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) {
+			t.Fatal("receiver factory called for unusable output")
+			return nil, nil
+		},
+		sessionTestPlan(t),
+		output,
+		DefaultOptions(),
+	)
+	if err == nil || !strings.Contains(err.Error(), "dependencies are incomplete") {
+		t.Fatalf("Run error = %v, want incomplete dependencies", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("hardware events = %v, want none", events)
+	}
+}
+
 func TestReuseCaptureSendsNoConfigurationAndArmsBeforeStart(t *testing.T) {
 	commands := []string{
 		"flushCfg",

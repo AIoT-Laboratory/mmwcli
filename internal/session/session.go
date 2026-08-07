@@ -100,13 +100,13 @@ func Run(
 	dcaControl DCAControl,
 	newReceiver ReceiverFactory,
 	plan radar.CapturePlan,
-	output *capturefile.File,
+	output capturefile.Output,
 	options Options,
 ) (stats dca.CaptureStats, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if radarControl == nil || dcaControl == nil || newReceiver == nil || output == nil {
+	if radarControl == nil || dcaControl == nil || newReceiver == nil || !capturefile.IsUsableOutput(output) {
 		return stats, errors.New("capture session dependencies are incomplete")
 	}
 	outputManagedByLifecycle := false
