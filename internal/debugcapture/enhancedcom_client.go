@@ -323,7 +323,9 @@ func (client *enhancedCOMClient) writeLocked(
 
 	written, writeErr := client.transport.Write(command)
 	postWriteErr := ctx.Err()
-	if postWriteErr == nil && client.closed.Load() {
+	// Closing the client also cancels ctx. Preserve the stronger lifecycle
+	// identity instead of exposing a scheduler-dependent context.Canceled.
+	if client.closed.Load() {
 		postWriteErr = errEnhancedCOMClosed
 	}
 	if written == len(command) && writeErr == nil && postWriteErr == nil {
