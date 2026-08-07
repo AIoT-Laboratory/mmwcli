@@ -44,7 +44,7 @@ const (
 	dcaReceiverFlags
 )
 
-func runDCA(arguments []string, stdout, stderr io.Writer) error {
+func runDCA(arguments []string, stdout, stderr io.Writer) (resultErr error) {
 	if len(arguments) == 0 {
 		return usageError{message: "dca requires ping, version, configure, start, stop, reset-fpga, reset-radar, or capture"}
 	}
@@ -114,7 +114,18 @@ func runDCA(arguments []string, stdout, stderr io.Writer) error {
 		}
 		return err
 	}
-	defer client.Close()
+	if action == "capture" {
+		defer func() {
+			resultErr = closeCaptureClient(
+				resultErr,
+				captureOutput.Committed(),
+				"DCA1000 control client",
+				client,
+			)
+		}()
+	} else {
+		defer client.Close()
+	}
 
 	ctx, stopSignal := hardwareSignalContext()
 	defer stopSignal()

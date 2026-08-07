@@ -305,12 +305,26 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 		transport.Close()
 		return err
 	}
-	defer radarClient.Close()
+	defer func() {
+		resultErr = closeCaptureClient(
+			resultErr,
+			output.Committed(),
+			"radar client",
+			radarClient,
+		)
+	}()
 	dcaClient, err := dca.Dial(dcaOptions.control)
 	if err != nil {
 		return err
 	}
-	defer dcaClient.Close()
+	defer func() {
+		resultErr = closeCaptureClient(
+			resultErr,
+			output.Committed(),
+			"DCA1000 control client",
+			dcaClient,
+		)
+	}()
 
 	ctx, stopSignal := hardwareSignalContext()
 	defer stopSignal()
