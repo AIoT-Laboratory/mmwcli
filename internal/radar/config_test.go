@@ -251,13 +251,22 @@ func TestSDKDemoExpectedBytesRejectsMixedFrameProfiles(t *testing.T) {
 }
 
 func TestSDKDemoADCBufContract(t *testing.T) {
-	commands := replaceCommand(validCommands(), "adcbufCfg", "adcbufCfg 0 0 0 0 1")
-	plan, err := BuildCapturePlan(SDKDemo, commands, FullConfiguration)
-	if err != nil {
-		t.Fatalf("SDK demo rejected a complex, one-chirp ADCBuf layout: %v", err)
-	}
-	if plan.ExpectedBytes != 26_214_400 {
-		t.Fatalf("ExpectedBytes = %d, want 26214400", plan.ExpectedBytes)
+	for _, command := range []string{
+		"adcbufCfg -1 0 0 0 1",
+		"adcbufCfg -1 0 1 1 1",
+		"adcbufCfg 0 0 0 0 1",
+		"adcbufCfg 0 0 1 1 1",
+	} {
+		t.Run("accept "+command, func(t *testing.T) {
+			commands := replaceCommand(validCommands(), "adcbufCfg", command)
+			plan, err := BuildCapturePlan(SDKDemo, commands, FullConfiguration)
+			if err != nil {
+				t.Fatalf("SDK demo rejected a bounded complex, one-chirp ADCBuf layout: %v", err)
+			}
+			if plan.ExpectedBytes != 26_214_400 {
+				t.Fatalf("ExpectedBytes = %d, want 26214400", plan.ExpectedBytes)
+			}
+		})
 	}
 
 	tests := []struct {
@@ -267,6 +276,12 @@ func TestSDKDemoADCBufContract(t *testing.T) {
 	}{
 		{name: "real format", command: []string{"adcbufCfg -1 1 1 1 1"}, match: "complex ADCBuf format"},
 		{name: "multi chirp threshold", command: []string{"adcbufCfg -1 0 1 1 2"}, match: "chirpThreshold=1"},
+		{name: "negative subframe", command: []string{"adcbufCfg -2 0 1 1 1"}, match: "subframe -1 or 0"},
+		{name: "nonlegacy subframe", command: []string{"adcbufCfg 1 0 1 1 1"}, match: "subframe -1 or 0"},
+		{name: "negative IQ swap", command: []string{"adcbufCfg -1 0 -1 1 1"}, match: "IQ swap must be 0 or 1"},
+		{name: "high IQ swap", command: []string{"adcbufCfg -1 0 2 1 1"}, match: "IQ swap must be 0 or 1"},
+		{name: "negative channel interleave", command: []string{"adcbufCfg -1 0 1 -1 1"}, match: "channel interleave must be 0 or 1"},
+		{name: "high channel interleave", command: []string{"adcbufCfg -1 0 1 2 1"}, match: "channel interleave must be 0 or 1"},
 		{name: "duplicate", command: []string{"adcbufCfg -1 0 1 1 1", "adcbufCfg 0 0 0 0 1"}, match: "exactly one adcbufCfg"},
 	}
 	for _, test := range tests {

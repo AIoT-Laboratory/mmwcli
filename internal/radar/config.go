@@ -345,9 +345,20 @@ func validateADCBuf(dialect Dialect, commands []string) error {
 		if values[4] != 1 {
 			return fmt.Errorf("%s CLI requires adcbufCfg chirpThreshold=1: %s", dialect.family.versionPlatforms[0], command)
 		}
-		if dialect == StudioCLI &&
-			(values[0] != -1 || values[2] != 1 || values[3] != 1) {
-			return fmt.Errorf("TI xWR68xx studio_cli firmware requires adcbufCfg -1 0 1 1 1: %s", command)
+		if dialect == StudioCLI {
+			if values[0] != -1 || values[2] != 1 || values[3] != 1 {
+				return fmt.Errorf("TI xWR68xx studio_cli firmware requires adcbufCfg -1 0 1 1 1: %s", command)
+			}
+		} else {
+			if values[0] != -1 && values[0] != 0 {
+				return fmt.Errorf("%s SDK demo legacy capture requires adcbufCfg subframe -1 or 0: %s", dialect.family.versionPlatforms[0], command)
+			}
+			if values[2] < 0 || values[2] > 1 {
+				return fmt.Errorf("%s SDK demo adcbufCfg IQ swap must be 0 or 1: %s", dialect.family.versionPlatforms[0], command)
+			}
+			if values[3] < 0 || values[3] > 1 {
+				return fmt.Errorf("%s SDK demo adcbufCfg channel interleave must be 0 or 1: %s", dialect.family.versionPlatforms[0], command)
+			}
 		}
 		count++
 	}
