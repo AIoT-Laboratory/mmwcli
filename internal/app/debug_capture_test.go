@@ -183,12 +183,14 @@ func TestDebugCaptureCaptureOutputReservationPrecedesHardware(t *testing.T) {
 	}
 }
 
-func TestDebugCaptureCaptureUsesDCAThenControllerAndSession(t *testing.T) {
+func TestDebugCaptureCaptureReportsJoinedPostCommitCloseFailures(t *testing.T) {
 	config := writeDebugCaptureConfig(t, debugCaptureTestConfig)
 	outputPath := filepath.Join(t.TempDir(), "capture.bin")
 	var events []string
-	dcaClient := &fakeDebugCaptureDCA{events: &events, closeErr: errors.New("late DCA close failure")}
-	controller := &fakeDebugCaptureController{events: &events, closeErr: errors.New("late controller close failure")}
+	dcaCloseCause := errors.New("late DCA close failure")
+	controllerCloseCause := errors.New("late controller close failure")
+	dcaClient := &fakeDebugCaptureDCA{events: &events, closeErr: dcaCloseCause}
+	controller := &fakeDebugCaptureController{events: &events, closeErr: controllerCloseCause}
 	dependencies := preflightOnlyDebugCaptureDependencies(nil)
 	dependencies.checkAssets = func(string, string) (debugcapture.Assets, error) {
 		events = append(events, "assets")
@@ -245,13 +247,26 @@ func TestDebugCaptureCaptureUsesDCAThenControllerAndSession(t *testing.T) {
 		return dca.CaptureStats{OutputBytes: plan.ExpectedBytes}, nil
 	}
 
-	if err := runDebugCaptureCaptureWithDependencies(
+	err := runDebugCaptureCaptureWithDependencies(
 		append(debugCaptureArguments(config, outputPath), "--sop2-reset"),
 		io.Discard,
 		io.Discard,
 		dependencies,
-	); err != nil {
-		t.Fatal(err)
+	)
+	if !errors.Is(err, dcaCloseCause) || !errors.Is(err, controllerCloseCause) {
+		t.Fatalf("post-commit error did not join both close causes: %v", err)
+	}
+	var cleanup *session.CleanupError
+	if !errors.As(err, &cleanup) {
+		t.Fatalf("post-commit close error is not marked as cleanup: %v", err)
+	}
+	if count := strings.Count(err.Error(), "capture cleanup failed: post-commit cleanup"); count != 2 {
+		t.Fatalf("post-commit cleanup markers = %d, want 2: %v", count, err)
+	}
+	for _, resource := range []string{"debug-capture controller", "DCA1000 control client"} {
+		if !strings.Contains(err.Error(), "close "+resource) {
+			t.Fatalf("post-commit error lacks %s cause: %v", resource, err)
+		}
 	}
 	wantEvents := []string{"assets", "native", "dca", "controller", "session", "controller-close", "dca-close"}
 	if !reflect.DeepEqual(events, wantEvents) {

@@ -342,7 +342,12 @@ func runDebugCaptureHardware(
 		return stats, err
 	}
 	defer func() {
-		resultErr = joinDebugCapturePostSessionClose(resultErr, "DCA1000 control client", dcaClient.Close())
+		resultErr = closeCaptureClient(
+			resultErr,
+			output.Committed(),
+			"DCA1000 control client",
+			dcaClient,
+		)
 	}()
 
 	controller, err := dependencies.openController(ctx, debugcapture.ControllerOptions{
@@ -356,7 +361,12 @@ func runDebugCaptureHardware(
 		return stats, err
 	}
 	defer func() {
-		resultErr = joinDebugCapturePostSessionClose(resultErr, "debug-capture controller", controller.Close())
+		resultErr = closeCaptureClient(
+			resultErr,
+			output.Committed(),
+			"debug-capture controller",
+			controller,
+		)
 	}()
 
 	sessionOptions := session.DefaultOptions()
@@ -391,14 +401,4 @@ func joinDebugCaptureCleanup(resultErr error, resource string, closeErr error) e
 	}
 	marked := &session.CleanupError{Err: fmt.Errorf("close %s: %w", resource, closeErr)}
 	return errors.Join(resultErr, marked)
-}
-
-// Once session.Run returns success, OUT has already been atomically published
-// after all hardware stop and receiver cleanup. A later local handle-close
-// error cannot safely turn that committed capture back into a failed .part.
-func joinDebugCapturePostSessionClose(resultErr error, resource string, closeErr error) error {
-	if resultErr == nil || closeErr == nil {
-		return resultErr
-	}
-	return joinDebugCaptureCleanup(resultErr, resource, closeErr)
 }
