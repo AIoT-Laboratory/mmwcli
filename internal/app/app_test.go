@@ -22,6 +22,9 @@ func TestHelpContainsOnlyCLIBackends(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
 	}
 	text := stdout.String()
+	if !strings.HasPrefix(text, "mmwcli dev -") {
+		t.Fatalf("help does not report the development identity:\n%s", text)
+	}
 	for _, expected := range []string{"mmwcli version", "studio-cli", "demo", "repl", "dca", "debug-capture", "native-check", "cross-platform"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("help does not contain %q:\n%s", expected, text)
@@ -34,13 +37,13 @@ func TestHelpContainsOnlyCLIBackends(t *testing.T) {
 	}
 }
 
-func TestVersionReportsReleaseVersion(t *testing.T) {
+func TestVersionReportsDevelopmentIdentity(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := Run([]string{"version"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
 	}
-	if Version != "0.1.0" || !strings.HasPrefix(stdout.String(), "mmwcli 0.1.0 (") {
-		t.Fatalf("release version output = %q", stdout.String())
+	if Version != "dev" || !strings.HasPrefix(stdout.String(), "mmwcli dev (") {
+		t.Fatalf("development version output = %q", stdout.String())
 	}
 }
 

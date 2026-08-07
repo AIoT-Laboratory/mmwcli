@@ -17,7 +17,8 @@ import (
 	"mmwcli/internal/firmware"
 )
 
-const Version = "0.1.0"
+// Version is overridden with -ldflags for release builds.
+var Version = "dev"
 
 type usageError struct{ message string }
 

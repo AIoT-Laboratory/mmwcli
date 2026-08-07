@@ -1,6 +1,9 @@
 override CGO_ENABLED := 0
 export CGO_ENABLED
 
+VERSION ?= dev
+VERSION_LDFLAGS := -X=mmwcli/internal/app.Version=$(VERSION)
+
 .PHONY: fmt fmt-check test vet build check
 
 fmt:
@@ -20,6 +23,6 @@ vet:
 	go vet ./...
 
 build:
-	go build -trimpath ./...
+	go build -trimpath -ldflags "$(VERSION_LDFLAGS)" ./...
 
 check: fmt-check test vet
