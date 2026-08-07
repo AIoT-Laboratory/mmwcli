@@ -98,13 +98,14 @@ func runDebugCaptureCaptureWithDependencies(
 	serialBase := flags.String("d2xx-serial", "", "D2XX serial-number base for the A/B interfaces")
 	descriptionBase := flags.String("d2xx-description", "", "D2XX description base for the A/B interfaces")
 	sop2Reset := flags.Bool("sop2-reset", false, "set SOP2 with D2XX C/D and pulse target reset before Enhanced COM")
+	sessionDirectory := flags.Bool("session-dir", false, "publish ADC data and v1 metadata as an output directory")
 	dcaValues := addDCAFlags(flags, "dca-timeout-ms", dcaConfigurationFlags|dcaReceiverFlags)
 
 	if len(arguments) != 0 && isHelp(arguments[0]) {
 		return parseCommandFlags(flags, arguments)
 	}
 	if len(arguments) < 2 || strings.HasPrefix(arguments[0], "-") || strings.HasPrefix(arguments[1], "-") {
-		return usageError{message: "debug-capture capture requires CFG and output files"}
+		return usageError{message: "debug-capture capture requires CFG and output paths"}
 	}
 	configPath, outputPath := arguments[0], arguments[1]
 	if err := parseCommandFlags(flags, arguments[2:]); err != nil {
@@ -138,7 +139,12 @@ func runDebugCaptureCaptureWithDependencies(
 		return err
 	}
 
-	plan, err := loadCapturePlan(radar.StudioCLI, configPath, radar.FullConfiguration)
+	plan, finalizeSession, err := loadCaptureOutputPlan(
+		radar.StudioCLI,
+		configPath,
+		radar.FullConfiguration,
+		*sessionDirectory,
+	)
 	if err != nil {
 		return err
 	}
@@ -164,6 +170,7 @@ func runDebugCaptureCaptureWithDependencies(
 	stats, err := runDebugCaptureHardware(
 		stdout,
 		outputPath,
+		finalizeSession,
 		*enhancedPort,
 		assets,
 		selectors,
@@ -307,7 +314,9 @@ func preflightDebugCaptureBounds(
 
 func runDebugCaptureHardware(
 	stdout io.Writer,
-	outputPath, enhancedPort string,
+	outputPath string,
+	finalizeSession capturefile.SessionFinalizer,
+	enhancedPort string,
 	assets debugcapture.Assets,
 	selectors debugcapture.D2XXSelectors,
 	resetSOP2 bool,
@@ -316,8 +325,9 @@ func runDebugCaptureHardware(
 	dcaOptions dcaCommandOptions,
 	dependencies debugCaptureDependencies,
 ) (stats dca.CaptureStats, resultErr error) {
-	// Reserving OUT.part is the final preflight and precedes every hardware I/O.
-	output, err := capturefile.Create(outputPath)
+	// Reserving the OUT.part file or directory is the final preflight and
+	// precedes every hardware I/O.
+	output, err := createCaptureOutput(outputPath, finalizeSession)
 	if err != nil {
 		return stats, err
 	}

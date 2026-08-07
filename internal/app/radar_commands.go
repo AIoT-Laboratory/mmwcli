@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
 	"mmwcli/internal/capturefile"
+	"mmwcli/internal/capturemanifest"
 	"mmwcli/internal/dca"
 	"mmwcli/internal/radar"
 	"mmwcli/internal/serialport"
@@ -176,15 +178,17 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	baud := flags.Int("baud", dialect.DefaultBaud(), "serial baud")
 	serialTimeoutMS := flags.Int("serial-timeout-ms", 10000, "serial command timeout")
 	noReconfigure := false
+	sessionDirectory := false
 	if dialect == radar.StudioCLI {
 		flags.BoolVar(&noReconfigure, "no-reconfig", false, "reuse the existing radar configuration")
+		flags.BoolVar(&sessionDirectory, "session-dir", false, "publish ADC data and v1 metadata as an output directory")
 	}
 	dcaValues := addDCAFlags(flags, "dca-timeout-ms", dcaConfigurationFlags|dcaReceiverFlags)
 	if len(arguments) != 0 && isHelp(arguments[0]) {
 		return parseCommandFlags(flags, arguments)
 	}
 	if len(arguments) < 2 || strings.HasPrefix(arguments[0], "-") || strings.HasPrefix(arguments[1], "-") {
-		return usageError{message: dialect.Name() + " capture requires CFG and output files"}
+		return usageError{message: dialect.Name() + " capture requires CFG and output paths"}
 	}
 	configPath, outputPath := arguments[0], arguments[1]
 	if err := parseCommandFlags(flags, arguments[2:]); err != nil {
@@ -206,7 +210,7 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	if noReconfigure {
 		mode = radar.ReuseConfiguration
 	}
-	plan, err := loadCapturePlan(dialect, configPath, mode)
+	plan, finalizeSession, err := loadCaptureOutputPlan(dialect, configPath, mode, sessionDirectory)
 	if err != nil {
 		return err
 	}
@@ -268,8 +272,8 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	}
 	printCapturePlan(stdout, plan)
 
-	// Reserve OUT.part before any serial or DCA hardware access.
-	output, err := capturefile.Create(outputPath)
+	// Reserve the OUT.part file or directory before any hardware access.
+	output, err := createCaptureOutput(outputPath, finalizeSession)
 	if err != nil {
 		return err
 	}
@@ -325,6 +329,63 @@ func loadCapturePlan(dialect radar.Dialect, path string, mode radar.Configuratio
 		return radar.CapturePlan{}, err
 	}
 	return radar.BuildCapturePlan(dialect, commands, mode)
+}
+
+const captureSessionMaxConfigBytes = 4 << 20
+
+func loadCaptureOutputPlan(
+	dialect radar.Dialect,
+	path string,
+	mode radar.ConfigurationMode,
+	sessionDirectory bool,
+) (radar.CapturePlan, capturefile.SessionFinalizer, error) {
+	if !sessionDirectory {
+		plan, err := loadCapturePlan(dialect, path, mode)
+		return plan, nil, err
+	}
+	if dialect != radar.StudioCLI {
+		return radar.CapturePlan{}, nil, errors.New("capture session directories require the studio-cli dialect")
+	}
+	snapshot, err := readCaptureSessionConfig(path)
+	if err != nil {
+		return radar.CapturePlan{}, nil, err
+	}
+	plan, err := radar.BuildCaptureSessionV1Plan(snapshot, mode)
+	if err != nil {
+		return radar.CapturePlan{}, nil, err
+	}
+	finalize, err := capturemanifest.NewV1Finalizer(snapshot, capturemanifest.ADCLayoutGroup2IThenQ)
+	if err != nil {
+		return radar.CapturePlan{}, nil, err
+	}
+	return plan, finalize, nil
+}
+
+func readCaptureSessionConfig(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open capture session configuration %s: %w", path, err)
+	}
+	defer file.Close()
+	snapshot, err := io.ReadAll(io.LimitReader(file, captureSessionMaxConfigBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read capture session configuration %s: %w", path, err)
+	}
+	if len(snapshot) > captureSessionMaxConfigBytes {
+		return nil, fmt.Errorf(
+			"capture session configuration %s exceeds %d bytes",
+			path,
+			captureSessionMaxConfigBytes,
+		)
+	}
+	return snapshot, nil
+}
+
+func createCaptureOutput(path string, finalize capturefile.SessionFinalizer) (capturefile.Output, error) {
+	if finalize == nil {
+		return capturefile.Create(path)
+	}
+	return capturefile.CreateSessionDirectory(path, finalize)
 }
 
 func printCapturePlan(writer io.Writer, plan radar.CapturePlan) {

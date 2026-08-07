@@ -163,8 +163,15 @@ coordinator raises first-packet and quiet timeouts from the CFG.
 
 Output is created exclusively as `OUT.part`; an existing `OUT` or `.part` is rejected before
 hardware access. `OUT` is published without overwrite only after reception, radar stop, DCA stop,
-asynchronous-status checks, and file synchronization all succeed. Failure or cancellation retains
+asynchronous-status checks, and synchronization all succeed. Failure or cancellation retains
 `.part`.
+
+The default output is one raw ADC file. `studio-cli capture` and `debug-capture capture` may instead
+use `--session-dir`. This mode first requires a finite, mmwcore-representable xWR68xx CFG snapshot
+with `adcCfg 2 1`. It stages `adc.bin`, the exact `radar.cfg` snapshot, and the versioned
+`capture.json`, then publishes the complete directory in one no-replace namespace operation. The
+output parent is assumed to be cooperative. This guarantees complete runtime visibility, not
+power-loss durability.
 
 Windows uses a same-volume move that does not replace the target and supports NTFS, exFAT, and FAT32,
 subject to each file system's single-file size limit. Other platforms publish without overwrite in

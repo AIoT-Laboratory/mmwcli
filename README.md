@@ -130,7 +130,8 @@ checksums are listed in the [TI reference map](docs/ti-reference-map.md).
 - CFG, mode, expected byte count, and output paths are checked before hardware I/O.
 - An unknown Start result is not retried; failure paths use bounded cleanup.
 - A finite capture must match the exact byte count derived from its CFG.
-- Data is written to `OUT.part` and published without overwrite as `OUT` only after full success; failures retain `.part`.
+- Raw output is written to `OUT.part` and published without overwrite as `OUT` only after full success; failures retain `.part`.
+- `studio-cli capture` and `debug-capture capture` accept `--session-dir`. Success publishes `OUT/adc.bin`, `OUT/radar.cfg`, and `OUT/capture.json`; failure retains `OUT.part/`. Without the flag, output remains a raw file.
 - Low-level `dca` commands must not run concurrently; `dca ping` is not a capture prerequisite; reset requires an explicit command or option.
 - `sensorStop` stops the sensor only; it does not power off the radar board or RF domain.
 

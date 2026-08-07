@@ -12,6 +12,7 @@ import (
 	"mmwcli/internal/d2xx"
 	"mmwcli/internal/dca"
 	"mmwcli/internal/debugcapture"
+	"mmwcli/internal/radar"
 	"mmwcli/internal/session"
 )
 
@@ -206,6 +207,154 @@ func TestCaptureNoReconfigureFlagIsStudioOnly(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("offline flag failure created %s: %v", path, err)
 		}
+	}
+}
+
+func TestCaptureSessionDirectoryFlagScope(t *testing.T) {
+	for _, test := range []struct {
+		arguments []string
+		want      bool
+	}{
+		{arguments: []string{"studio-cli", "capture", "--help"}, want: true},
+		{arguments: []string{"debug-capture", "capture", "--help"}, want: true},
+		{arguments: []string{"demo", "capture", "--help"}, want: false},
+		{arguments: []string{"dca", "capture", "--help"}, want: false},
+		{arguments: []string{"studio-cli", "check", "--help"}, want: false},
+	} {
+		t.Run(strings.Join(test.arguments, " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := Run(test.arguments, &stdout, &stderr); code != 0 {
+				t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			help := stdout.String() + stderr.String()
+			if got := strings.Contains(help, "session-dir"); got != test.want {
+				t.Fatalf("session-dir in help = %t, want %t:\n%s", got, test.want, help)
+			}
+		})
+	}
+
+	for _, command := range []string{"demo", "dca"} {
+		t.Run(command+" rejects flag", func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "capture")
+			arguments := []string{command, "capture"}
+			if command == "demo" {
+				arguments = append(arguments, "missing.cfg")
+			}
+			arguments = append(arguments, output, "--session-dir")
+			var stdout, stderr bytes.Buffer
+			if code := Run(arguments, &stdout, &stderr); code != 2 {
+				t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			assertPathDoesNotExist(t, output)
+			assertPathDoesNotExist(t, output+".part")
+		})
+	}
+}
+
+func TestStudioCaptureSessionContractPrecedesOutput(t *testing.T) {
+	config := writeValidConfig(t)
+	contents, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents = []byte(strings.Replace(string(contents), "adcCfg 2 1", "adcCfg 2 2", 1))
+	if err := os.WriteFile(config, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "capture-session")
+	var stdout, stderr bytes.Buffer
+	arguments := []string{"studio-cli", "capture", config, output, "--port", "COM3", "--session-dir"}
+	if code := Run(arguments, &stdout, &stderr); code != 4 {
+		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "exact adcCfg 2 1") {
+		t.Fatalf("missing session contract error: %s", stderr.String())
+	}
+	assertPathDoesNotExist(t, output)
+	assertPathDoesNotExist(t, output+".part")
+}
+
+func TestStudioCaptureSessionReservationPrecedesHardware(t *testing.T) {
+	config := writeValidConfig(t)
+	output := filepath.Join(t.TempDir(), "capture-session")
+	if err := os.Mkdir(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(output, "keep")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	arguments := []string{"studio-cli", "capture", config, output, "--port", "COM3", "--session-dir"}
+	if code := Run(arguments, &stdout, &stderr); code != 4 {
+		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "already exists") {
+		t.Fatalf("missing output reservation error: %s", stderr.String())
+	}
+	contents, err := os.ReadFile(sentinel)
+	if err != nil || string(contents) != "keep" {
+		t.Fatalf("existing output changed: %q, %v", contents, err)
+	}
+	assertPathDoesNotExist(t, output+".part")
+}
+
+func TestStudioCaptureSessionOutputPublishesDirectory(t *testing.T) {
+	config := writeValidConfig(t)
+	configSnapshot, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, finalize, err := loadCaptureOutputPlan(
+		radar.StudioCLI,
+		config,
+		radar.FullConfiguration,
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(t.TempDir(), "capture-session")
+	output, err := createCaptureOutput(outputPath, finalize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	adc := make([]byte, int(plan.ExpectedBytes))
+	if written, err := output.WriteAt(adc, 0); err != nil || written != len(adc) {
+		t.Fatalf("write ADC = %d, %v", written, err)
+	}
+	if err := output.Truncate(int64(len(adc))); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.CommitContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if got := strings.Join(names, ","); got != "adc.bin,capture.json,radar.cfg" {
+		t.Fatalf("session files = %s", got)
+	}
+	archivedConfig, err := os.ReadFile(filepath.Join(outputPath, "radar.cfg"))
+	if err != nil || !bytes.Equal(archivedConfig, configSnapshot) {
+		t.Fatalf("archived config differs from snapshot: %v", err)
+	}
+	assertPathDoesNotExist(t, outputPath+".part")
+}
+
+func TestReadCaptureSessionConfigRejectsOversizeInput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "oversize.cfg")
+	if err := os.WriteFile(path, make([]byte, captureSessionMaxConfigBytes+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readCaptureSessionConfig(path); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversize config error = %v", err)
 	}
 }
 
