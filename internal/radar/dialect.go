@@ -22,7 +22,7 @@ type Dialect struct {
 
 var (
 	// SDKDemo is the text CLI exposed by the mmWave SDK demo firmware.
-	SDKDemo = Dialect{name: "demo", defaultBaud: 115200}
+	SDKDemo = Dialect{name: "demo", defaultBaud: 115200, requiresPlatform: true}
 
 	// StudioCLI is TI's xWR68xx studio_cli device firmware dialect.
 	StudioCLI = Dialect{
@@ -144,8 +144,8 @@ func IsAlreadyStopped(err error) bool {
 		commandError.Code == -54 && commandError.Command == "sensorStop"
 }
 
-// VerifyPlatformResponse enforces the xWR68xx version gate for StudioCLI.
-// SDKDemo has no equivalent version command, so it performs no check.
+// VerifyPlatformResponse enforces the xWR68xx version gate for dialects that
+// require platform verification.
 func (d Dialect) VerifyPlatformResponse(response string) error {
 	if !d.valid() {
 		return errors.New("invalid radar CLI dialect")

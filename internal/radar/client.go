@@ -101,8 +101,8 @@ func (c *Client) Close() error {
 }
 
 // SendCommand is the low-level exchange primitive. It does not implicitly run
-// the StudioCLI platform gate; use VerifyPlatform, Apply, Start, or Stop for
-// state-changing workflows.
+// the selected dialect's platform gate; use VerifyPlatform, Apply, Start, or
+// Stop for state-changing workflows.
 func (c *Client) SendCommand(command string) (string, error) {
 	return c.SendCommandContext(context.Background(), command)
 }
@@ -269,8 +269,8 @@ func contextOrTimeoutCause(ctx context.Context, deadline time.Time, fallback err
 	return fallback
 }
 
-// VerifyPlatform sends version once for StudioCLI and requires an exact
-// Platform: xWR68xx field. SDKDemo has no version gate and performs no I/O.
+// VerifyPlatform sends version once for the selected text CLI dialect and
+// requires an exact Platform: xWR68xx field.
 func (c *Client) VerifyPlatform() (string, error) {
 	return c.VerifyPlatformContext(context.Background())
 }

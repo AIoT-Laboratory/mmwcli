@@ -68,9 +68,6 @@ func controlRadar(dialect radar.Dialect, action string, arguments []string, stdo
 	rest := arguments
 	var plan radar.CapturePlan
 	var err error
-	if action == "version" && !dialect.RequiresPlatformVerification() {
-		return usageError{message: "SDK demo firmware has no uniform version command"}
-	}
 
 	usage := "mmwcli " + dialect.Name() + " " + action + " [options]"
 	if action == "apply" {

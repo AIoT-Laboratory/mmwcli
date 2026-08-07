@@ -144,7 +144,9 @@ func (t *cancelRecoveryTransport) Write(payload []byte) (int, error) {
 	defer t.mu.Unlock()
 	command := strings.TrimSuffix(string(payload), "\n")
 	t.commands = append(t.commands, command)
-	if command == "sensorStop" {
+	if command == "version" {
+		t.current = bytes.NewReader([]byte("Platform                : xWR68xx\nDone\n"))
+	} else if command == "sensorStop" {
 		t.current = bytes.NewReader([]byte("Done\nsensorStop\nDone\n"))
 	} else {
 		t.current = nil
@@ -218,15 +220,80 @@ func TestStudioPlatformMismatchBlocksStateCommand(t *testing.T) {
 	}
 }
 
-func TestSDKDemoDoesNotSendVersion(t *testing.T) {
+func TestSDKDemoSendsVersionBeforeStart(t *testing.T) {
 	client, transport := newScriptedClient(t, SDKDemo,
+		scriptedExchange{command: "version", response: "Platform                : xWR68xx\nDone\n"},
 		scriptedExchange{command: "sensorStart", response: "Done\n"},
 	)
 	if _, err := client.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(transport.commands, "|"); got != "sensorStart" {
+	if got := strings.Join(transport.commands, "|"); got != "version|sensorStart" {
 		t.Fatalf("commands = %q", got)
+	}
+}
+
+func TestSDKDemoPlatformMismatchBlocksStateWrites(t *testing.T) {
+	plan, err := BuildCapturePlan(SDKDemo, validCommands()[1:], FullConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		run  func(*Client) error
+	}{
+		{name: "apply", run: func(client *Client) error { return client.Apply(plan) }},
+		{name: "start", run: func(client *Client) error { _, err := client.Start(); return err }},
+		{name: "stop", run: func(client *Client) error { _, err := client.Stop(); return err }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, transport := newScriptedClient(t, SDKDemo,
+				scriptedExchange{command: "version", response: "Platform : xWR18xx\nDone\n"},
+			)
+			if err := test.run(client); err == nil || !strings.Contains(err.Error(), "unsupported platform") {
+				t.Fatalf("state command error = %v", err)
+			}
+			if got := strings.Join(transport.commands, "|"); got != "version" {
+				t.Fatalf("state write escaped platform gate: %q", got)
+			}
+		})
+	}
+}
+
+func TestSDKDemoCaptureLifecycleVerifiesBeforeFirstStateWrite(t *testing.T) {
+	plan, err := BuildCapturePlan(SDKDemo, validCommands()[1:], FullConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := []scriptedExchange{
+		{command: "version", response: "Platform                : xWR68xx\nDone\n"},
+		{command: "sensorStop", response: "Done\n"},
+	}
+	for _, command := range plan.ConfigurationCommands {
+		script = append(script, scriptedExchange{command: command, response: "Done\n"})
+	}
+	script = append(script,
+		scriptedExchange{command: "sensorStart", response: "Done\n"},
+		scriptedExchange{command: "sensorStop", response: "Done\n"},
+	)
+	client, transport := newScriptedClient(t, SDKDemo, script...)
+	if _, err := client.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Apply(plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	want := append([]string{"version", "sensorStop"}, plan.ConfigurationCommands...)
+	want = append(want, "sensorStart", "sensorStop")
+	if got := strings.Join(transport.commands, "|"); got != strings.Join(want, "|") {
+		t.Fatalf("capture lifecycle commands = %q, want %q", got, strings.Join(want, "|"))
 	}
 }
 
@@ -445,7 +512,7 @@ func TestCanceledCommandReleasesMutexForRecovery(t *testing.T) {
 	transport.mu.Lock()
 	commands := strings.Join(transport.commands, "|")
 	transport.mu.Unlock()
-	if commands != "sensorStart|sensorStop" {
+	if commands != "version|sensorStart|sensorStop" {
 		t.Fatalf("commands = %q", commands)
 	}
 }

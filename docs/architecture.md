@@ -31,8 +31,9 @@ architecture requires separate hardware validation.
 | mmWave SDK demo | `demo` | 115200 | xWR68xx SDK demo or compatible firmware |
 
 The dialects share a transport layer, but their command sets and start semantics remain isolated.
-`studio-cli version` must report an xWR68xx platform; the SDK demo has no uniform equivalent. The
-operator must specify the serial port explicitly; mmwcli does not enumerate or probe ports.
+Both `studio-cli version` and the SDK demo's common `version` extension must report an xWR68xx
+platform. Each connection performs this check before its first apply, start, stop, or capture state
+write. The operator must specify the serial port explicitly; mmwcli does not enumerate or probe ports.
 
 The top-level `repl` does not add a third dialect. It always creates a `StudioCLI` client, runs the
 same xWR68xx `version` validation, and then sends commands line by line using CFG lexical rules.

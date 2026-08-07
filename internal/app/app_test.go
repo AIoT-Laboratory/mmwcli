@@ -157,6 +157,7 @@ func TestCommandHelpDoesNotRequirePositionalsOrHardware(t *testing.T) {
 		{"studio-cli", "check", "--help"},
 		{"studio-cli", "apply", "--help"},
 		{"studio-cli", "capture", "--help"},
+		{"demo", "version", "--help"},
 		{"dca", "--help"},
 		{"dca", "capture", "--help"},
 		{"firmware", "--help"},

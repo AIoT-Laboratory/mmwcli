@@ -21,6 +21,9 @@ Version 0.1 has hardware validation only for debug mode with Windows/amd64, FTDI
 IWR6843 ES2, and DCA1000. Other combinations remain unvalidated; see the
 [hardware smoke test](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record).
 
+Both text CLI routes verify `Platform: xWR68xx` before their first radar state change on each
+connection. Query the SDK demo explicitly with `mmwcli demo version --port PORT`.
+
 ## Download
 
 Prebuilt binaries and checksums are available from [GitHub Releases](https://github.com/AIoT-Laboratory/mmwcli/releases/latest).

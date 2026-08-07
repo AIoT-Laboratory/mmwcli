@@ -7,15 +7,15 @@ import (
 	"testing"
 )
 
-func TestDialectBaudRatesAreIsolated(t *testing.T) {
+func TestDialectBaudRatesAndPlatformGates(t *testing.T) {
 	if SDKDemo.Name() != "demo" || SDKDemo.DefaultBaud() != 115200 {
 		t.Fatalf("SDKDemo = %q/%d", SDKDemo.Name(), SDKDemo.DefaultBaud())
 	}
 	if StudioCLI.Name() != "studio-cli" || StudioCLI.DefaultBaud() != 921600 {
 		t.Fatalf("StudioCLI = %q/%d", StudioCLI.Name(), StudioCLI.DefaultBaud())
 	}
-	if SDKDemo.RequiresPlatformVerification() || !StudioCLI.RequiresPlatformVerification() {
-		t.Fatal("platform verification flags are not isolated")
+	if !SDKDemo.RequiresPlatformVerification() || !StudioCLI.RequiresPlatformVerification() {
+		t.Fatal("text CLI dialect does not require platform verification")
 	}
 }
 
@@ -86,26 +86,25 @@ func TestAlreadyStoppedIsNarrow(t *testing.T) {
 }
 
 func TestVerifyPlatformResponse(t *testing.T) {
-	for _, response := range []string{
-		"Platform : xWR68xx\r\nDone\r\n",
-		"Platform:xwr68XX\nDone\n",
-		"Banner\nPlatform : xWR68xx\n",
-	} {
-		if err := StudioCLI.VerifyPlatformResponse(response); err != nil {
-			t.Errorf("valid response rejected: %v", err)
+	for _, dialect := range []Dialect{SDKDemo, StudioCLI} {
+		for _, response := range []string{
+			"Platform                : xWR68xx\r\nDone\r\n",
+			"Platform:xwr68XX\nDone\n",
+			"Banner\nPlatform : xWR68xx\n",
+		} {
+			if err := dialect.VerifyPlatformResponse(response); err != nil {
+				t.Errorf("%s valid response rejected: %v", dialect.Name(), err)
+			}
 		}
-	}
-	for _, response := range []string{
-		"Platform : xWR18xx\nDone\n",
-		"PlatformName : xWR68xx\nDone\n",
-		"Device Info : xWR6843\nDone\n",
-	} {
-		if err := StudioCLI.VerifyPlatformResponse(response); err == nil {
-			t.Errorf("invalid response accepted: %q", response)
+		for _, response := range []string{
+			"Platform : xWR18xx\nDone\n",
+			"PlatformName : xWR68xx\nDone\n",
+			"Device Info : xWR6843\nDone\n",
+		} {
+			if err := dialect.VerifyPlatformResponse(response); err == nil {
+				t.Errorf("%s invalid response accepted: %q", dialect.Name(), response)
+			}
 		}
-	}
-	if err := SDKDemo.VerifyPlatformResponse("anything"); err != nil {
-		t.Fatalf("SDK demo unexpectedly gated version: %v", err)
 	}
 }
 
