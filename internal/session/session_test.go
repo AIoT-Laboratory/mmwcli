@@ -23,6 +23,7 @@ type fakeRadar struct {
 	events    *[]string
 	stopCalls int
 	stopHook  func(context.Context, int) error
+	startErr  error
 }
 
 func (f *fakeRadar) VerifyPlatform() (string, error) {
@@ -53,12 +54,12 @@ func (f *fakeRadar) ApplyContext(_ context.Context, plan radar.CapturePlan) erro
 }
 func (f *fakeRadar) Start() (string, error) {
 	*f.events = append(*f.events, "sensorStart")
-	return "Done\n", nil
+	return "Done\n", f.startErr
 }
 func (f *fakeRadar) StartContext(context.Context) (string, error) { return f.Start() }
 func (f *fakeRadar) StartWithoutReconfiguration() (string, error) {
 	*f.events = append(*f.events, "sensorStart 0")
-	return "Done\n", nil
+	return "Done\n", f.startErr
 }
 func (f *fakeRadar) StartWithoutReconfigurationContext(context.Context) (string, error) {
 	return f.StartWithoutReconfiguration()
@@ -135,6 +136,21 @@ type fakeParticipant struct {
 	startErr  error
 	finishErr error
 	finished  []bool
+}
+
+type radarStartWindow struct {
+	before time.Time
+	after  time.Time
+}
+
+type fakeObservedParticipant struct {
+	*fakeParticipant
+	windows []radarStartWindow
+}
+
+func (f *fakeObservedParticipant) RadarStarted(before, after time.Time) {
+	*f.events = append(*f.events, "participantRadarStarted")
+	f.windows = append(f.windows, radarStartWindow{before: before, after: after})
 }
 
 func (f *fakeParticipant) Arm(context.Context) error {
@@ -802,7 +818,7 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	events := []string{}
-	participant := &fakeParticipant{events: &events}
+	participant := &fakeObservedParticipant{fakeParticipant: &fakeParticipant{events: &events}}
 	options := DefaultOptions()
 	options.Participant = participant
 
@@ -829,7 +845,7 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 	want := []string{
 		"version", "sensorStop", "dcaStop", "dcaConfigure", "apply",
 		"participantArm", "receiverStart", "dcaStart", "participantStart", "sensorStart",
-		"receiverFirst", "receiverWait", "frameEnd", "receiverWait", "dcaStop", "dcaDrain",
+		"participantRadarStarted", "receiverFirst", "receiverWait", "frameEnd", "receiverWait", "dcaStop", "dcaDrain",
 		"receiverClose", "participantFinish:true",
 	}
 	if !reflect.DeepEqual(events, want) {
@@ -838,8 +854,46 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 	if !reflect.DeepEqual(participant.finished, []bool{true}) {
 		t.Fatalf("participant outcomes = %v, want [true]", participant.finished)
 	}
+	if len(participant.windows) != 1 || participant.windows[0].after.Before(participant.windows[0].before) {
+		t.Fatalf("radar start windows = %#v", participant.windows)
+	}
 	if _, err := os.Stat(finalPath); err != nil {
 		t.Fatalf("participant capture was not committed: %v", err)
+	}
+}
+
+func TestRadarStartFailureDoesNotNotifyParticipant(t *testing.T) {
+	plan := sessionTestPlan(t)
+	finalPath := filepath.Join(t.TempDir(), "radar-start-failure.bin")
+	output, err := capturefile.Create(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	wantErr := errors.New("radar start failed")
+	participant := &fakeObservedParticipant{fakeParticipant: &fakeParticipant{events: &events}}
+	options := DefaultOptions()
+	options.Participant = participant
+
+	_, err = Run(
+		context.Background(),
+		&fakeRadar{events: &events, startErr: wantErr},
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) {
+			return &fakeReceiver{events: &events}, nil
+		},
+		plan,
+		output,
+		options,
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Run error = %v, want %v", err, wantErr)
+	}
+	if len(participant.windows) != 0 || containsEvent(events, "participantRadarStarted") {
+		t.Fatalf("observer notified after failed radar start: windows=%v events=%v", participant.windows, events)
+	}
+	if !containsEvent(events, "sensorStart") {
+		t.Fatalf("radar start was not attempted: %v", events)
 	}
 }
 
@@ -901,7 +955,7 @@ func TestParticipantFinishFailurePreventsCommit(t *testing.T) {
 		func(dca.ReceiverConfig) (DataReceiver, error) {
 			return &fakeReceiver{
 				events: &events,
-				stats: dca.CaptureStats{PacketsReceived: 1, OutputBytes: plan.ExpectedBytes},
+				stats:  dca.CaptureStats{PacketsReceived: 1, OutputBytes: plan.ExpectedBytes},
 			}, nil
 		},
 		plan,

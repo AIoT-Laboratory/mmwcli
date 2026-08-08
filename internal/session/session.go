@@ -62,6 +62,13 @@ type Participant interface {
 	Finish(context.Context, bool) error
 }
 
+// RadarStartObserver is an optional Participant capability. The two host
+// timestamps bracket the successful radar start call and retain Go's monotonic
+// clock reading for in-process synchronization.
+type RadarStartObserver interface {
+	RadarStarted(before, after time.Time)
+}
+
 // CleanupError marks a failure that occurred while converging hardware or
 // closing capture resources. Callers must not downgrade a cancellation joined
 // with this error to a successful exit-130 cleanup.
@@ -465,14 +472,19 @@ func Run(
 		log("capture participant started")
 	}
 	radarMayBeRunning = true
-	radarStartIssuedAt = time.Now()
+	radarStartBefore := time.Now()
+	radarStartIssuedAt = radarStartBefore
 	if plan.Mode == radar.ReuseConfiguration {
 		_, err = radarControl.StartWithoutReconfigurationContext(ctx)
 	} else {
 		_, err = radarControl.StartContext(ctx)
 	}
+	radarStartAfter := time.Now()
 	if err != nil {
 		return stats, fmt.Errorf("start radar: %w", err)
+	}
+	if observer, ok := participant.(RadarStartObserver); ok {
+		observer.RadarStarted(radarStartBefore, radarStartAfter)
 	}
 	log("radar started")
 
