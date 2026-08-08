@@ -15,7 +15,7 @@ defined by `README.md` and `docs/`.
   is unnecessary. This gate does not observe or prove the model, part, ES, board, or antenna
   geometry. Keep model and revision metadata empty, reject AOP-specific aliases and every other
   platform value, and do not promote the family route into a model-level claim.
-- `debug-capture` hardware validation covers only IWR6843 ES2 part `0xE2` with the exact firmware,
+- `debug-cli` hardware validation covers only IWR6843 ES2 part `0xE2` with the exact firmware,
   host, FTDI, and DCA1000 combination recorded in the hardware smoke test. Other devices may enter
   a source-validated experimental tier before hardware is available only under the requirements
   below; they must not be described as supported.
@@ -25,12 +25,12 @@ defined by `README.md` and `docs/`.
   single-line extension commands from compatible firmware, but that does not make the firmware a
   supported configuration or capture backend. A response without an explicit `Done` or numeric
   `Error <code>` must terminate the session immediately.
-- The public command for SOP2 host download and direct control is always `debug-capture`; do not add
+- The public command for SOP2 host download and direct control is always `debug-cli`; do not add
   architecture or device-family aliases. This workflow may load user-supplied MSS/BSS firmware, but
   it must remain layered separately from the text CLI workflows and must not depend on the mmWave
   Studio host runtime.
 - The TI reference workflow uses Enhanced COM only for firmware-memory writes and then switches to
-  FTDI MPSSE SPI/IRQ. Do not model `debug-capture` as a UART-only workflow. Its host USB transport is
+  FTDI MPSSE SPI/IRQ. Do not model `debug-cli` as a UART-only workflow. Its host USB transport is
   fixed to FTDI D2XX; do not implement custom raw USB or bind/copy mmWave Studio DLLs or FTDILib.
 - Host code uses Go 1.26+ and the standard library. Default builds use `CGO_ENABLED=0` and support
   Windows/Linux on amd64 and arm64. The D2XX backend is enabled only by the `ftd2xx` build tag:
@@ -109,7 +109,7 @@ must not be used to evade the limits.
   commands, or run any `dca ping/version/configure/start/stop/reset-*` operation.
 - When the user authorizes a probe, attempt each target once. Stop after the first timeout, bind
   error, or no response. The only exception is TI's fixed baud negotiation within one
-  `debug-capture` Enhanced COM connection. A new connection attempt requires a power, cable, or
+  `debug-cli` Enhanced COM connection. A new connection attempt requires a power, cable, or
   ownership change followed by a user request.
 - Do not scan serial ports or guess the CLI port, firmware, or baud. Enhanced COM permits only the
   fixed 921600-to-115200-to-921600 negotiation. It may enter that sequence only after the initial

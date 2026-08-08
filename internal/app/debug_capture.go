@@ -88,9 +88,9 @@ func runDebugCaptureCaptureWithDependencies(
 	dependencies debugCaptureDependencies,
 ) error {
 	flags := newCommandFlagSet(
-		"debug-capture capture",
+		"debug-cli capture",
 		stderr,
-		"mmwcli debug-capture capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]",
+		"mmwcli debug-cli capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]",
 	)
 	enhancedPort := flags.String("enhanced-port", "", "Enhanced COM port used for SOP2 firmware submission")
 	bssPath := flags.String("bss-fw", "", "xWR68xx BSS/RadarSS firmware file")
@@ -105,14 +105,14 @@ func runDebugCaptureCaptureWithDependencies(
 		return parseCommandFlags(flags, arguments)
 	}
 	if len(arguments) < 2 || strings.HasPrefix(arguments[0], "-") || strings.HasPrefix(arguments[1], "-") {
-		return usageError{message: "debug-capture capture requires CFG and output paths"}
+		return usageError{message: "debug-cli capture requires CFG and output paths"}
 	}
 	configPath, outputPath := arguments[0], arguments[1]
 	if err := parseCommandFlags(flags, arguments[2:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return usageError{message: "unexpected debug-capture capture arguments: " + strings.Join(flags.Args(), " ")}
+		return usageError{message: "unexpected debug-cli capture arguments: " + strings.Join(flags.Args(), " ")}
 	}
 	if err := validateDebugCaptureDependencies(dependencies); err != nil {
 		return err
@@ -192,7 +192,7 @@ func validateDebugCaptureDependencies(dependencies debugCaptureDependencies) err
 		dependencies.dialDCA == nil || dependencies.openController == nil ||
 		dependencies.newReceiver == nil || dependencies.runSession == nil ||
 		dependencies.context == nil {
-		return errors.New("debug-capture dependencies are incomplete")
+		return errors.New("debug-cli dependencies are incomplete")
 	}
 	return nil
 }
@@ -364,7 +364,7 @@ func runDebugCaptureHardware(
 		resultErr = closeCaptureClient(
 			resultErr,
 			output.Committed(),
-			"debug-capture controller",
+			"debug-cli controller",
 			controller,
 		)
 	}()
@@ -390,7 +390,7 @@ func runDebugCaptureHardware(
 		return stats, err
 	}
 	if !output.Committed() {
-		return stats, errors.New("debug-capture session completed without publishing the capture output")
+		return stats, errors.New("debug-cli session completed without publishing the capture output")
 	}
 	return stats, nil
 }

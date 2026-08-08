@@ -263,7 +263,7 @@ func TestDebugCaptureCaptureReportsJoinedPostCommitCloseFailures(t *testing.T) {
 	if count := strings.Count(err.Error(), "capture cleanup failed: post-commit cleanup"); count != 2 {
 		t.Fatalf("post-commit cleanup markers = %d, want 2: %v", count, err)
 	}
-	for _, resource := range []string{"debug-capture controller", "DCA1000 control client"} {
+	for _, resource := range []string{"debug-cli controller", "DCA1000 control client"} {
 		if !strings.Contains(err.Error(), "close "+resource) {
 			t.Fatalf("post-commit error lacks %s cause: %v", resource, err)
 		}
@@ -411,7 +411,7 @@ func TestDebugCaptureSessionDirectoryPublishesV1FromConfigSnapshot(t *testing.T)
 
 func TestDebugCaptureCaptureHelpHasNoTextCLIRouteFlags(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"debug-capture", "capture", "--help"}, &stdout, &stderr); code != 0 {
+	if code := Run([]string{"debug-cli", "capture", "--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("Run returned %d: %s", code, stderr.String())
 	}
 	help := stdout.String() + stderr.String()
@@ -425,8 +425,8 @@ func TestDebugCaptureCaptureHelpHasNoTextCLIRouteFlags(t *testing.T) {
 			t.Errorf("help contains forbidden text-CLI flag %s: %s", forbidden, help)
 		}
 	}
-	if !captureInvocationHasCleanup([]string{"debug-capture", "capture"}) {
-		t.Fatal("debug-capture capture was not classified for cancellation cleanup")
+	if !captureInvocationHasCleanup([]string{"debug-cli", "capture"}) {
+		t.Fatal("debug-cli capture was not classified for cancellation cleanup")
 	}
 }
 

@@ -26,13 +26,13 @@ func TestHelpContainsOnlyCLIBackends(t *testing.T) {
 	if !strings.HasPrefix(text, productIdentity) {
 		t.Fatalf("help does not report the development identity:\n%s", text)
 	}
-	for _, expected := range []string{"mmwcli version", "studio-cli", "repl", "dca", "debug-capture", "native-check", "cross-platform"} {
+	for _, expected := range []string{"mmwcli version", "studio-cli", "repl", "dca", "debug-cli", "native-check", "cross-platform"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("help does not contain %q:\n%s", expected, text)
 		}
 	}
 	if !strings.Contains(text, "[--sop2-reset] [options]") {
-		t.Fatalf("top-level debug-capture synopsis omits capture options:\n%s", text)
+		t.Fatalf("top-level debug-cli synopsis omits capture options:\n%s", text)
 	}
 	for _, removed := range []string{"mmwcli demo", "studio lua", "--studio-root", "--legacy-studio", ".NET"} {
 		if strings.Contains(text, removed) {
@@ -52,7 +52,7 @@ func TestVersionReportsDevelopmentIdentity(t *testing.T) {
 }
 
 func TestUnknownCommandIsUsageError(t *testing.T) {
-	for _, command := range []string{"studio", "demo"} {
+	for _, command := range []string{"studio", "demo", "debug-capture"} {
 		t.Run(command, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			if code := Run([]string{command}, &stdout, &stderr); code != 2 {
@@ -60,6 +60,9 @@ func TestUnknownCommandIsUsageError(t *testing.T) {
 			}
 			if !strings.Contains(stderr.String(), "unknown command: "+command) {
 				t.Fatalf("missing unknown command error: %s", stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("unknown command wrote stdout: %q", stdout.String())
 			}
 		})
 	}
@@ -184,8 +187,8 @@ func TestCommandHelpDoesNotRequirePositionalsOrHardware(t *testing.T) {
 		{"studio-cli", "capture", "--help"},
 		{"dca", "--help"},
 		{"firmware", "--help"},
-		{"debug-capture", "--help"},
-		{"debug-capture", "check", "--help"},
+		{"debug-cli", "--help"},
+		{"debug-cli", "check", "--help"},
 		{"doctor", "--help"},
 	}
 	for _, arguments := range commands {
@@ -214,7 +217,7 @@ func TestCaptureSessionDirectoryFlagScope(t *testing.T) {
 		want      bool
 	}{
 		{arguments: []string{"studio-cli", "capture", "--help"}, want: true},
-		{arguments: []string{"debug-capture", "capture", "--help"}, want: true},
+		{arguments: []string{"debug-cli", "capture", "--help"}, want: true},
 		{arguments: []string{"studio-cli", "check", "--help"}, want: false},
 	} {
 		t.Run(strings.Join(test.arguments, " "), func(t *testing.T) {
@@ -373,7 +376,7 @@ func TestFirmwareVerifyRequiresExplicitFile(t *testing.T) {
 
 func TestDebugCaptureCheckRequiresExplicitAssets(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"debug-capture", "check", "--bss-fw", "bss.bin"}, &stdout, &stderr); code != 2 {
+	if code := Run([]string{"debug-cli", "check", "--bss-fw", "bss.bin"}, &stdout, &stderr); code != 2 {
 		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "requires --bss-fw FILE and --mss-fw FILE") {
@@ -391,7 +394,7 @@ func TestDebugCaptureCheckRejectsBadAssetsOffline(t *testing.T) {
 		}
 	}
 	var stdout, stderr bytes.Buffer
-	arguments := []string{"debug-capture", "check", "--bss-fw", bssPath, "--mss-fw", mssPath}
+	arguments := []string{"debug-cli", "check", "--bss-fw", bssPath, "--mss-fw", mssPath}
 	if code := Run(arguments, &stdout, &stderr); code != 4 {
 		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -595,6 +598,7 @@ func TestREPLCancellationClassification(t *testing.T) {
 func TestOnlyCaptureInvocationsClaimCancellationCleanup(t *testing.T) {
 	for _, arguments := range [][]string{
 		{"studio-cli", "CAPTURE"},
+		{"DEBUG-CLI", "CAPTURE"},
 	} {
 		if !captureInvocationHasCleanup(arguments) {
 			t.Fatalf("capture invocation was not cleanup eligible: %v", arguments)
@@ -602,6 +606,7 @@ func TestOnlyCaptureInvocationsClaimCancellationCleanup(t *testing.T) {
 	}
 	for _, arguments := range [][]string{
 		{"studio-cli", "start"},
+		{"debug-capture", "capture"},
 		{"demo", "capture"},
 		{"dca", "capture"},
 		{"dca", "stop"},

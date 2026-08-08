@@ -39,7 +39,7 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 		err = runFirmware(arguments[1:], stdout, stderr)
 	case "doctor":
 		err = runDoctor(arguments[1:], stdout, stderr)
-	case "debug-capture":
+	case "debug-cli":
 		err = runDebugCapture(arguments[1:], stdout, stderr)
 	case "repl":
 		err = runREPL(arguments[1:], os.Stdin, stdout, stderr, openStudioREPLClient)
@@ -82,7 +82,7 @@ func captureInvocationHasCleanup(arguments []string) bool {
 		return false
 	}
 	switch strings.ToLower(arguments[0]) {
-	case "studio-cli", "debug-capture":
+	case "studio-cli", "debug-cli":
 		return true
 	default:
 		return false
@@ -155,7 +155,7 @@ func runFirmware(arguments []string, stdout, stderr io.Writer) error {
 
 func runDebugCapture(arguments []string, stdout, stderr io.Writer) error {
 	if len(arguments) == 0 {
-		return usageError{message: "debug-capture requires check, native-check, or capture"}
+		return usageError{message: "debug-cli requires check, native-check, or capture"}
 	}
 	if isHelp(arguments[0]) {
 		printDebugCaptureHelp(stdout)
@@ -169,15 +169,15 @@ func runDebugCapture(arguments []string, stdout, stderr io.Writer) error {
 	case "capture":
 		return runDebugCaptureCapture(arguments[1:], stdout, stderr)
 	default:
-		return usageError{message: "unknown debug-capture command: " + arguments[0]}
+		return usageError{message: "unknown debug-cli command: " + arguments[0]}
 	}
 }
 
 func runDebugCaptureCheck(arguments []string, stdout, stderr io.Writer) error {
 	flags := newCommandFlagSet(
-		"debug-capture check",
+		"debug-cli check",
 		stderr,
-		"mmwcli debug-capture check --bss-fw FILE --mss-fw FILE",
+		"mmwcli debug-cli check --bss-fw FILE --mss-fw FILE",
 	)
 	bssPath := flags.String("bss-fw", "", "xWR68xx BSS/RadarSS firmware file")
 	mssPath := flags.String("mss-fw", "", "xWR68xx MSS/MasterSS firmware file")
@@ -185,10 +185,10 @@ func runDebugCaptureCheck(arguments []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return usageError{message: "unexpected debug-capture arguments: " + strings.Join(flags.Args(), " ")}
+		return usageError{message: "unexpected debug-cli arguments: " + strings.Join(flags.Args(), " ")}
 	}
 	if strings.TrimSpace(*bssPath) == "" || strings.TrimSpace(*mssPath) == "" {
-		return usageError{message: "debug-capture check requires --bss-fw FILE and --mss-fw FILE"}
+		return usageError{message: "debug-cli check requires --bss-fw FILE and --mss-fw FILE"}
 	}
 	assets, err := debugcapture.CheckAssets(*bssPath, *mssPath)
 	if err != nil {
@@ -196,7 +196,7 @@ func runDebugCaptureCheck(arguments []string, stdout, stderr io.Writer) error {
 	}
 	printDebugCaptureAsset(stdout, assets.BSS)
 	printDebugCaptureAsset(stdout, assets.MSS)
-	fmt.Fprintln(stdout, "debug-capture asset check passed (offline; no hardware accessed)")
+	fmt.Fprintln(stdout, "debug-cli asset check passed (offline; no hardware accessed)")
 	return nil
 }
 
@@ -215,15 +215,15 @@ func runDebugCaptureNativeCheck(
 	load func() (nativeD2XXLibrary, error),
 ) error {
 	flags := newCommandFlagSet(
-		"debug-capture native-check",
+		"debug-cli native-check",
 		stderr,
-		"mmwcli debug-capture native-check",
+		"mmwcli debug-cli native-check",
 	)
 	if err := parseCommandFlags(flags, arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return usageError{message: "unexpected debug-capture native-check arguments: " + strings.Join(flags.Args(), " ")}
+		return usageError{message: "unexpected debug-cli native-check arguments: " + strings.Join(flags.Args(), " ")}
 	}
 
 	library, err := load()
@@ -241,7 +241,7 @@ func runDebugCaptureNativeCheck(
 	} else {
 		fmt.Fprintln(stdout, "FTDI D2XX version: not reported by this platform")
 	}
-	fmt.Fprintln(stdout, "debug-capture native check passed (library only; no hardware accessed)")
+	fmt.Fprintln(stdout, "debug-cli native check passed (library only; no hardware accessed)")
 	return nil
 }
 
@@ -260,9 +260,9 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "  mmwcli version")
 	fmt.Fprintln(writer, "  mmwcli doctor [--studio-cli-firmware FILE]")
 	fmt.Fprintln(writer, "  mmwcli firmware verify FILE")
-	fmt.Fprintln(writer, "  mmwcli debug-capture check --bss-fw FILE --mss-fw FILE")
-	fmt.Fprintln(writer, "  mmwcli debug-capture native-check")
-	fmt.Fprintln(writer, "  mmwcli debug-capture capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
+	fmt.Fprintln(writer, "  mmwcli debug-cli check --bss-fw FILE --mss-fw FILE")
+	fmt.Fprintln(writer, "  mmwcli debug-cli native-check")
+	fmt.Fprintln(writer, "  mmwcli debug-cli capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
 	fmt.Fprintln(writer, "  mmwcli repl --port PORT [options]")
 	fmt.Fprintln(writer, "  mmwcli studio-cli check|version|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli dca ping|version|configure|start|stop|reset-fpga|reset-radar ...")
@@ -289,9 +289,9 @@ func printFirmwareHelp(writer io.Writer) {
 }
 
 func printDebugCaptureHelp(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: mmwcli debug-capture check --bss-fw FILE --mss-fw FILE")
-	fmt.Fprintln(writer, "       mmwcli debug-capture native-check")
-	fmt.Fprintln(writer, "       mmwcli debug-capture capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
+	fmt.Fprintln(writer, "usage: mmwcli debug-cli check --bss-fw FILE --mss-fw FILE")
+	fmt.Fprintln(writer, "       mmwcli debug-cli native-check")
+	fmt.Fprintln(writer, "       mmwcli debug-cli capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
 }
 
 func printREPLHelp(writer io.Writer) {
