@@ -5,15 +5,17 @@ defined by `README.md` and `docs/`.
 
 ## Project boundaries
 
-- `mmwcli` is a cross-platform command-line controller and DCA1000 raw-ADC acquisition tool for its documented TI xWR68xx/IWR6843 routes.
+- `mmwcli` is a cross-platform command-line controller and DCA1000 raw-ADC acquisition tool for
+  explicitly documented TI routes. Device-family support is tiered and must not be inferred from a
+  shared source tree, RF band, lane count, or similar part number.
 - The baseline is IWR6843 ES2 part `0xE2`, legacy frame, 16-bit complex ADC, and two LVDS lanes.
 - The functional/application workflow supports only the dedicated xWR68xx/IWR6843 TI `studio_cli`
   device firmware and currently has source-backed offline validation only. It requires the user to
   flash `mmwave_Studio_cli_xwr68xx.bin`; a complete Radar Toolbox installation is unnecessary.
 - `debug-capture` hardware validation covers only IWR6843 ES2 part `0xE2` with the exact firmware,
-  host, FTDI, and DCA1000 combination recorded in the hardware smoke test. Do not infer support for
-  another device from a shared TI source tree; each addition requires an independent evidence,
-  implementation, and hardware-validation batch.
+  host, FTDI, and DCA1000 combination recorded in the hardware smoke test. Other devices may enter
+  a source-validated experimental tier before hardware is available only under the requirements
+  below; they must not be described as supported.
 - The top-level `repl` is a `studio_cli` utility fixed to its line protocol and xWR68xx `version`
   validation. It is not a separate firmware or capture backend.
   It must not provide a selectable custom dialect or a way to bypass validation. It may send
@@ -41,6 +43,27 @@ defined by `README.md` and `docs/`.
 - Users supply TI firmware, configurations, and tools from their own installations. Do not copy
   these assets into the repository or release archives.
 - `sensorStop` stops the sensor only; it does not power off the radar or capture card.
+
+## Hardware support tiers
+
+- **Supported** means a public fail-closed implementation, relevant automated tests, and a
+  reproducible validation record. A hardware-I/O route requires a hardware record for the exact
+  device, ES, firmware, transport, host, and capture-card combination claimed.
+- **Source-validated experimental** may be implemented without repository-owner hardware only
+  when official TI evidence closes every field required by that route. Acquisition descriptors
+  include device identity, ES handling, bootstrap/download/runtime sequence, memory map, RF limits,
+  lane/data layout, and required assets; decoder descriptors include the exact byte layout,
+  geometry, and provenance contract they claim. Both require a closed built-in descriptor, offline
+  golden transactions or data, explicit user opt-in, fail-closed validation, honest public
+  labeling, and a community hardware-validation path.
+- **Planned** means no public route or named descriptor exists. Evidence may be documented, but
+  users must not be told that the hardware works.
+- Never fill a missing family field with xWR68xx/IWR6843 values, infer board geometry from a part
+  ID, or add an arbitrary register-script/custom hardware-JSON escape hatch. Leave the route
+  planned until every safety-relevant field is sourced and reviewed.
+- Community reports can promote an experimental combination only after the record is reproducible
+  and repository coverage pins the proven identity, assets, stages, and failure behavior. A report
+  for one board, ES, or host library does not promote adjacent combinations.
 
 ## Mandatory small batches
 
@@ -108,8 +131,9 @@ must not be used to evade the limits.
 - Validate DCA response structure and command codes. Preserve TI CLI-compatible handling of
   responses from an unknown source address.
 - Preserve raw output exactly. Do not reorder, parse, run FFT/detection, or repair data implicitly.
-- Offline tests cannot establish hardware compatibility. Compatibility claims require a reproducible
-  hardware-validation record.
+- Offline tests do not promote a hardware-I/O route to **Supported**. Supported compatibility
+  claims require a reproducible hardware-validation record; source-only claims must remain labeled
+  **Source-validated experimental** and satisfy the tier requirements above.
 
 See `docs/architecture.md` for protocol and state-machine details.
 

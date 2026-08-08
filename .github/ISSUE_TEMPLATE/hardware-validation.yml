@@ -1,0 +1,179 @@
+name: Hardware validation report
+description: Report a successful or failed mmwcli/mmwcore hardware combination without uploading TI assets.
+title: "[hardware-validation]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping validate another hardware combination. Failure reports are useful too.
+
+        Do not upload TI firmware, SDK/Toolbox contents, FTDI binaries, credentials, private network details, or other licensed assets. Use filenames, versions, byte counts, SHA-256 values, commands, and redacted logs.
+
+  - type: dropdown
+    id: route
+    attributes:
+      label: Route
+      description: Select the exact route exercised.
+      options:
+        - studio-cli acquisition
+        - debug-capture acquisition
+        - mmwcore offline decode
+        - mmwcli stream to mmwcore
+        - Other documented route
+    validations:
+      required: true
+
+  - type: input
+    id: device_family
+    attributes:
+      label: Device family and exact device
+      description: For example, xWR1843 / IWR1843.
+      placeholder: IWR6843
+    validations:
+      required: true
+
+  - type: input
+    id: board
+    attributes:
+      label: Board and revision
+      description: Include EVM/carrier/revision and how the capture interface is exposed.
+      placeholder: IWR6843ISK revision, DCA1000 connection
+    validations:
+      required: true
+
+  - type: input
+    id: part_id
+    attributes:
+      label: Reported part ID
+      description: Give the exact hexadecimal value and how it was read; use “not available” if the route cannot report it.
+      placeholder: "0xE2 from ..."
+    validations:
+      required: true
+
+  - type: input
+    id: es_version
+    attributes:
+      label: ES or silicon revision
+      description: Give the reported revision and source; do not infer it from the marketing name.
+      placeholder: ES2 from ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: firmware_hashes
+    attributes:
+      label: Firmware and asset hashes
+      description: List role, basename, source product/version, byte count, and SHA-256. Do not attach the files.
+      placeholder: |
+        BSS: xwr...bin, mmWave Studio ..., N bytes, SHA-256 ...
+        MSS: xwr...bin, mmWave Studio ..., N bytes, SHA-256 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: runtime_versions
+    attributes:
+      label: Runtime versions
+      description: Include mmwcli commit/version, mmwcore version if used, and relevant Go/Python/runtime versions.
+      placeholder: |
+        mmwcli: ...
+        mmwcore: ... or not used
+        runtime: ...
+    validations:
+      required: true
+
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      description: Operating system/version, architecture, and relevant USB/network adapter model.
+      placeholder: Windows 11 24H2, amd64, adapter ...
+    validations:
+      required: true
+
+  - type: input
+    id: d2xx
+    attributes:
+      label: FTDI D2XX driver and library
+      description: Give driver/library versions and architecture, or “not used”.
+      placeholder: Driver ..., library ..., amd64
+    validations:
+      required: true
+
+  - type: input
+    id: dca
+    attributes:
+      label: DCA1000 and FPGA version
+      description: Include board revision, FPGA/version response, and Ethernet topology, or “not used”.
+      placeholder: DCA1000 revision ..., FPGA ..., direct link
+    validations:
+      required: true
+
+  - type: input
+    id: cfg_hash
+    attributes:
+      label: Capture CFG SHA-256
+      description: Give the configuration basename, byte count, and SHA-256; do not attach proprietary content.
+      placeholder: capture.cfg, N bytes, SHA-256 ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Last completed stage
+      description: Select the furthest stage known to have completed.
+      options:
+        - Offline preflight only
+        - Device identity and ES validation
+        - Firmware verification or download
+        - Runtime transport initialization
+        - Radar configuration
+        - DCA1000 configuration
+        - Recording started
+        - Finite capture completed and published
+        - mmwcore decode completed
+    validations:
+      required: true
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Success with expected finite byte count
+        - Success but data not independently checked
+        - Deterministic validation failure
+        - Timeout or transport failure
+        - Unexpected data or byte count
+        - Cleanup or recovery failure
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Give exact redacted commands, connection/SOP state, power-cycle state, and expected versus observed result.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Redacted log
+      description: Paste the smallest complete log that shows stage transitions and the result. Remove serial numbers, addresses, paths, and secrets.
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Data and claim checks
+      options:
+        - label: I did not attach or paste TI/FTDI binaries, proprietary source/configuration contents, credentials, or private network details.
+          required: true
+        - label: I reported the exact tested combination and am not generalizing the result to another device, ES, board, firmware, or host.
+          required: true
