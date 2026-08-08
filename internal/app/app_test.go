@@ -22,7 +22,8 @@ func TestHelpContainsOnlyCLIBackends(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
 	}
 	text := stdout.String()
-	if !strings.HasPrefix(text, "mmwcli dev -") {
+	const productIdentity = "mmwcli dev - TI xWR68xx/IWR6843 cross-platform CLI control\n\n"
+	if !strings.HasPrefix(text, productIdentity) {
 		t.Fatalf("help does not report the development identity:\n%s", text)
 	}
 	for _, expected := range []string{"mmwcli version", "studio-cli", "repl", "dca", "debug-capture", "native-check", "cross-platform"} {

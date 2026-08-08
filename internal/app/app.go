@@ -255,7 +255,7 @@ func isHelp(command string) bool {
 }
 
 func printHelp(writer io.Writer) {
-	fmt.Fprintf(writer, "mmwcli %s - TI xWR cross-platform CLI control\n\n", Version)
+	fmt.Fprintf(writer, "mmwcli %s - TI xWR68xx/IWR6843 cross-platform CLI control\n\n", Version)
 	fmt.Fprintln(writer, "usage:")
 	fmt.Fprintln(writer, "  mmwcli version")
 	fmt.Fprintln(writer, "  mmwcli doctor [--studio-cli-firmware FILE]")
