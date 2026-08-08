@@ -56,6 +56,7 @@ func TestCaptureStreamFlagScopeAndOSFileBoundary(t *testing.T) {
 		},
 		{
 			"debug-cli", "capture", config, output,
+			"--family", "xwr68xx",
 			"--enhanced-port", "COM3", "--bss-fw", "bss.bin", "--mss-fw", "mss.bin",
 			"--d2xx-serial", "FT1234", "--stream",
 		},
@@ -200,7 +201,7 @@ func TestDebugCaptureStreamFailureEmitsModeAbortAndEOF(t *testing.T) {
 	var events []string
 	wantErr := errors.New("injected capture failure")
 	dependencies := preflightOnlyDebugCaptureDependencies(nil)
-	dependencies.checkAssets = func(string, string) (debugcapture.Assets, error) {
+	dependencies.checkAssets = func(radar.DeviceFamily, string, string) (debugcapture.Assets, error) {
 		events = append(events, "assets")
 		return debugcapture.Assets{}, nil
 	}
@@ -337,7 +338,7 @@ func TestDebugCaptureStreamSuccessPublishesFramesThenCommitAfterCleanup(t *testi
 		closeHook:                  assertNoTerminal,
 	}
 	dependencies := preflightOnlyDebugCaptureDependencies(nil)
-	dependencies.checkAssets = func(string, string) (debugcapture.Assets, error) {
+	dependencies.checkAssets = func(radar.DeviceFamily, string, string) (debugcapture.Assets, error) {
 		events = append(events, "assets")
 		return debugcapture.Assets{}, nil
 	}

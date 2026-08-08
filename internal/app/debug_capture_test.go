@@ -97,7 +97,10 @@ func TestDebugCaptureCapturePreflightFailureDoesNotCreatePartOrTouchHardware(t *
 			output := filepath.Join(t.TempDir(), "capture.bin")
 			var hardwareCalls int
 			dependencies := preflightOnlyDebugCaptureDependencies(&hardwareCalls)
-			arguments := append([]string{test.config, output}, test.extraArgs...)
+			arguments := append(
+				[]string{test.config, output, "--family", "xwr68xx"},
+				test.extraArgs...,
+			)
 			err := runDebugCaptureCaptureWithDependencies(
 				arguments,
 				io.Discard,
@@ -112,6 +115,86 @@ func TestDebugCaptureCapturePreflightFailureDoesNotCreatePartOrTouchHardware(t *
 			}
 			if hardwareCalls != 0 {
 				t.Fatalf("preflight made %d hardware call(s)", hardwareCalls)
+			}
+			assertPathDoesNotExist(t, output)
+			assertPathDoesNotExist(t, output+".part")
+		})
+	}
+}
+
+func TestDebugCaptureCaptureBindsExplicitFamilyAcrossOfflinePlans(t *testing.T) {
+	tests := []struct {
+		family string
+		config string
+	}{
+		{family: "xwr16xx", config: filepath.Join("..", "..", "hardware", "debug-cli-xwr16xx-raw.cfg")},
+		{family: "xwr18xx", config: filepath.Join("..", "..", "hardware", "debug-cli-xwr18xx-raw.cfg")},
+		{family: "xwr68xx", config: filepath.Join("..", "..", "hardware", "debug-cli-xwr6843-raw.cfg")},
+	}
+
+	for _, test := range tests {
+		t.Run(test.family, func(t *testing.T) {
+			device, err := radar.ParseDeviceFamily(test.family)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output := filepath.Join(t.TempDir(), "capture-session")
+			wantErr := errors.New("stop after family-bound asset preflight")
+			var calls []string
+			var hardwareCalls int
+			dependencies := preflightOnlyDebugCaptureDependencies(&hardwareCalls)
+			dependencies.validateFPGA = func(got radar.DeviceFamily, config dca.FPGAConfig) error {
+				calls = append(calls, "dca:"+got.Name())
+				if got != device {
+					t.Fatalf("DCA family = %s, want %s", got.Name(), device.Name())
+				}
+				return debugcapture.ValidateRawCaptureFPGAConfigForFamily(got, config)
+			}
+			dependencies.buildLinkPlan = func(
+				got radar.DeviceFamily,
+				plan radar.CapturePlan,
+			) (debugcapture.Plan, error) {
+				calls = append(calls, "link:"+got.Name())
+				if got != device || plan.DeviceFamily() != device {
+					t.Fatalf(
+						"link family = %s, plan family = %s, want %s",
+						got.Name(),
+						plan.DeviceFamily().Name(),
+						device.Name(),
+					)
+				}
+				return debugcapture.BuildPlanForFamily(got, plan)
+			}
+			dependencies.checkAssets = func(
+				got radar.DeviceFamily,
+				_, _ string,
+			) (debugcapture.Assets, error) {
+				calls = append(calls, "assets:"+got.Name())
+				if got != device {
+					t.Fatalf("asset family = %s, want %s", got.Name(), device.Name())
+				}
+				return debugcapture.Assets{}, wantErr
+			}
+
+			err = runDebugCaptureCaptureWithDependencies(
+				debugCaptureArgumentsForFamily(test.config, output, test.family),
+				io.Discard,
+				io.Discard,
+				dependencies,
+			)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("family preflight error = %v, want %v", err, wantErr)
+			}
+			wantCalls := []string{
+				"dca:" + test.family,
+				"link:" + test.family,
+				"assets:" + test.family,
+			}
+			if !reflect.DeepEqual(calls, wantCalls) {
+				t.Fatalf("family calls = %v, want %v", calls, wantCalls)
+			}
+			if hardwareCalls != 0 {
+				t.Fatalf("family preflight made %d hardware call(s)", hardwareCalls)
 			}
 			assertPathDoesNotExist(t, output)
 			assertPathDoesNotExist(t, output+".part")
@@ -179,7 +262,7 @@ func TestDebugCaptureCaptureReportsJoinedPostCommitCloseFailures(t *testing.T) {
 	dcaClient := &fakeDebugCaptureDCA{events: &events, closeErr: dcaCloseCause}
 	controller := &fakeDebugCaptureController{events: &events, closeErr: controllerCloseCause}
 	dependencies := preflightOnlyDebugCaptureDependencies(nil)
-	dependencies.checkAssets = func(string, string) (debugcapture.Assets, error) {
+	dependencies.checkAssets = func(radar.DeviceFamily, string, string) (debugcapture.Assets, error) {
 		events = append(events, "assets")
 		return debugcapture.Assets{}, nil
 	}
@@ -281,7 +364,7 @@ func TestDebugCapturePublishesV1FromConfigSnapshot(t *testing.T) {
 	dcaClient := &fakeDebugCaptureDCA{events: &events}
 	controller := &fakeDebugCaptureController{events: &events}
 	dependencies := preflightOnlyDebugCaptureDependencies(nil)
-	dependencies.checkAssets = func(string, string) (debugcapture.Assets, error) {
+	dependencies.checkAssets = func(radar.DeviceFamily, string, string) (debugcapture.Assets, error) {
 		events = append(events, "assets")
 		if err := os.WriteFile(config, []byte("sensorStart\n"), 0o644); err != nil {
 			return debugcapture.Assets{}, err
@@ -404,7 +487,11 @@ func TestDebugCaptureCaptureHelpHasNoTextCLIRouteFlags(t *testing.T) {
 		t.Fatalf("Run returned %d: %s", code, stderr.String())
 	}
 	help := stdout.String() + stderr.String()
-	for _, expected := range []string{"--enhanced-port", "--bss-fw", "--mss-fw", "--d2xx-serial", "--d2xx-description", "--sop2-reset", "stream"} {
+	for _, expected := range []string{
+		"--family", "xwr16xx", "xwr18xx", "xwr68xx", "-device string",
+		"--enhanced-port", "--bss-fw", "--mss-fw", "--d2xx-serial",
+		"--d2xx-description", "--sop2-reset", "stream",
+	} {
 		if !strings.Contains(help, expected) {
 			t.Errorf("help does not contain %s: %s", expected, help)
 		}
@@ -440,9 +527,14 @@ func writeDebugCaptureConfig(t *testing.T, contents string) string {
 }
 
 func debugCaptureArguments(config, output string) []string {
+	return debugCaptureArgumentsForFamily(config, output, "xwr68xx")
+}
+
+func debugCaptureArgumentsForFamily(config, output, family string) []string {
 	return []string{
 		config,
 		output,
+		"--family", family,
 		"--enhanced-port", "COM3",
 		"--bss-fw", "bss.bin",
 		"--mss-fw", "mss.bin",
@@ -452,10 +544,12 @@ func debugCaptureArguments(config, output string) []string {
 
 func preflightOnlyDebugCaptureDependencies(hardwareCalls *int) debugCaptureDependencies {
 	return debugCaptureDependencies{
-		checkAssets: func(string, string) (debugcapture.Assets, error) {
+		checkAssets: func(radar.DeviceFamily, string, string) (debugcapture.Assets, error) {
 			return debugcapture.Assets{}, nil
 		},
-		checkNative: func() error { return nil },
+		validateFPGA:  debugcapture.ValidateRawCaptureFPGAConfigForFamily,
+		buildLinkPlan: debugcapture.BuildPlanForFamily,
+		checkNative:   func() error { return nil },
 		dialDCA: func(dca.Options) (debugCaptureDCA, error) {
 			if hardwareCalls != nil {
 				(*hardwareCalls)++

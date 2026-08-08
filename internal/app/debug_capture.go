@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"mmwcli/internal/capturefile"
+	"mmwcli/internal/capturemanifest"
 	"mmwcli/internal/capturestream"
 	"mmwcli/internal/d2xx"
 	"mmwcli/internal/dca"
@@ -39,7 +40,9 @@ type debugCaptureSessionRunner func(
 ) (dca.CaptureStats, error)
 
 type debugCaptureDependencies struct {
-	checkAssets    func(string, string) (debugcapture.Assets, error)
+	checkAssets    func(radar.DeviceFamily, string, string) (debugcapture.Assets, error)
+	validateFPGA   func(radar.DeviceFamily, dca.FPGAConfig) error
+	buildLinkPlan  func(radar.DeviceFamily, radar.CapturePlan) (debugcapture.Plan, error)
 	checkNative    func() error
 	dialDCA        func(dca.Options) (debugCaptureDCA, error)
 	openController func(context.Context, debugcapture.ControllerOptions) (debugCaptureController, error)
@@ -50,7 +53,9 @@ type debugCaptureDependencies struct {
 
 func productionDebugCaptureDependencies() debugCaptureDependencies {
 	return debugCaptureDependencies{
-		checkAssets: debugcapture.CheckAssets,
+		checkAssets:   debugcapture.CheckAssetsForFamily,
+		validateFPGA:  debugcapture.ValidateRawCaptureFPGAConfigForFamily,
+		buildLinkPlan: debugcapture.BuildPlanForFamily,
 		checkNative: func() error {
 			library, err := loadNativeD2XX()
 			if err != nil {
@@ -92,11 +97,12 @@ func runDebugCaptureCaptureWithDependencies(
 	flags := newCommandFlagSet(
 		"debug-cli capture",
 		stderr,
-		"mmwcli debug-cli capture CFG OUTDIR --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]",
+		"mmwcli debug-cli capture CFG OUTDIR --family FAMILY --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]",
 	)
+	familyName := flags.String("family", "", "exact radar family: xwr16xx, xwr18xx, or xwr68xx")
 	enhancedPort := flags.String("enhanced-port", "", "Enhanced COM port used for SOP2 firmware submission")
-	bssPath := flags.String("bss-fw", "", "xWR68xx BSS/RadarSS firmware file")
-	mssPath := flags.String("mss-fw", "", "xWR68xx MSS/MasterSS firmware file")
+	bssPath := flags.String("bss-fw", "", "selected-family BSS/RadarSS firmware file")
+	mssPath := flags.String("mss-fw", "", "selected-family MSS/MasterSS firmware file")
 	serialBase := flags.String("d2xx-serial", "", "D2XX serial-number base for the A/B interfaces")
 	descriptionBase := flags.String("d2xx-description", "", "D2XX description base for the A/B interfaces")
 	sop2Reset := flags.Bool("sop2-reset", false, "set SOP2 with D2XX C/D and pulse target reset before Enhanced COM")
@@ -115,6 +121,10 @@ func runDebugCaptureCaptureWithDependencies(
 	}
 	if flags.NArg() != 0 {
 		return usageError{message: "unexpected debug-cli capture arguments: " + strings.Join(flags.Args(), " ")}
+	}
+	device, err := parseDebugCaptureDeviceFamily(*familyName)
+	if err != nil {
+		return err
 	}
 	if err := validateDebugCaptureDependencies(dependencies); err != nil {
 		return err
@@ -145,23 +155,23 @@ func runDebugCaptureCaptureWithDependencies(
 	if err != nil {
 		return err
 	}
-	if err := debugcapture.ValidateRawCaptureFPGAConfig(dcaOptions.fpga); err != nil {
+	if err := dependencies.validateFPGA(device, dcaOptions.fpga); err != nil {
 		return usageError{message: err.Error()}
 	}
 
-	prepared, err := loadCaptureOutputPlan(radar.StudioCLI, configPath)
+	prepared, err := loadDebugCaptureOutputPlan(device, configPath)
 	if err != nil {
 		return err
 	}
 	plan := prepared.plan
-	linkPlan, err := debugcapture.BuildPlan(plan)
+	linkPlan, err := dependencies.buildLinkPlan(device, plan)
 	if err != nil {
 		return err
 	}
 	if err := preflightDebugCaptureBounds(plan, &dcaOptions, diagnostics); err != nil {
 		return err
 	}
-	assets, err := dependencies.checkAssets(*bssPath, *mssPath)
+	assets, err := dependencies.checkAssets(device, *bssPath, *mssPath)
 	if err != nil {
 		return err
 	}
@@ -194,13 +204,50 @@ func runDebugCaptureCaptureWithDependencies(
 }
 
 func validateDebugCaptureDependencies(dependencies debugCaptureDependencies) error {
-	if dependencies.checkAssets == nil || dependencies.checkNative == nil ||
+	if dependencies.checkAssets == nil || dependencies.validateFPGA == nil ||
+		dependencies.buildLinkPlan == nil || dependencies.checkNative == nil ||
 		dependencies.dialDCA == nil || dependencies.openController == nil ||
 		dependencies.newReceiver == nil || dependencies.runSession == nil ||
 		dependencies.context == nil {
 		return errors.New("debug-cli dependencies are incomplete")
 	}
 	return nil
+}
+
+func parseDebugCaptureDeviceFamily(name string) (radar.DeviceFamily, error) {
+	if name == "" {
+		return radar.DeviceFamily{}, usageError{
+			message: "--family is required; use exact xwr16xx, xwr18xx, or xwr68xx",
+		}
+	}
+	device, err := debugcapture.ParseDeviceFamily(name)
+	if err != nil {
+		return radar.DeviceFamily{}, usageError{message: err.Error()}
+	}
+	return device, nil
+}
+
+func loadDebugCaptureOutputPlan(
+	device radar.DeviceFamily,
+	path string,
+) (preparedCaptureOutput, error) {
+	snapshot, err := readCaptureSessionConfig(path)
+	if err != nil {
+		return preparedCaptureOutput{}, err
+	}
+	plan, err := radar.BuildCaptureSessionV1PlanForFamily(device, snapshot)
+	if err != nil {
+		return preparedCaptureOutput{}, err
+	}
+	finalize, err := capturemanifest.NewV1Finalizer(snapshot, plan.RawCapture)
+	if err != nil {
+		return preparedCaptureOutput{}, err
+	}
+	return preparedCaptureOutput{
+		plan:            plan,
+		configSnapshot:  snapshot,
+		finalizeSession: finalize,
+	}, nil
 }
 
 func requireExactValue(option, value string) error {

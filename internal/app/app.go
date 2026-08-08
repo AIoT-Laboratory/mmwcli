@@ -177,20 +177,25 @@ func runDebugCaptureCheck(arguments []string, stdout, stderr io.Writer) error {
 	flags := newCommandFlagSet(
 		"debug-cli check",
 		stderr,
-		"mmwcli debug-cli check --bss-fw FILE --mss-fw FILE",
+		"mmwcli debug-cli check --family FAMILY --bss-fw FILE --mss-fw FILE",
 	)
-	bssPath := flags.String("bss-fw", "", "xWR68xx BSS/RadarSS firmware file")
-	mssPath := flags.String("mss-fw", "", "xWR68xx MSS/MasterSS firmware file")
+	familyName := flags.String("family", "", "exact radar family: xwr16xx, xwr18xx, or xwr68xx")
+	bssPath := flags.String("bss-fw", "", "selected-family BSS/RadarSS firmware file")
+	mssPath := flags.String("mss-fw", "", "selected-family MSS/MasterSS firmware file")
 	if err := parseCommandFlags(flags, arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return usageError{message: "unexpected debug-cli arguments: " + strings.Join(flags.Args(), " ")}
 	}
+	device, err := parseDebugCaptureDeviceFamily(*familyName)
+	if err != nil {
+		return err
+	}
 	if strings.TrimSpace(*bssPath) == "" || strings.TrimSpace(*mssPath) == "" {
 		return usageError{message: "debug-cli check requires --bss-fw FILE and --mss-fw FILE"}
 	}
-	assets, err := debugcapture.CheckAssets(*bssPath, *mssPath)
+	assets, err := debugcapture.CheckAssetsForFamily(device, *bssPath, *mssPath)
 	if err != nil {
 		return err
 	}
@@ -255,14 +260,14 @@ func isHelp(command string) bool {
 }
 
 func printHelp(writer io.Writer) {
-	fmt.Fprintf(writer, "mmwcli %s - TI xWR68xx/IWR6843 cross-platform CLI control\n\n", Version)
+	fmt.Fprintf(writer, "mmwcli %s - TI xWR16xx/xWR18xx/xWR68xx cross-platform CLI control\n\n", Version)
 	fmt.Fprintln(writer, "usage:")
 	fmt.Fprintln(writer, "  mmwcli version")
 	fmt.Fprintln(writer, "  mmwcli doctor [--studio-cli-firmware FILE]")
 	fmt.Fprintln(writer, "  mmwcli firmware verify FILE")
-	fmt.Fprintln(writer, "  mmwcli debug-cli check --bss-fw FILE --mss-fw FILE")
+	fmt.Fprintln(writer, "  mmwcli debug-cli check --family FAMILY --bss-fw FILE --mss-fw FILE")
 	fmt.Fprintln(writer, "  mmwcli debug-cli native-check")
-	fmt.Fprintln(writer, "  mmwcli debug-cli capture CFG OUTDIR --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
+	fmt.Fprintln(writer, "  mmwcli debug-cli capture CFG OUTDIR --family FAMILY --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
 	fmt.Fprintln(writer, "  mmwcli repl --port PORT [options]")
 	fmt.Fprintln(writer, "  mmwcli studio-cli check|version|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli dca ping|version|configure|start|stop|reset-fpga|reset-radar ...")
@@ -289,9 +294,9 @@ func printFirmwareHelp(writer io.Writer) {
 }
 
 func printDebugCaptureHelp(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: mmwcli debug-cli check --bss-fw FILE --mss-fw FILE")
+	fmt.Fprintln(writer, "usage: mmwcli debug-cli check --family FAMILY --bss-fw FILE --mss-fw FILE")
 	fmt.Fprintln(writer, "       mmwcli debug-cli native-check")
-	fmt.Fprintln(writer, "       mmwcli debug-cli capture CFG OUTDIR --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
+	fmt.Fprintln(writer, "       mmwcli debug-cli capture CFG OUTDIR --family FAMILY --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
 }
 
 func printREPLHelp(writer io.Writer) {

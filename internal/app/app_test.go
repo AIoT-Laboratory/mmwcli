@@ -22,7 +22,7 @@ func TestHelpContainsOnlyCLIBackends(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
 	}
 	text := stdout.String()
-	const productIdentity = "mmwcli dev - TI xWR68xx/IWR6843 cross-platform CLI control\n\n"
+	const productIdentity = "mmwcli dev - TI xWR16xx/xWR18xx/xWR68xx cross-platform CLI control\n\n"
 	if !strings.HasPrefix(text, productIdentity) {
 		t.Fatalf("help does not report the development identity:\n%s", text)
 	}
@@ -398,7 +398,7 @@ func TestFirmwareVerifyRequiresExplicitFile(t *testing.T) {
 
 func TestDebugCaptureCheckRequiresExplicitAssets(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"debug-cli", "check", "--bss-fw", "bss.bin"}, &stdout, &stderr); code != 2 {
+	if code := Run([]string{"debug-cli", "check", "--family", "xwr68xx", "--bss-fw", "bss.bin"}, &stdout, &stderr); code != 2 {
 		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "requires --bss-fw FILE and --mss-fw FILE") {
@@ -416,12 +416,71 @@ func TestDebugCaptureCheckRejectsBadAssetsOffline(t *testing.T) {
 		}
 	}
 	var stdout, stderr bytes.Buffer
-	arguments := []string{"debug-cli", "check", "--bss-fw", bssPath, "--mss-fw", mssPath}
+	arguments := []string{
+		"debug-cli", "check", "--family", "xwr68xx",
+		"--bss-fw", bssPath, "--mss-fw", mssPath,
+	}
 	if code := Run(arguments, &stdout, &stderr); code != 4 {
 		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "BSS firmware size mismatch") {
 		t.Fatalf("missing asset error: %s", stderr.String())
+	}
+}
+
+func TestDebugCaptureCommandsRequireExactFamilyBeforePreflight(t *testing.T) {
+	root := t.TempDir()
+	output := filepath.Join(root, "capture-session")
+	tests := []struct {
+		name      string
+		arguments []string
+		match     string
+	}{
+		{
+			name:      "check missing",
+			arguments: []string{"debug-cli", "check", "--bss-fw", "missing-bss", "--mss-fw", "missing-mss"},
+			match:     "--family is required",
+		},
+		{
+			name:      "check model alias",
+			arguments: []string{"debug-cli", "check", "--family", "iwr6843", "--bss-fw", "missing-bss", "--mss-fw", "missing-mss"},
+			match:     "xwr16xx, xwr18xx, or xwr68xx",
+		},
+		{
+			name: "capture missing",
+			arguments: []string{
+				"debug-cli", "capture", "missing.cfg", output,
+				"--enhanced-port", "COM3", "--bss-fw", "missing-bss", "--mss-fw", "missing-mss",
+				"--d2xx-serial", "FT1234",
+			},
+			match: "--family is required",
+		},
+		{
+			name: "capture model alias",
+			arguments: []string{
+				"debug-cli", "capture", "missing.cfg", output, "--family", "iwr6843",
+				"--enhanced-port", "COM3", "--bss-fw", "missing-bss", "--mss-fw", "missing-mss",
+				"--d2xx-serial", "FT1234",
+			},
+			match: "xwr16xx, xwr18xx, or xwr68xx",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := Run(test.arguments, &stdout, &stderr); code != 2 {
+				t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stderr.String(), test.match) {
+				t.Fatalf("stderr = %s, want %q", stderr.String(), test.match)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("family preflight wrote stdout: %q", stdout.String())
+			}
+			assertPathDoesNotExist(t, output)
+			assertPathDoesNotExist(t, output+".part")
+		})
 	}
 }
 
