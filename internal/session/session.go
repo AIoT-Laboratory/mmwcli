@@ -50,6 +50,18 @@ type DataReceiver interface {
 
 type ReceiverFactory func(dca.ReceiverConfig) (DataReceiver, error)
 
+// Participant coordinates one already-created auxiliary sensor with the
+// radar/DCA lifecycle. Ready/process setup belongs to the caller. Arm runs
+// after radar and DCA configuration, Start runs immediately before the radar
+// start command, and Finish runs once after hardware cleanup. A true complete
+// value permits the participant to stop and validate its finite data; false
+// requires cancellation and cleanup.
+type Participant interface {
+	Arm(context.Context) error
+	Start(context.Context) error
+	Finish(context.Context, bool) error
+}
+
 // CleanupError marks a failure that occurred while converging hardware or
 // closing capture resources. Callers must not downgrade a cancellation joined
 // with this error to a successful exit-130 cleanup.
@@ -81,6 +93,8 @@ type Options struct {
 	RadarCleanupTimeout time.Duration
 	Mirror              *capturestream.Mirror
 	MirrorSealTimeout   time.Duration
+	Participant         Participant
+	ParticipantTimeout  time.Duration
 	Log                 func(string)
 }
 
@@ -95,6 +109,7 @@ func DefaultOptions() Options {
 		ControlQuietWindow:  50 * time.Millisecond,
 		RadarCleanupTimeout: 3 * time.Second,
 		MirrorSealTimeout:   3 * time.Second,
+		ParticipantTimeout:  5 * time.Second,
 	}
 }
 
@@ -152,6 +167,9 @@ func Run(
 		if options.MirrorSealTimeout <= 0 {
 			return stats, errors.New("capture stream mirror seal timeout must be positive")
 		}
+	}
+	if options.Participant != nil && options.ParticipantTimeout <= 0 {
+		return stats, errors.New("capture participant timeout must be positive")
 	}
 	if plan.Mode != radar.FullConfiguration && plan.Mode != radar.ReuseConfiguration {
 		return stats, errors.New("radar capture plan has an invalid configuration mode")
@@ -253,6 +271,8 @@ func Run(
 	radarMayBeRunning := false
 	finiteFrameCompleted := false
 	var radarStartIssuedAt time.Time
+	participant := options.Participant
+	participantActive := false
 
 	outputManagedByLifecycle = true
 	mirrorManagedByLifecycle = true
@@ -298,6 +318,17 @@ func Run(
 		}
 		if resultErr == nil {
 			resultErr = validateResult(plan, stats, options.ReceiverConfig.IdleTimeout, radarStartIssuedAt)
+		}
+		if participantActive {
+			participantContext, cancelParticipant := context.WithTimeout(
+				context.Background(),
+				options.ParticipantTimeout,
+			)
+			participantErr := participant.Finish(participantContext, resultErr == nil)
+			cancelParticipant()
+			if participantErr != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("finish capture participant: %w", participantErr))
+			}
 		}
 		if mirror != nil {
 			if mirrorErr := mirror.Err(); mirrorErr != nil {
@@ -379,6 +410,17 @@ func Run(
 		log("radar configuration reuse selected; no RF/LVDS command sent")
 	}
 
+	if participant != nil {
+		participantActive = true
+		participantContext, cancelParticipant := context.WithTimeout(ctx, options.ParticipantTimeout)
+		err = participant.Arm(participantContext)
+		cancelParticipant()
+		if err != nil {
+			return stats, fmt.Errorf("arm capture participant: %w", err)
+		}
+		log("capture participant armed")
+	}
+
 	receiver, err = newReceiver(options.ReceiverConfig)
 	if err != nil {
 		return stats, err
@@ -412,6 +454,15 @@ func Run(
 
 	if err := ctx.Err(); err != nil {
 		return stats, err
+	}
+	if participant != nil {
+		participantContext, cancelParticipant := context.WithTimeout(ctx, options.ParticipantTimeout)
+		err = participant.Start(participantContext)
+		cancelParticipant()
+		if err != nil {
+			return stats, fmt.Errorf("start capture participant: %w", err)
+		}
+		log("capture participant started")
 	}
 	radarMayBeRunning = true
 	radarStartIssuedAt = time.Now()

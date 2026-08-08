@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -126,6 +127,30 @@ type fakeReceiver struct {
 	waitHook  func(context.Context) (dca.CaptureStats, error)
 	closeHook func()
 	closeErr  error
+}
+
+type fakeParticipant struct {
+	events    *[]string
+	armErr    error
+	startErr  error
+	finishErr error
+	finished  []bool
+}
+
+func (f *fakeParticipant) Arm(context.Context) error {
+	*f.events = append(*f.events, "participantArm")
+	return f.armErr
+}
+
+func (f *fakeParticipant) Start(context.Context) error {
+	*f.events = append(*f.events, "participantStart")
+	return f.startErr
+}
+
+func (f *fakeParticipant) Finish(_ context.Context, complete bool) error {
+	*f.events = append(*f.events, fmt.Sprintf("participantFinish:%t", complete))
+	f.finished = append(f.finished, complete)
+	return f.finishErr
 }
 
 func (f *fakeReceiver) Start(_ context.Context, output io.WriterAt) error {
@@ -766,6 +791,131 @@ func TestReuseCaptureSendsNoConfigurationAndArmsBeforeStart(t *testing.T) {
 	}
 	if string(raw) != "adc" {
 		t.Fatalf("raw capture bytes = %q, want %q", raw, "adc")
+	}
+}
+
+func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
+	plan := sessionTestPlan(t)
+	finalPath := filepath.Join(t.TempDir(), "participant.bin")
+	output, err := capturefile.Create(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	participant := &fakeParticipant{events: &events}
+	options := DefaultOptions()
+	options.Participant = participant
+
+	_, err = Run(
+		context.Background(),
+		&fakeFiniteFrameRadar{fakeRadar: &fakeRadar{events: &events}},
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) {
+			return &fakeReceiver{
+				events: &events,
+				stats: dca.CaptureStats{
+					PacketsReceived: 1,
+					OutputBytes:     plan.ExpectedBytes,
+				},
+			}, nil
+		},
+		plan,
+		output,
+		options,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"version", "sensorStop", "dcaStop", "dcaConfigure", "apply",
+		"participantArm", "receiverStart", "dcaStart", "participantStart", "sensorStart",
+		"receiverFirst", "receiverWait", "frameEnd", "receiverWait", "dcaStop", "dcaDrain",
+		"receiverClose", "participantFinish:true",
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v\nwant   = %#v", events, want)
+	}
+	if !reflect.DeepEqual(participant.finished, []bool{true}) {
+		t.Fatalf("participant outcomes = %v, want [true]", participant.finished)
+	}
+	if _, err := os.Stat(finalPath); err != nil {
+		t.Fatalf("participant capture was not committed: %v", err)
+	}
+}
+
+func TestParticipantStartFailurePreventsRadarStart(t *testing.T) {
+	plan := sessionTestPlan(t)
+	finalPath := filepath.Join(t.TempDir(), "participant-start.bin")
+	output, err := capturefile.Create(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	wantErr := errors.New("producer start failed")
+	participant := &fakeParticipant{events: &events, startErr: wantErr}
+	options := DefaultOptions()
+	options.Participant = participant
+
+	_, err = Run(
+		context.Background(),
+		&fakeRadar{events: &events},
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) {
+			return &fakeReceiver{events: &events}, nil
+		},
+		plan,
+		output,
+		options,
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Run error = %v, want %v", err, wantErr)
+	}
+	if containsEvent(events, "sensorStart") || containsEvent(events, "sensorStart 0") {
+		t.Fatalf("radar started after participant failure: %v", events)
+	}
+	if !reflect.DeepEqual(participant.finished, []bool{false}) {
+		t.Fatalf("participant outcomes = %v, want [false]", participant.finished)
+	}
+	if _, err := os.Stat(finalPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed participant capture published output: %v", err)
+	}
+}
+
+func TestParticipantFinishFailurePreventsCommit(t *testing.T) {
+	plan := sessionTestPlan(t)
+	finalPath := filepath.Join(t.TempDir(), "participant-finish.bin")
+	output, err := capturefile.Create(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	wantErr := errors.New("producer END missing")
+	participant := &fakeParticipant{events: &events, finishErr: wantErr}
+	options := DefaultOptions()
+	options.Participant = participant
+
+	_, err = Run(
+		context.Background(),
+		&fakeFiniteFrameRadar{fakeRadar: &fakeRadar{events: &events}},
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) {
+			return &fakeReceiver{
+				events: &events,
+				stats: dca.CaptureStats{PacketsReceived: 1, OutputBytes: plan.ExpectedBytes},
+			}, nil
+		},
+		plan,
+		output,
+		options,
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Run error = %v, want %v", err, wantErr)
+	}
+	if !reflect.DeepEqual(participant.finished, []bool{true}) {
+		t.Fatalf("participant outcomes = %v, want [true]", participant.finished)
+	}
+	if _, err := os.Stat(finalPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("participant finish failure published output: %v", err)
 	}
 }
 
