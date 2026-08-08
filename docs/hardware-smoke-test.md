@@ -114,19 +114,19 @@ Debug mode uses the separate SOP2, Enhanced COM, and D2XX/mmWaveLink path and is
 equivalent to the following; the operator supplied `PORT`, `PATH`, `BASE`, and `OUT` explicitly:
 
 ```text
-mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg OUT --enhanced-port PORT --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin --d2xx-description BASE --sop2-reset --delay-us 100
+mmwcli debug-cli capture hardware/debug-cli-xwr6843-raw.cfg OUT --enhanced-port PORT --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin --d2xx-description BASE --sop2-reset --delay-us 100
 ```
 
 | Item | Validated value |
 | --- | --- |
 | Radar and capture card | IWR6843 QM, ES2, part `0xE2`; DCA1000 |
-| Mode | SOP2 `debug-capture`, legacy frame |
+| Mode | SOP2 `debug-cli`, legacy frame |
 | Host and native boundary | Windows/amd64, FTDI D2XX 3.2.14, `CGO_ENABLED=0`, `ftd2xx` build tag |
 | Source revision | `6b3e73e` |
 | Test binary SHA-256 | `9A2271DB4D440DD1FF85237392D2254727C93592E60942FCF904D791AD07A80D` |
 | BSS firmware SHA-256 | `E2C69405394E35BA376EFE1A52305EE74DBD19F8BAB72BD5A9078878853CD77F` |
 | MSS firmware SHA-256 | `316911D4A8DBA1762714A3A107071BD0CF06A135FAE29BFBBC92B037592DE060` |
-| CFG | `hardware/debug-capture-xwr6843-raw.cfg`; SHA-256 `69749D609DCF59CFF9C4F133BBEF11B4D3300CC71C0299E20998E969B7A5DC8D` |
+| CFG | `hardware/debug-cli-xwr6843-raw.cfg`; SHA-256 `A14D9D2986175A03A8EE9B99911404093403211EA3575365DEA6104D2CA14FE8` |
 | SOP2 and transport | `--sop2-reset`; `--delay-us 100`; DCA FPGA not reset |
 | Expected/actual payload | `26,214,400` bytes / `26,214,400` bytes |
 | CLI statistics | `packets=18005 payload=26214400 output=26214400 gaps=0 outOfOrder=0 missing=0` |

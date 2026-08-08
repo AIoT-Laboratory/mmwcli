@@ -8,7 +8,7 @@ import (
 )
 
 func TestBuildCaptureSessionV1PlanAcceptsRepositoryConfigs(t *testing.T) {
-	for _, name := range []string{"studio-cli-xwr6843-raw.cfg", "debug-capture-xwr6843-raw.cfg"} {
+	for _, name := range []string{"studio-cli-xwr6843-raw.cfg", "debug-cli-xwr6843-raw.cfg"} {
 		t.Run(name, func(t *testing.T) {
 			snapshot, err := os.ReadFile(filepath.Join("..", "..", "hardware", name))
 			if err != nil {
