@@ -51,7 +51,7 @@ func TestEncoderWritesGoldenFiniteCommitStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	frameDigest := sha256.Sum256(frame)
-	if err := encoder.Commit(Artifact{SizeBytes: uint64(len(frame)), SHA256: frameDigest}); err != nil {
+	if err := encoder.Commit(Artifact{sizeBytes: uint64(len(frame)), sha256: frameDigest}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -236,7 +236,7 @@ func TestEncoderRejectsArtifactMismatchAndSecondTerminal(t *testing.T) {
 	if err := mismatch.WriteFrame(0, frame); err != nil {
 		t.Fatal(err)
 	}
-	if err := mismatch.Commit(Artifact{SizeBytes: 64}); err == nil {
+	if err := mismatch.Commit(Artifact{sizeBytes: 64}); err == nil {
 		t.Fatal("mismatched artifact digest was accepted")
 	}
 	if err := mismatch.Abort(AbortIntegrityFailed); !errors.Is(err, ErrEncoderPoisoned) {
@@ -252,7 +252,7 @@ func TestEncoderRejectsArtifactMismatchAndSecondTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(frame)
-	if err := committed.Commit(Artifact{SizeBytes: 64, SHA256: digest}); err != nil {
+	if err := committed.Commit(Artifact{sizeBytes: 64, sha256: digest}); err != nil {
 		t.Fatal(err)
 	}
 	if err := committed.Abort(AbortCancelled); !errors.Is(err, ErrEncoderTerminal) {

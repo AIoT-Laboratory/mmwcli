@@ -144,15 +144,15 @@ func (encoder *Encoder) Commit(artifact Artifact) error {
 			encoder.frameCount,
 		))
 	}
-	if artifact.SizeBytes != encoder.expectedBytes || artifact.SizeBytes != encoder.adcBytes {
+	if artifact.sizeBytes != encoder.expectedBytes || artifact.sizeBytes != encoder.adcBytes {
 		return encoder.poison(fmt.Errorf(
 			"capture stream artifact size is %d; expected %d",
-			artifact.SizeBytes,
+			artifact.sizeBytes,
 			encoder.expectedBytes,
 		))
 	}
 	digest := encoder.currentDigest()
-	if artifact.SHA256 != digest {
+	if artifact.sha256 != digest {
 		return encoder.poison(errors.New("capture stream artifact SHA-256 does not match emitted frames"))
 	}
 	payload, err := buildTerminalPayload(

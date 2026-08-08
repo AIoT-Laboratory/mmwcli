@@ -12,6 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"mmwcli/internal/capturefile"
 	"mmwcli/internal/radar"
 )
 
@@ -50,11 +51,28 @@ type captureShape struct {
 	expectedBytes uint64
 }
 
-// Artifact is the already-published capture-session ADC evidence checked
-// before a stream may emit COMMIT.
+// Artifact is unforgeable outside this package. It can only be obtained from
+// an already-published capture-session directory.
 type Artifact struct {
-	SizeBytes uint64
-	SHA256    [sha256.Size]byte
+	sizeBytes uint64
+	sha256    [sha256.Size]byte
+}
+
+// ArtifactFromCommittedSession binds stream COMMIT evidence to the
+// successfully published capture directory, never to an in-memory digest or
+// an incomplete staging directory.
+func ArtifactFromCommittedSession(directory *capturefile.SessionDirectory) (Artifact, error) {
+	if directory == nil {
+		return Artifact{}, errors.New("capture stream session directory is nil")
+	}
+	adc, err := directory.CommittedADCArtifact()
+	if err != nil {
+		return Artifact{}, fmt.Errorf("obtain published capture stream artifact: %w", err)
+	}
+	if adc.SizeBytes < 0 {
+		return Artifact{}, errors.New("published capture stream artifact has a negative size")
+	}
+	return Artifact{sizeBytes: uint64(adc.SizeBytes), sha256: adc.SHA256}, nil
 }
 
 type AbortReason string
