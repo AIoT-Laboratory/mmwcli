@@ -358,7 +358,7 @@ func TestControllerAwaitsNaturalFiniteFrameEndWithoutStopTrigger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AwaitFiniteFrameEndContext: %v", err)
 	}
-	if response != "debug-capture finite frame ended" {
+	if response != "debug-cli finite frame ended" {
 		t.Fatalf("response = %q", response)
 	}
 	if controller.state != controllerStateConfigured {

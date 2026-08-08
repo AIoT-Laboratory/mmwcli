@@ -25,7 +25,7 @@ const (
 
 // ErrReuseConfigurationUnsupported reports that SOP2 debug capture always
 // downloads firmware and applies the complete mmWaveLink configuration.
-var ErrReuseConfigurationUnsupported = errors.New("debug-capture does not support starting without configuration")
+var ErrReuseConfigurationUnsupported = errors.New("debug-cli does not support starting without configuration")
 
 // ControllerOptions binds one fully preflighted configuration and one explicit
 // pair of D2XX interfaces to an xWR6843 in SOP2 mode.
@@ -39,11 +39,11 @@ type ControllerOptions struct {
 
 // TargetStateError marks a failure after a target-facing state change. The
 // controller never retries or resets automatically; an operator must explicitly
-// restore a known boot state before trying another debug-capture session.
+// restore a known boot state before trying another debug-cli session.
 type TargetStateError struct{ Err error }
 
 func (failure *TargetStateError) Error() string {
-	return "debug-capture target state requires an explicit reset: " + failure.Err.Error()
+	return "debug-cli target state requires an explicit reset: " + failure.Err.Error()
 }
 
 func (failure *TargetStateError) Unwrap() error       { return failure.Err }
@@ -136,7 +136,7 @@ func openControllerWithBackend(
 	}
 	if backend.openEnhanced == nil || backend.openD2XX == nil || backend.bootstrap == nil ||
 		(options.ResetSOP2 && backend.prepareSOP2 == nil) {
-		return nil, errors.New("debug-capture controller backend is incomplete")
+		return nil, errors.New("debug-cli controller backend is incomplete")
 	}
 	if options.ResetSOP2 {
 		if err := backend.prepareSOP2(ctx, options.Selectors); err != nil {
@@ -206,25 +206,25 @@ func openControllerWithBackend(
 
 func preflightControllerOptions(options ControllerOptions) error {
 	if options.EnhancedPort == "" || strings.TrimSpace(options.EnhancedPort) == "" {
-		return errors.New("debug-capture Enhanced COM port is required; ports are never scanned")
+		return errors.New("debug-cli Enhanced COM port is required; ports are never scanned")
 	}
 	if options.EnhancedPort != strings.TrimSpace(options.EnhancedPort) {
-		return fmt.Errorf("debug-capture Enhanced COM port %q has leading or trailing whitespace", options.EnhancedPort)
+		return fmt.Errorf("debug-cli Enhanced COM port %q has leading or trailing whitespace", options.EnhancedPort)
 	}
 	if strings.IndexByte(options.EnhancedPort, 0) >= 0 {
-		return errors.New("debug-capture Enhanced COM port contains NUL")
+		return errors.New("debug-cli Enhanced COM port contains NUL")
 	}
 	planFamily, err := debugFamilyContractForID(options.Plan.family)
 	if err != nil {
-		return fmt.Errorf("invalid debug-capture plan family: %w", err)
+		return fmt.Errorf("invalid debug-cli plan family: %w", err)
 	}
 	assetFamily, err := debugFamilyContractForID(options.Assets.family)
 	if err != nil {
-		return fmt.Errorf("invalid debug-capture firmware family: %w", err)
+		return fmt.Errorf("invalid debug-cli firmware family: %w", err)
 	}
 	if planFamily.id != assetFamily.id {
 		return fmt.Errorf(
-			"debug-capture plan family %d does not match firmware family %d",
+			"debug-cli plan family %d does not match firmware family %d",
 			planFamily.id,
 			assetFamily.id,
 		)
@@ -237,10 +237,10 @@ func preflightControllerOptions(options ControllerOptions) error {
 	}
 	rebuilt, err := buildPlanForFamily(planFamily.id, options.Plan.source)
 	if err != nil {
-		return fmt.Errorf("invalid debug-capture mmWaveLink plan: %w", err)
+		return fmt.Errorf("invalid debug-cli mmWaveLink plan: %w", err)
 	}
 	if !reflect.DeepEqual(rebuilt, options.Plan) {
-		return errors.New("debug-capture mmWaveLink plan does not match its immutable source configuration")
+		return errors.New("debug-cli mmWaveLink plan does not match its immutable source configuration")
 	}
 	return nil
 }
@@ -258,7 +258,7 @@ func (controller *Controller) VerifyPlatformContext(ctx context.Context) (string
 		return "", err
 	}
 	return fmt.Sprintf(
-		"%s debug-capture MSS %s RF %s",
+		"%s debug-cli MSS %s RF %s",
 		family.platform,
 		formatMMWaveLinkFirmwareVersion(controller.diagnostics.MSS),
 		formatMMWaveLinkFirmwareVersion(controller.diagnostics.RF),
@@ -274,10 +274,10 @@ func (controller *Controller) ApplyContext(ctx context.Context, source radar.Cap
 		return err
 	}
 	if !controller.plan.matchesCapturePlan(source) {
-		return errors.New("capture plan does not match the debug-capture controller plan")
+		return errors.New("capture plan does not match the debug-cli controller plan")
 	}
 	if controller.state != controllerStateBootstrapped {
-		return fmt.Errorf("debug-capture configuration cannot be applied in controller state %d", controller.state)
+		return fmt.Errorf("debug-cli configuration cannot be applied in controller state %d", controller.state)
 	}
 
 	for index, operation := range controller.plan.operationsCopy() {
@@ -320,14 +320,14 @@ func (controller *Controller) StartContext(ctx context.Context) (string, error) 
 		return "", err
 	}
 	if controller.state != controllerStateConfigured {
-		return "", fmt.Errorf("debug-capture start requires an applied, stopped configuration; state=%d", controller.state)
+		return "", fmt.Errorf("debug-cli start requires an applied, stopped configuration; state=%d", controller.state)
 	}
 	controller.state = controllerStateUnknown
 	if err := controller.frameTriggerLocked(ctx, true, mmWaveLinkRFFrameStartEventID); err != nil {
-		return "", targetStateFailure(fmt.Errorf("start debug-capture frame: %w", err))
+		return "", targetStateFailure(fmt.Errorf("start debug-cli frame: %w", err))
 	}
 	controller.state = controllerStateRunning
-	return "debug-capture frame started", nil
+	return "debug-cli frame started", nil
 }
 
 func (controller *Controller) StartWithoutReconfigurationContext(ctx context.Context) (string, error) {
@@ -346,18 +346,18 @@ func (controller *Controller) AwaitFiniteFrameEndContext(ctx context.Context) (s
 		return "", err
 	}
 	if controller.state != controllerStateRunning {
-		return "", fmt.Errorf("debug-capture finite frame end requires a running frame; state=%d", controller.state)
+		return "", fmt.Errorf("debug-cli finite frame end requires a running frame; state=%d", controller.state)
 	}
 	if controller.plan.source.InfiniteFrames {
-		return "", errors.New("debug-capture cannot await a natural frame end for an infinite frame plan")
+		return "", errors.New("debug-cli cannot await a natural frame end for an infinite frame plan")
 	}
 
 	controller.state = controllerStateUnknown
 	if err := controller.waitFrameEventLocked(ctx, mmWaveLinkRFFrameEndEventID); err != nil {
-		return "", targetStateFailure(fmt.Errorf("await debug-capture finite frame end: %w", err))
+		return "", targetStateFailure(fmt.Errorf("await debug-cli finite frame end: %w", err))
 	}
 	controller.state = controllerStateConfigured
-	return "debug-capture finite frame ended", nil
+	return "debug-cli finite frame ended", nil
 }
 
 // StopContext is a local no-op only for the fresh, post-bootstrap state. Once
@@ -370,23 +370,23 @@ func (controller *Controller) StopContext(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if controller.state == controllerStateBootstrapped {
-		return "debug-capture frame already stopped after bootstrap", nil
+		return "debug-cli frame already stopped after bootstrap", nil
 	}
 	if controller.state != controllerStateConfigured && controller.state != controllerStateRunning {
-		return "", fmt.Errorf("debug-capture stop cannot continue from unknown controller state %d", controller.state)
+		return "", fmt.Errorf("debug-cli stop cannot continue from unknown controller state %d", controller.state)
 	}
 
 	controller.state = controllerStateUnknown
 	err := controller.frameTriggerLocked(ctx, false, mmWaveLinkRFFrameEndEventID)
 	if isKnownStoppedStatus(err) {
 		controller.state = controllerStateConfigured
-		return "debug-capture frame already stopped", nil
+		return "debug-cli frame already stopped", nil
 	}
 	if err != nil {
-		return "", targetStateFailure(fmt.Errorf("stop debug-capture frame: %w", err))
+		return "", targetStateFailure(fmt.Errorf("stop debug-cli frame: %w", err))
 	}
 	controller.state = controllerStateConfigured
-	return "debug-capture frame stopped", nil
+	return "debug-cli frame stopped", nil
 }
 
 func (controller *Controller) frameTriggerLocked(ctx context.Context, start bool, eventSubblock uint16) error {
@@ -432,16 +432,16 @@ func isKnownStoppedStatus(err error) bool {
 
 func (controller *Controller) readyLocked(ctx context.Context) error {
 	if controller == nil || controller.link == nil || controller.transport == nil {
-		return errors.New("debug-capture controller is not initialized")
+		return errors.New("debug-cli controller is not initialized")
 	}
 	if controller.closed {
-		return errors.New("debug-capture controller is closed")
+		return errors.New("debug-cli controller is closed")
 	}
 	if err := contextError(ctx); err != nil {
 		return err
 	}
 	if controller.state == controllerStateUnknown {
-		return errors.New("debug-capture controller cannot continue from an unknown target state; explicit reset required")
+		return errors.New("debug-cli controller cannot continue from an unknown target state; explicit reset required")
 	}
 	return nil
 }

@@ -1,5 +1,5 @@
 // Package d2xx provides the narrow native FTDI D2XX boundary used by
-// debug-capture builds. Loading the library does not enumerate or open devices.
+// debug-cli builds. Loading the library does not enumerate or open devices.
 package d2xx
 
 import (
