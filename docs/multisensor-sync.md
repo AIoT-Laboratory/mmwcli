@@ -10,21 +10,21 @@ External-trigger and PTP grades remain planned. This contract does not change
 
 `mmwcli` is the acquisition coordinator. It owns the radar lifecycle, the finite session
 transaction, cancellation, bounded buffering, and controlled external producer processes. The
-first camera integration is a strict external producer contract over caller-selected inherited
+built-in camera integration is a strict external producer contract over caller-selected inherited
 handles. The repository does not embed a camera SDK, enumerate cameras, add a camera-specific CGo
 adapter, or infer a device clock.
 
-`mmwcore` remains an offline processing library. It may decode a published session or a
-caller-owned `BinaryIO`, but it does not launch producers, open devices or sockets, close the
-caller's stream, or resume an incomplete session.
+`mmwcore` remains a processing library over caller-owned data. It decodes published sessions and
+caller-owned live `BinaryIO` streams, but it does not launch producers, open devices or sockets,
+close the caller's stream, or resume an incomplete session.
 
 ### Migration and minimum producer interface
 
 The old OpenMMW arrangement built around `mmwcore.session`, UDP handoff, and processes watching a
 shared capture directory is a migration source, not a compatibility target. Device and process
 lifecycle moves to `mmwcli`; completed-directory and caller-owned-stream consumption moves to
-`mmwcore.io`. Producers never coordinate through partially written shared files, and this design
-does not restore a live session API in mmwcore.
+`mmwcore.io`. Producers never coordinate through partially written shared files, and this
+implementation does not restore a live session API in mmwcore.
 
 `mmwcli` is the only global acquisition coordinator and capture-session publisher. Each external
 sensor producer has separate bounded control and data handles. Its minimum control sequence is

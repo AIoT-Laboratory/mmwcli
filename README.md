@@ -8,18 +8,19 @@ signal-processing pipeline.
 ## Scope
 
 - `debug-cli --family xwr16xx|xwr18xx|xwr68xx` exposes three closed, family-specific capture
-  routes. xWR16xx and xWR18xx are source-validated experimental routes awaiting community
-  hardware reports. The recorded IWR6843 ES2 combination remains the only supported-tier route.
+  routes that are available now. xWR16xx and xWR18xx are source-validated experimental routes
+  awaiting community hardware reports; xWR68xx also has a repository-maintained hardware record.
 - `studio-cli` and its REPL utility remain a source-validated experimental xWR68xx-only route for
   the dedicated TI firmware. They require the exact `Platform: xWR68xx` family response but do not
   observe or prove a model, part, ES, or board.
 - The capture baseline is legacy frames, complex16 ADC, two LVDS lanes, and DCA1000 raw output.
 - Advanced frames, cascade, LVDS headers, software LVDS, CSI-2, and implicit ADC processing are outside the contract.
 
-All three family routes are public. Version 0.1 hardware validation records one IWR6843 ES2
-`debug-cli` combination; xWR16xx and xWR18xx remain source-validated experimental until hardware
-owners report reproducible runs. See the [support
-matrix](docs/hardware-support.md) and [validation record](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record).
+The support tier describes available validation evidence, not whether a route can be invoked.
+Hardware owners can use all three family routes and submit successful or failed runs. See the
+[support matrix](docs/hardware-support.md) for the family-wide view and the
+[validation record](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record) for one
+reproducible xWR68xx combination.
 
 ## Download and build
 
@@ -43,7 +44,7 @@ Build the tagged command with `go build -tags ftd2xx ./cmd/mmwcli` on Windows or
 
 The repository and release archives do not distribute FTDI or TI assets.
 
-## Offline validation
+## Validate before capture
 
 ```text
 mmwcli doctor
@@ -132,6 +133,11 @@ GStreamer, and vendor camera programs do not need to implement the control/data 
 `--stream` may be combined with `--multisensor-plan`: stdout then carries the aggregate radar and
 camera stream, while `OUTDIR` remains the authoritative training capture.
 
+Use [`mmwcore.open_multisensor_capture`](https://github.com/AIoT-Laboratory/mmwcore) for lazy
+offline training data and `mmwcore.open_multisensor_stream` for a caller-owned live stream.
+Radar-only directories and streams use `mmwcore.open_capture` and `mmwcore.open_capture_stream`.
+mmwcli owns acquisition; mmwcore owns decoding and processing.
+
 Ordinary cameras use `delivery_observed`: mmwcli timestamps a frame only after receiving it and
 does not call that time an exposure timestamp. A producer with a real exposure clock may declare
 `exposure_midpoint` and its clock mapping instead. The aggregate live stream carries a conservative
@@ -150,7 +156,10 @@ radar-start interval so radar and delivery-observed camera items share one host-
 - Low-level DCA commands are diagnostic/control operations only; ADC acquisition is available through `studio-cli capture` and `debug-cli capture`. `ping` is not a capture-readiness gate, and reset occurs only through an explicit command or option.
 - `sensorStop` stops the sensor only; it does not power off the radar or DCA1000.
 
-See the [hardware support matrix](docs/hardware-support.md), [architecture](docs/architecture.md), [multi-sensor synchronization design](docs/multisensor-sync.md), [hardware smoke test](docs/hardware-smoke-test.md), and [TI reference map](docs/ti-reference-map.md).
+See the [hardware support matrix](docs/hardware-support.md), [architecture](docs/architecture.md),
+[multi-sensor synchronization](docs/multisensor-sync.md),
+[hardware validation record](docs/hardware-smoke-test.md), and
+[TI reference map](docs/ti-reference-map.md).
 
 ## License
 

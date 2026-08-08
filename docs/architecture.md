@@ -1,4 +1,4 @@
-# Architecture and safety guarantees
+# Architecture and data contracts
 
 `mmwcli` separates command parsing, device protocols, capture coordination, and operating-system I/O.
 
@@ -12,6 +12,11 @@ cmd/mmwcli
      -> internal/dca
      -> internal/capturefile
      -> internal/capturestream
+  -> internal/multisensorcapture
+     -> internal/sensorproducer
+     -> internal/multisensor
+     -> internal/multisensorstream
+  -> internal/fixedframeproducer
 ```
 
 Go 1.26+ and the standard library define the core build. Default builds use `CGO_ENABLED=0`. The `ftd2xx` tag loads the installed DLL from pure Go on Windows; Linux is the only CGo variant and links the user-installed official FTDI library. Each native-library architecture requires separate hardware validation.
@@ -25,11 +30,11 @@ Go 1.26+ and the standard library define the core build. Default builds use `CGO
   RF-evaluation firmware through Enhanced COM, and controls mmWaveLink through D2XX. There is no
   default family or model alias. `--device` continues to mean the DCA1000 IPv4 address.
 
-Each text connection requires the exact `Platform: xWR68xx` family response before its first state
-write. That response does not observe or prove a model, part, ES, board, or antenna geometry, and
-the capture descriptor leaves model and revision empty. AOP-specific aliases and every other
-platform value are rejected and remain planned. Ports and D2XX devices are operator-selected;
-mmwcli does not scan or guess them.
+The `studio-cli` text connection requires the exact `Platform: xWR68xx` family response before its
+first state write. That response does not observe or prove a model, part, ES, board, or antenna
+geometry, and the capture descriptor leaves model and revision empty. `debug-cli` instead binds
+the explicitly selected family to its device-ID set, assets, RF plan, and DCA contract. Ports and
+D2XX devices are operator-selected; mmwcli does not scan or guess them.
 
 Text commands require their own echo followed by explicit `Done` or numeric `Error`. Timeout, cancellation, write failure, or an incomplete response leaves device state indeterminate and closes the connection without retry.
 
@@ -127,6 +132,28 @@ producers behind the radar lifecycle, publishes one no-overwrite aggregate direc
 `--stream` to emit `mmwcli.multisensor_stream.v1`. This does not extend capture-stream v1 or move
 device/process ownership into mmwcore.
 
+## Multi-sensor lifecycle
+
+```text
+validate radar CFG and multi-sensor plan
+  -> stage OUTDIR.part and nested radar output
+  -> launch bounded external producers
+  -> READY -> ARM -> START
+  -> capture radar and source ITEM records
+  -> STOP or CANCEL and reap every producer
+  -> validate END + EOF, indices, clocks, sizes, and hashes
+  -> finish radar/DCA cleanup
+  -> publish the aggregate directory without overwrite
+  -> emit global COMMIT + EOF, or ABORT + EOF
+```
+
+`mmwcli multisensor init` creates the common fixed-frame camera plan, and `multisensor check`
+validates any plan without opening hardware. The built-in fixed-frame producer can wrap ffmpeg,
+GStreamer, or a vendor program that writes exact-size frames; camera SDK ownership stays outside
+mmwcli. `delivery_observed` records when a complete camera frame reaches mmwcli and never labels it
+as exposure time. RADAR_START supplies a conservative radar tick-zero interval on the same
+host-relative axis. External-trigger and PTP evidence grades remain future extensions.
+
 ## Transactional output
 
 Output exists only as `OUTDIR.part` during capture. Existing final or partial output fails before hardware access. Publication never overwrites `OUTDIR` and occurs only after reception, radar cleanup, DCA cleanup, status checks, synchronization, and close succeed.
@@ -140,8 +167,8 @@ The output parent is a cooperative namespace. These guarantees cover runtime ato
 
 ## Validation boundary
 
-Offline tests establish parser, protocol, resource-bound, and lifecycle behavior, not hardware
-compatibility. The xWR16xx and xWR18xx routes are public source-validated experimental paths that
-need community hardware validation. Version 0.1 validated Windows/amd64, FTDI D2XX 3.2.14,
+Automated tests establish parser, protocol, resource-bound, and lifecycle behavior, not hardware
+compatibility. xWR16xx, xWR18xx, and xWR68xx are public family routes; their evidence tiers are
+listed separately from availability. One recorded run validated Windows/amd64, FTDI D2XX 3.2.14,
 IWR6843 ES2 part `0xE2`, and DCA1000 debug mode. The complete record and all exclusions are in the
-[hardware smoke test](hardware-smoke-test.md).
+[hardware validation record](hardware-smoke-test.md).

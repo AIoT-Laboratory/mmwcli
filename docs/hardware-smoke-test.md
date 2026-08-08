@@ -1,5 +1,9 @@
 # IWR6843 + DCA1000 hardware smoke test
 
+This document is one reproducible xWR68xx validation record, not the list of usable hardware.
+Public xWR16xx, xWR18xx, and xWR68xx routes and their current evidence tiers are listed in the
+[hardware support matrix](hardware-support.md).
+
 Sections 1 through 5 define repeatable full-configuration validation for TI `studio_cli` firmware, IWR6843 ES2
 part `0xE2`, and DCA1000 in functional/application mode. Version 0.1 has not completed hardware
 validation for this path.

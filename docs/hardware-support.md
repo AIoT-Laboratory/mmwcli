@@ -1,9 +1,24 @@
 # Hardware support
 
-Hardware acquisition and offline decoding are separate capabilities. A device can have a
-source-backed `mmwcore` byte layout without having a safe `mmwcli` boot, download, or capture
+Hardware acquisition and decoding are separate capabilities. A device can have a source-backed
+`mmwcore` byte layout without having an implemented `mmwcli` boot, download, or capture
 route. Conversely, a successful acquisition does not prove the antenna geometry selected for
 processing. The tables below keep those claims separate.
+
+## Public family routes
+
+These routes are callable today. The evidence tier records how far each route has been reproduced;
+it is not a hidden feature gate.
+
+| Family selection | Public acquisition route | Starting configuration | Current evidence |
+| --- | --- | --- | --- |
+| `--family xwr16xx` | `mmwcli debug-cli check/capture` | `hardware/debug-cli-xwr16xx-raw.cfg` | Source-validated experimental; community hardware reports requested |
+| `--family xwr18xx` | `mmwcli debug-cli check/capture` | `hardware/debug-cli-xwr18xx-raw.cfg` | Source-validated experimental; community hardware reports requested |
+| `--family xwr68xx` | `mmwcli debug-cli check/capture` | `hardware/debug-cli-xwr6843-raw.cfg` | Public family route with one supported exact hardware record |
+| xWR68xx dedicated firmware | `mmwcli studio-cli check/capture` | `hardware/studio-cli-xwr6843-raw.cfg` | Source-validated experimental family route |
+
+There is no default family or experimental unlock flag. Select the family explicitly, use the
+matching assets and CFG domain, and report the result. A failed run is useful evidence too.
 
 ## Support tiers
 
@@ -21,7 +36,7 @@ processing. The tables below keep those claims separate.
 - **Not supported**: the current acquisition or data contract cannot represent the workflow.
 
 An experimental contribution must identify official source evidence, close every field it claims,
-add offline golden tests, require explicit opt-in, and fail closed at that claimed identity scope.
+add golden tests, require explicit family or descriptor selection, and reject mismatched inputs.
 If a safety parameter depends on an unobserved part, ES, board, asset, or response, the route remains
 planned. Arbitrary register scripts and user-authored hardware-protocol JSON are not accepted as a
 substitute for a reviewed descriptor.
@@ -79,7 +94,7 @@ The three public debug routes are selected only by the exact values `xwr16xx`, `
 | `--family xwr68xx` | `hardware/debug-cli-xwr6843-raw.cfg` |
 
 There is no default family. A successful xWR16xx or xWR18xx run is valuable validation evidence;
-users do not need to wait for the repository owner to possess the same board before trying the
+users do not need to wait for the repository owner to possess the same board before using the
 public route.
 
 ## Help validate another combination
