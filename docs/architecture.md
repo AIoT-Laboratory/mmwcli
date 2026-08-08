@@ -17,12 +17,11 @@ Go 1.26+ and the standard library define the core build. Default builds use `CGO
 
 ## Mode boundaries
 
-- `demo` uses an mmWave SDK text CLI at 115200 baud and supports ordinary xWR16xx, xWR18xx, xWR64xx, and xWR68xx firmware.
-- `studio-cli` uses TI `studio_cli` at 921600 baud and remains xWR68xx-specific.
-- `repl` accepts only the validated xWR68xx `studio_cli` line protocol.
-- `debug-capture` downloads xWR68xx RF-evaluation firmware through Enhanced COM and controls mmWaveLink through D2XX.
+- `studio-cli` uses the dedicated xWR68xx/IWR6843 TI firmware at 921600 baud. This route has source-backed offline validation only.
+- `repl` is a `studio_cli` utility and accepts only that validated line protocol.
+- `debug-capture` downloads the recorded IWR6843 ES2 RF-evaluation firmware through Enhanced COM and controls mmWaveLink through D2XX.
 
-`--radar-family` applies only to demo actions. Each text connection validates the selected platform before its first state write. Ports and D2XX devices are operator-selected; mmwcli does not scan or guess them.
+Each text connection validates xWR68xx before its first state write. Ports and D2XX devices are operator-selected; mmwcli does not scan or guess them. Current support must not be generalized to another device without independent implementation and validation.
 
 Text commands require their own echo followed by explicit `Done` or numeric `Error`. Timeout, cancellation, write failure, or an incomplete response leaves device state indeterminate and closes the connection without retry.
 
@@ -32,19 +31,19 @@ Integrated capture constructs an immutable plan before creating output or openin
 
 - one chip, legacy software-triggered frames, and complete ordered references;
 - complex16 ADC, hardware ADC LVDS, no LVDS header, and two-lane DCA raw mode;
-- a profile, channel mask, frequency, and Tx selection valid for the selected ordinary demo family;
+- a profile, channel mask, frequency, and Tx selection valid for the fixed xWR68xx contract;
 - enough Rx, sample, chirp, loop, and frame information to derive the exact finite byte count;
 - valid ADCBuf and CBUFF sizes.
 
-Advanced frames, continuous capture, monitor streams, loopback, software LVDS, and LVDS headers are rejected. Full SDK demo and `studio_cli` configurations begin with one exact `flushCfg`. `sensorStart`, when present, must be unique and last; the coordinator removes it before applying the configuration.
+Advanced frames, continuous capture, monitor streams, loopback, software LVDS, and LVDS headers are rejected. A full `studio_cli` configuration begins with one exact `flushCfg`. `sensorStart`, when present, must be unique and last; the coordinator removes it before applying the configuration.
 
-`--no-reconfig` still runs the complete preflight against the declared CFG but sends only `sensorStart 0`. It is available only for `studio-cli`. Exact source-derived family and buffer limits belong in the [TI reference map](ti-reference-map.md).
+`--no-reconfig` still runs the complete preflight against the declared CFG but sends only `sensorStart 0`. Exact source-derived xWR68xx and buffer limits belong in the [TI reference map](ti-reference-map.md).
 
 ## Debug transport boundary
 
-`debug-capture` is not a UART dialect. The user supplies xWR68xx MSS/BSS firmware; mmwcli does not discover TI installations or load the mmWave Studio runtime.
+`debug-capture` is not a UART dialect. The user supplies the recorded IWR6843 MSS/BSS firmware; mmwcli does not discover TI installations or load the mmWave Studio runtime.
 
-Enhanced COM performs bounded firmware-memory download. Cold-start negotiation validates the IWR6843 part and may switch once from 115200 to 921600 baud. A failed or indeterminate write is never retried.
+Enhanced COM performs bounded firmware-memory download. Cold-start negotiation validates IWR6843 part `0xE2` and may switch once from 115200 to 921600 baud. A failed or indeterminate write is never retried.
 
 D2XX A/B then carries MPSSE SPI/IRQ and mmWaveLink control. D/C is derived from the already validated description or serial base only when `--sop2-reset` is explicit. Device selection never uses enumeration, index, raw USB, or bundled FTDI code.
 
@@ -86,6 +85,10 @@ Payload bytes are written unchanged. mmwcli does not reorder samples, parse ADC 
 
 Network defaults and laboratory timing checks belong in the [hardware smoke test](hardware-smoke-test.md).
 
+## Future stream boundary
+
+A future trusted real-time path will keep exclusive hardware ownership in `mmwcli` and expose a versioned stream contract for `mmwcore` consumers. No live stream contract or transport is implemented today; current integration ends at raw files or capture-session directories.
+
 ## Transactional output
 
 Output exists only as `OUT.part` during capture. Existing final or partial output fails before hardware access. Publication never overwrites `OUT` and occurs only after reception, radar cleanup, DCA cleanup, status checks, synchronization, and close succeed.
@@ -96,4 +99,4 @@ The output parent is a cooperative namespace. These guarantees cover runtime ato
 
 ## Validation boundary
 
-Offline tests establish parser, protocol, resource-bound, and lifecycle behavior, not hardware compatibility. Version 0.1 validated only Windows/amd64, FTDI D2XX 3.2.14, IWR6843 ES2, and DCA1000 debug mode. The complete record and all exclusions are in the [hardware smoke test](hardware-smoke-test.md).
+Offline tests establish parser, protocol, resource-bound, and lifecycle behavior, not hardware compatibility. Version 0.1 validated only Windows/amd64, FTDI D2XX 3.2.14, IWR6843 ES2 part `0xE2`, and DCA1000 debug mode. The complete record and all exclusions are in the [hardware smoke test](hardware-smoke-test.md).

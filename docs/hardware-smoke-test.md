@@ -1,12 +1,12 @@
-# xWR6843 + DCA1000 hardware smoke test
+# IWR6843 + DCA1000 hardware smoke test
 
-Sections 1 through 5 define the two-run reuse validation for TI `studio_cli` firmware, xWR6843 ES2,
-and DCA1000 in functional/application mode. Version 0.1 has not completed hardware validation for
-this path. Use only one radar CLI firmware dialect in a test.
+Sections 1 through 5 define the two-run reuse validation for TI `studio_cli` firmware, IWR6843 ES2
+part `0xE2`, and DCA1000 in functional/application mode. Version 0.1 has not completed hardware
+validation for this path.
 
 ## Prerequisites
 
-- xWR6843 ES2, DCA1000, a dedicated Ethernet interface, and matching power supplies/cables;
+- IWR6843 ES2 part `0xE2`, DCA1000, a dedicated Ethernet interface, and matching power supplies/cables;
 - an obtained copy of `mmwave_Studio_cli_xwr68xx.bin`;
 - a built mmwcli binary;
 - an operator-confirmed CLI UART;
@@ -30,8 +30,9 @@ mmwcli studio-cli check hardware/studio-cli-xwr6843-raw.cfg
 the file after it passes verification. Do not capture with TI's monitor profile; that profile enables
 monitor UART data that mmwcli does not receive.
 
-Record the radar model/ES, firmware SHA-256, SOP setting, and CLI UART. `studio-cli version` confirms
-only the xWR68xx platform; board or procurement records are still required to establish ES2.
+Record the radar model, part code, ES, firmware SHA-256, SOP setting, and CLI UART. The
+`studio-cli version` command confirms only the xWR68xx platform; board or procurement records are
+still required to establish IWR6843 ES2 part `0xE2`.
 
 ## 2. DCA1000 network
 
@@ -100,17 +101,6 @@ to both runs. A run that uses `--reset` is not valid reuse evidence.
 - Do not run DCA commands concurrently; they use the same local UDP port 4096 by default.
 - An existing `OUT` or `OUT.part` fails before hardware I/O and is never overwritten.
 
-## Optional SDK demo path
-
-SDK demo firmware uses 115200 baud, and the operator must establish the platform:
-
-```text
-mmwcli demo capture profile_raw_68xx.cfg capture-sdk.bin --port PORT
-```
-
-The profile must enable compatible hardware ADC LVDS explicitly. `demo capture` does not support
-`--no-reconfig` and is not part of the two-run `studio_cli` reuse validation above.
-
 ## Functional/application validation record requirements
 
 Record the radar model/ES, firmware version and hash, SOP, serial port, baud, DCA FPGA version, CFG
@@ -129,7 +119,7 @@ mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg OUT --enhanc
 
 | Item | Validated value |
 | --- | --- |
-| Radar and capture card | IWR6843 QM, ES2; DCA1000 |
+| Radar and capture card | IWR6843 QM, ES2, part `0xE2`; DCA1000 |
 | Mode | SOP2 `debug-capture`, legacy frame |
 | Host and native boundary | Windows/amd64, FTDI D2XX 3.2.14, `CGO_ENABLED=0`, `ftd2xx` build tag |
 | Source revision | `6b3e73e` |
@@ -145,5 +135,5 @@ mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg OUT --enhanc
 
 The ADC output is not included in the repository or release. Its hash identifies retained laboratory
 validation evidence only. This record establishes only the listed Windows/amd64, D2XX 3.2.14,
-firmware, CFG, and hardware combination. It does not validate functional/application mode, the SDK
-demo, Linux D2XX, arm64, or other firmware and configurations.
+firmware, CFG, and hardware combination. It does not validate functional/application mode, Linux
+D2XX, arm64, or other firmware, devices, and configurations.

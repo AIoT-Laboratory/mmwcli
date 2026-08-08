@@ -1,15 +1,15 @@
 # mmwcli
 
-`mmwcli` configures TI xWR radars, coordinates DCA1000 capture, and publishes raw ADC data with finite-capture integrity checks. It has no GUI, MATLAB, Lua host, mmWave Studio runtime, or signal-processing pipeline.
+`mmwcli` controls its documented TI xWR68xx/IWR6843 acquisition routes, coordinates DCA1000 capture, and publishes raw ADC data with finite-capture integrity checks. It has no GUI, MATLAB, Lua host, mmWave Studio runtime, or signal-processing pipeline.
 
 ## Scope
 
-- SDK demo mode supports ordinary xWR16xx, xWR18xx, xWR64xx, and xWR68xx firmware through `--radar-family`; xWR68xx is the default. AOP aliases are not supported.
-- TI `studio_cli`, REPL, `debug-capture`, and capture-session v1 remain xWR68xx-specific.
-- The debug baseline is IWR6843 ES2, legacy frames, complex16 ADC, two LVDS lanes, and DCA1000 raw capture.
+- `studio-cli` and its REPL utility target the dedicated xWR68xx/IWR6843 TI firmware and currently have source-backed offline validation only.
+- `debug-capture` hardware validation is limited to IWR6843 ES2 part `0xE2`, DCA1000, Windows/amd64, and FTDI D2XX 3.2.14.
+- The capture baseline is legacy frames, complex16 ADC, two LVDS lanes, and DCA1000 raw output.
 - Advanced frames, cascade, LVDS headers, software LVDS, CSI-2, and implicit ADC processing are outside the contract.
 
-Version 0.1 validated only `debug-capture` on Windows/amd64 with IWR6843 ES2, DCA1000, and FTDI D2XX 3.2.14. See the [hardware record](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record). The SDK demo families and `studio-cli` path currently have source-backed offline validation only.
+Version 0.1 validated only the recorded `debug-capture` combination. See the [hardware record](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record). Other devices and native-library combinations require independent validation.
 
 ## Download and build
 
@@ -38,7 +38,6 @@ The repository and release archives do not distribute FTDI or TI assets.
 ```text
 mmwcli doctor
 mmwcli firmware verify PATH/mmwave_Studio_cli_xwr68xx.bin
-mmwcli demo check PATH/profile.cfg --radar-family xwr18xx
 mmwcli studio-cli check hardware/studio-cli-xwr6843-raw.cfg
 mmwcli debug-capture check --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin
 mmwcli debug-capture native-check
@@ -48,17 +47,9 @@ These commands do not open radar or DCA devices. `native-check` only loads the D
 
 ## Capture workflows
 
-### SDK demo firmware
+### IWR6843 `studio_cli`
 
-```text
-mmwcli demo capture PATH/profile.cfg capture.bin --port PORT --radar-family xwr18xx
-```
-
-The profile must explicitly enable compatible hardware ADC LVDS output.
-
-### xWR68xx `studio_cli`
-
-Flash `mmwave_Studio_cli_xwr68xx.bin`, boot in functional/application mode, and provide its CLI UART:
+Flash `mmwave_Studio_cli_xwr68xx.bin`, boot in functional/application mode, and provide its CLI UART. This route is offline-validated but does not yet have a hardware-validation record:
 
 ```text
 mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture.bin --port PORT
@@ -66,9 +57,9 @@ mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture.bin --port
 
 The complete two-run `--no-reconfig` procedure is in the [hardware smoke test](docs/hardware-smoke-test.md).
 
-### xWR68xx debug mode
+### IWR6843 ES2 debug mode
 
-Use an `ftd2xx` build and user-supplied xWR68xx RF-evaluation BSS/MSS firmware:
+Use an `ftd2xx` build and the user-supplied RF-evaluation BSS/MSS firmware recorded for IWR6843 ES2 part `0xE2`:
 
 ```text
 mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg capture.bin \
@@ -83,13 +74,13 @@ mmwcli debug-capture capture hardware/debug-capture-xwr6843-raw.cfg capture.bin 
 
 Enhanced COM downloads firmware; D2XX A/B carries mmWaveLink control. D/C is opened only for explicit `--sop2-reset`.
 
-### REPL
+### `studio_cli` REPL
 
 ```text
 mmwcli repl --port PORT
 ```
 
-REPL accepts only the xWR68xx `studio_cli` line protocol. A response without explicit `Done` or numeric `Error` terminates the session.
+REPL is a `studio_cli` utility, not another firmware backend. It accepts only the validated line protocol; a response without explicit `Done` or numeric `Error` terminates the session.
 
 ## Output guarantees
 

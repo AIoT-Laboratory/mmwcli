@@ -5,16 +5,17 @@ defined by `README.md` and `docs/`.
 
 ## Project boundaries
 
-- `mmwcli` is a cross-platform command-line controller and DCA1000 raw-ADC acquisition tool for TI xWR radars.
-- The initial baseline is xWR6843 ES2, legacy frame, 16-bit complex ADC, and two LVDS lanes.
-- The SDK demo functional/application workflow supports only the ordinary xWR16xx, xWR18xx,
-  xWR64xx, and xWR68xx family names through `--radar-family`; xWR68xx is the default. Do not add AOP
-  aliases without a separate evidence and validation batch. TI `studio_cli`, REPL, and
-  `debug-capture` remain xWR68xx-specific.
-- Functional/application workflows use text serial control only, through SDK demo CLI firmware or
-  TI `studio_cli` device firmware. The `studio_cli` workflow requires only the user to flash
-  `mmwave_Studio_cli_xwr68xx.bin`; a complete Radar Toolbox installation is unnecessary.
-- The top-level `repl` is fixed to the `studio_cli` line protocol and xWR68xx `version` validation.
+- `mmwcli` is a cross-platform command-line controller and DCA1000 raw-ADC acquisition tool for its documented TI xWR68xx/IWR6843 routes.
+- The baseline is IWR6843 ES2 part `0xE2`, legacy frame, 16-bit complex ADC, and two LVDS lanes.
+- The functional/application workflow supports only the dedicated xWR68xx/IWR6843 TI `studio_cli`
+  device firmware and currently has source-backed offline validation only. It requires the user to
+  flash `mmwave_Studio_cli_xwr68xx.bin`; a complete Radar Toolbox installation is unnecessary.
+- `debug-capture` hardware validation covers only IWR6843 ES2 part `0xE2` with the exact firmware,
+  host, FTDI, and DCA1000 combination recorded in the hardware smoke test. Do not infer support for
+  another device from a shared TI source tree; each addition requires an independent evidence,
+  implementation, and hardware-validation batch.
+- The top-level `repl` is a `studio_cli` utility fixed to its line protocol and xWR68xx `version`
+  validation. It is not a separate firmware or capture backend.
   It must not provide a selectable custom dialect or a way to bypass validation. It may send
   single-line extension commands from compatible firmware, but that does not make the firmware a
   supported configuration or capture backend. A response without an explicit `Done` or numeric
@@ -83,7 +84,7 @@ must not be used to evade the limits.
 - Do not scan serial ports or guess the CLI port, firmware, or baud. Enhanced COM permits only the
   fixed 921600-to-115200-to-921600 negotiation. It may enter that sequence only after the initial
   read-only probe times out or violates TI's one-to-eight-digit hexadecimal rule and the port closes
-  successfully. After the 115200 probe, the xWR6843 part number must pass validation before any state
+  successfully. After the 115200 probe, IWR6843 part `0xE2` must pass validation before any state
   write. An invalid low-speed probe, indeterminate state write, or close failure must stop without
   continuation or retry.
 - Do not run two DCA control commands concurrently; they contend for host UDP port 4096 by default.

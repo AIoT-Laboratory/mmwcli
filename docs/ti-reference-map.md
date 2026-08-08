@@ -7,8 +7,9 @@ discovers a TI installation or invokes Toolbox or the mmWave Studio runtime.
 
 ## `studio_cli` device firmware
 
-The known 0.1 firmware comes from Radar Toolbox 4.00.00.05. `mmwcli firmware verify FILE` checks only
-this asset:
+The known 0.1 firmware comes from Radar Toolbox 4.00.00.05. It is the only functional/application
+firmware in scope and currently has source-backed offline validation only. The
+`mmwcli firmware verify FILE` command checks only this asset:
 
 | Relative path | Bytes | SHA-256 |
 | --- | ---: | --- |
@@ -36,8 +37,8 @@ During `debug-capture capture`, Enhanced COM only submits these files to SOP2 de
 then switches to FTDI D2XX A/B and carries mmWaveLink configuration, start, and stop over SPI/IRQ.
 The host translates the capture CFG into mmWaveLink messages rather than sending it as text. No
 mmWave Studio runtime is required. The two exact hashes in the table were used for the 2026-08-05
-debug-mode hardware validation; no other firmware version is covered. See the complete combination
-and result in the
+debug-mode hardware validation on IWR6843 ES2 part `0xE2`; no other firmware or device is covered.
+See the complete combination and result in the
 [hardware smoke test](hardware-smoke-test.md#debug-mode-01-hardware-validation-record).
 
 ## Development references
@@ -62,21 +63,16 @@ functional/application asset contract pins the prebuilt firmware through the sin
 above. That path currently has offline validation only and no hardware-validation record. These
 sources and build tools do not participate in mmwcli runtime operation.
 
-## mmWave SDK 3.6.2 references
+## Shared mmWave SDK 3.6.2 references
 
-The SDK demo dialect primarily refers to:
+The fixed xWR68xx capture limits and IWR6843 debug transport refer to:
 
-- `packages/ti/demo/xwr68xx/mmw/mss/mmw_cli.c`: 115200-baud CLI and start semantics;
-- `packages/ti/demo/xwr68xx/mmw/profiles`: official demo profiles;
 - `packages/ti/common/sys_common_xwr68xx.h`: xWR68xx 32 KiB ADCBuf;
 - `packages/ti/drivers/cbuff/include/cbuff_internal.h`: CBUFF constraints;
 - `packages/ti/utils/sbl/include/image_parser.h`, `src/image_parser.c`, and
   `platform/sbl_xwr68xx.c`: RPRC format, padding, and xWR68xx memory windows;
 - `packages/ti/control/mmwavelink`: transport-neutral mmWaveLink/RHCP protocol;
 - `docs/mmwave_sdk_software_manifest.html`: version and license manifest.
-
-An ordinary demo profile does not necessarily enable hardware LVDS. A configuration used for
-DCA1000 capture must explicitly satisfy mmwcli's raw-only preflight.
 
 ## License scope
 
