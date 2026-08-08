@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
 	"mmwcli/internal/capturefile"
+	"mmwcli/internal/capturestream"
 	"mmwcli/internal/d2xx"
 	"mmwcli/internal/dca"
 	"mmwcli/internal/debugcapture"
@@ -90,7 +92,7 @@ func runDebugCaptureCaptureWithDependencies(
 	flags := newCommandFlagSet(
 		"debug-cli capture",
 		stderr,
-		"mmwcli debug-cli capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]",
+		"mmwcli debug-cli capture CFG OUTDIR --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]",
 	)
 	enhancedPort := flags.String("enhanced-port", "", "Enhanced COM port used for SOP2 firmware submission")
 	bssPath := flags.String("bss-fw", "", "xWR68xx BSS/RadarSS firmware file")
@@ -98,14 +100,14 @@ func runDebugCaptureCaptureWithDependencies(
 	serialBase := flags.String("d2xx-serial", "", "D2XX serial-number base for the A/B interfaces")
 	descriptionBase := flags.String("d2xx-description", "", "D2XX description base for the A/B interfaces")
 	sop2Reset := flags.Bool("sop2-reset", false, "set SOP2 with D2XX C/D and pulse target reset before Enhanced COM")
-	sessionDirectory := flags.Bool("session-dir", false, "publish ADC data and v1 metadata as an output directory")
+	streamOutput := flags.Bool("stream", false, "also emit capture-stream v1 on stdout")
 	dcaValues := addDCAFlags(flags, "dca-timeout-ms", dcaConfigurationFlags|dcaReceiverFlags)
 
 	if len(arguments) != 0 && isHelp(arguments[0]) {
 		return parseCommandFlags(flags, arguments)
 	}
 	if len(arguments) < 2 || strings.HasPrefix(arguments[0], "-") || strings.HasPrefix(arguments[1], "-") {
-		return usageError{message: "debug-cli capture requires CFG and output paths"}
+		return usageError{message: "debug-cli capture requires a CFG file and output directory"}
 	}
 	configPath, outputPath := arguments[0], arguments[1]
 	if err := parseCommandFlags(flags, arguments[2:]); err != nil {
@@ -130,6 +132,14 @@ func runDebugCaptureCaptureWithDependencies(
 	if err != nil {
 		return err
 	}
+	streamStdout, err := requireCaptureStreamStdout(*streamOutput, stdout)
+	if err != nil {
+		return err
+	}
+	diagnostics := stdout
+	if *streamOutput {
+		diagnostics = stderr
+	}
 
 	dcaOptions, err := buildDCAOptions(dcaValues)
 	if err != nil {
@@ -139,20 +149,16 @@ func runDebugCaptureCaptureWithDependencies(
 		return usageError{message: err.Error()}
 	}
 
-	plan, finalizeSession, err := loadCaptureOutputPlan(
-		radar.StudioCLI,
-		configPath,
-		radar.FullConfiguration,
-		*sessionDirectory,
-	)
+	prepared, err := loadCaptureOutputPlan(radar.StudioCLI, configPath)
 	if err != nil {
 		return err
 	}
+	plan := prepared.plan
 	linkPlan, err := debugcapture.BuildPlan(plan)
 	if err != nil {
 		return err
 	}
-	if err := preflightDebugCaptureBounds(plan, &dcaOptions, stdout); err != nil {
+	if err := preflightDebugCaptureBounds(plan, &dcaOptions, diagnostics); err != nil {
 		return err
 	}
 	assets, err := dependencies.checkAssets(*bssPath, *mssPath)
@@ -165,25 +171,25 @@ func runDebugCaptureCaptureWithDependencies(
 	if err := dependencies.checkNative(); err != nil {
 		return err
 	}
-	printCapturePlan(stdout, plan)
+	printCapturePlan(diagnostics, plan)
 
 	stats, err := runDebugCaptureHardware(
-		stdout,
+		diagnostics,
+		streamStdout,
 		outputPath,
-		finalizeSession,
+		prepared,
 		*enhancedPort,
 		assets,
 		selectors,
 		*sop2Reset,
 		linkPlan,
-		plan,
 		dcaOptions,
 		dependencies,
 	)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, formatCaptureStats(stats))
+	fmt.Fprintln(diagnostics, formatCaptureStats(stats))
 	return nil
 }
 
@@ -314,20 +320,21 @@ func preflightDebugCaptureBounds(
 
 func runDebugCaptureHardware(
 	stdout io.Writer,
+	streamStdout *os.File,
 	outputPath string,
-	finalizeSession capturefile.SessionFinalizer,
+	prepared preparedCaptureOutput,
 	enhancedPort string,
 	assets debugcapture.Assets,
 	selectors debugcapture.D2XXSelectors,
 	resetSOP2 bool,
 	linkPlan debugcapture.Plan,
-	plan radar.CapturePlan,
 	dcaOptions dcaCommandOptions,
 	dependencies debugCaptureDependencies,
 ) (stats dca.CaptureStats, resultErr error) {
+	plan := prepared.plan
 	// Reserving the OUT.part file or directory is the final preflight and
 	// precedes every hardware I/O.
-	output, err := createCaptureOutput(outputPath, finalizeSession)
+	output, err := createCaptureOutput(outputPath, prepared.finalizeSession)
 	if err != nil {
 		return stats, err
 	}
@@ -337,6 +344,21 @@ func runDebugCaptureHardware(
 
 	ctx, stopSignal := dependencies.context()
 	defer stopSignal()
+	var stream *activeCaptureStream
+	if streamStdout != nil {
+		stream, err = startCaptureStream(
+			ctx,
+			streamStdout,
+			output,
+			prepared,
+			capturestream.CaptureModeDebugCLI,
+			stopSignal,
+		)
+		if err != nil {
+			return stats, err
+		}
+		defer func() { resultErr = stream.finish(resultErr) }()
+	}
 	dcaClient, err := dependencies.dialDCA(dcaOptions.control)
 	if err != nil {
 		return stats, err
@@ -376,6 +398,9 @@ func runDebugCaptureHardware(
 	sessionOptions.ResetFPGA = dcaOptions.reset
 	sessionOptions.CommandTimeout = dcaOptions.control.Timeout
 	sessionOptions.DrainTimeout = 3 * time.Second
+	if stream != nil {
+		sessionOptions.Mirror = stream.mirror
+	}
 	sessionOptions.Log = func(message string) { fmt.Fprintln(stdout, "[capture] "+message) }
 	stats, err = dependencies.runSession(
 		ctx,

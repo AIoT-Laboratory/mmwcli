@@ -6,25 +6,24 @@ byte contract.
 
 The Go implementation includes the CFG-plan-bound record encoder, bounded `WriterAt` frame mirror,
 `StdoutEncoder`, and the optional capture-session mirror/seal hook. mmwcore implements the matching
-`mmwcore.io.CaptureStreamReader` decoder over a caller-owned `BinaryIO`. The mmwcli application does
-not yet construct or connect these pieces, so no public command or flag produces this stream.
+`mmwcore.io.CaptureStreamReader` decoder over a caller-owned `BinaryIO`. Both production capture
+routes expose the same optional stream:
+
+~~~text
+mmwcli studio-cli capture CFG OUTDIR --port PORT --stream [options]
+mmwcli debug-cli capture CFG OUTDIR --enhanced-port PORT ... --stream [options]
+~~~
+
+`OUTDIR` is always the authoritative strict **mmwcli.capture_session.v1** transaction, whether or
+not `--stream` is present. The flag adds a provisional stdout mirror; it does not create a second
+capture mode or a stream-only route.
 
 ## Trust boundary
 
-The intended application transport is a child process with binary data on a dedicated inherited
-stdout pipe, diagnostics on stderr, and cancellation on a separate control path. The implemented
-`StdoutEncoder` owns and closes one OS stdout handle, including to interrupt a blocked write, on
-Windows and Linux. The application has not yet reserved stdout or routed its diagnostics and
-capture lifecycle around this adapter.
-
-Possession of the child-process pipe provides provenance to the process that launched mmwcli. The
-wire format does not authenticate either peer. The producer, version, and stream ID fields are
-provenance and correlation data, not proof of executable identity. Record SHA-256 values detect
-corruption; they are not signatures.
-
-An arbitrary socket or redirected byte source must be treated as untrusted. A future network
-transport would require a separate capability or authenticated handshake. Loopback addressing alone
-is not authentication.
+With `--stream`, stdout must be a dedicated OS file or pipe and contains capture-stream bytes from
+its first byte through EOF; plans, progress, statistics, and errors go to stderr. `StdoutEncoder`
+owns and closes that stdout handle, including to interrupt a blocked write on Windows and Linux.
+Record SHA-256 values provide integrity checking, not peer identity or authentication.
 
 ## Record framing
 
@@ -162,18 +161,16 @@ frames, use an unbounded queue, or silently spill stream state to another file. 
 failure, and seals every frame through a bounded context before output publication.
 
 A slow or disconnected consumer is a capture failure, not permission to lose records. Queue
-exhaustion or write failure invokes the Mirror's capture-cancellation callback. Once the application
-wires the shared capture context, that failure enters the existing bounded hardware cleanup;
-StartRecord is not retried. Mirror sealing requires a deadline, and `StdoutEncoder` can close its
-owned handle independently to interrupt a blocked stream writer.
+exhaustion or write failure invokes the Mirror's callback on the shared capture context, entering
+the existing bounded hardware cleanup; StartRecord is not retried. Mirror sealing requires a
+deadline, and `StdoutEncoder` can close its owned handle independently to interrupt a blocked stream
+writer.
 
 Cancellation belongs to the acquisition control plane, not this producer-to-consumer record stream.
-`StdoutEncoder` already maps cancellation of an encoder operation to closure of its owned stdout
-handle, which interrupts an active pipe write, and its terminal operations close the handle after
-COMMIT or ABORT. It does not own the capture context or hardware cleanup. The missing application
-integration must still map consumer or pipe failure into the shared capture context, perform bounded
-cleanup, and then attempt the appropriate terminal result. Closing a data pipe or killing a process
-does not turn provisional frames into a commit.
+The application maps Mirror or pipe failure into the shared capture context, performs bounded radar
+and DCA1000 cleanup, then attempts ABORT. Successful capture publishes `OUTDIR`, completes device
+cleanup, emits COMMIT, and closes stdout; only COMMIT followed by EOF makes provisional FRAME records
+final. Closing a data pipe or killing a process does not turn provisional frames into a commit.
 
 ## Exclusions
 

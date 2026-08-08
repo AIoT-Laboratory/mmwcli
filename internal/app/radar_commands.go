@@ -10,6 +10,7 @@ import (
 
 	"mmwcli/internal/capturefile"
 	"mmwcli/internal/capturemanifest"
+	"mmwcli/internal/capturestream"
 	"mmwcli/internal/dca"
 	"mmwcli/internal/radar"
 	"mmwcli/internal/serialport"
@@ -166,21 +167,19 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	flags := newCommandFlagSet(
 		dialect.Name()+" capture",
 		stderr,
-		"mmwcli "+dialect.Name()+" capture CFG OUT [options]",
+		"mmwcli "+dialect.Name()+" capture CFG OUTDIR [options]",
 	)
 	portName := flags.String("port", "", "serial port (COM3 or /dev/ttyACM0)")
 	baud := flags.Int("baud", dialect.DefaultBaud(), "serial baud")
 	serialTimeoutMS := flags.Int("serial-timeout-ms", 10000, "serial command timeout")
-	noReconfigure := false
-	sessionDirectory := false
-	flags.BoolVar(&noReconfigure, "no-reconfig", false, "reuse the existing radar configuration")
-	flags.BoolVar(&sessionDirectory, "session-dir", false, "publish ADC data and v1 metadata as an output directory")
+	streamOutput := false
+	flags.BoolVar(&streamOutput, "stream", false, "also emit capture-stream v1 on stdout")
 	dcaValues := addDCAFlags(flags, "dca-timeout-ms", dcaConfigurationFlags|dcaReceiverFlags)
 	if len(arguments) != 0 && isHelp(arguments[0]) {
 		return parseCommandFlags(flags, arguments)
 	}
 	if len(arguments) < 2 || strings.HasPrefix(arguments[0], "-") || strings.HasPrefix(arguments[1], "-") {
-		return usageError{message: dialect.Name() + " capture requires CFG and output paths"}
+		return usageError{message: dialect.Name() + " capture requires a CFG file and output directory"}
 	}
 	configPath, outputPath := arguments[0], arguments[1]
 	if err := parseCommandFlags(flags, arguments[2:]); err != nil {
@@ -198,13 +197,18 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	if *serialTimeoutMS < 100 || *serialTimeoutMS > 25500 {
 		return usageError{message: "--serial-timeout-ms must be in 100..25500"}
 	}
-	mode := radar.FullConfiguration
-	if noReconfigure {
-		mode = radar.ReuseConfiguration
-	}
-	plan, finalizeSession, err := loadCaptureOutputPlan(dialect, configPath, mode, sessionDirectory)
+	streamStdout, err := requireCaptureStreamStdout(streamOutput, stdout)
 	if err != nil {
 		return err
+	}
+	prepared, err := loadCaptureOutputPlan(dialect, configPath)
+	if err != nil {
+		return err
+	}
+	plan := prepared.plan
+	diagnostics := stdout
+	if streamOutput {
+		diagnostics = stderr
 	}
 	dcaOptions, err := buildDCAOptions(dcaValues)
 	if err != nil {
@@ -237,7 +241,7 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	}
 	if dcaOptions.receiver.IdleTimeout < requiredIdleTimeout {
 		fmt.Fprintf(
-			stdout,
+			diagnostics,
 			"[capture] idle timeout raised from %s to %s for DCA raw tail/frame aggregation\n",
 			dcaOptions.receiver.IdleTimeout,
 			requiredIdleTimeout,
@@ -250,7 +254,7 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	}
 	if dcaOptions.receiver.FirstPacketTimeout < requiredFirstPacketTimeout {
 		fmt.Fprintf(
-			stdout,
+			diagnostics,
 			"[capture] first-packet timeout raised from %s to %s for DCA packet aggregation\n",
 			dcaOptions.receiver.FirstPacketTimeout,
 			requiredFirstPacketTimeout,
@@ -262,14 +266,31 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	} else if plan.ExpectedBytes > 0 && !finite {
 		return usageError{message: "finite radar capture plan has no bounded streaming duration"}
 	}
-	printCapturePlan(stdout, plan)
+	printCapturePlan(diagnostics, plan)
 
 	// Reserve the OUT.part file or directory before any hardware access.
-	output, err := createCaptureOutput(outputPath, finalizeSession)
+	output, err := createCaptureOutput(outputPath, prepared.finalizeSession)
 	if err != nil {
 		return err
 	}
 	defer func() { resultErr = errorsJoin(resultErr, output.Close()) }()
+	ctx, stopSignal := hardwareSignalContext()
+	defer stopSignal()
+	var stream *activeCaptureStream
+	if streamOutput {
+		stream, err = startCaptureStream(
+			ctx,
+			streamStdout,
+			output,
+			prepared,
+			capturestream.CaptureModeStudioCLI,
+			stopSignal,
+		)
+		if err != nil {
+			return err
+		}
+		defer func() { resultErr = stream.finish(resultErr) }()
+	}
 
 	transport, err := serialport.Open(*portName, *baud, time.Duration(*serialTimeoutMS)*time.Millisecond)
 	if err != nil {
@@ -301,8 +322,6 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 		)
 	}()
 
-	ctx, stopSignal := hardwareSignalContext()
-	defer stopSignal()
 	sessionOptions := session.DefaultOptions()
 	sessionOptions.FPGAConfig = dcaOptions.fpga
 	sessionOptions.ReceiverConfig = dcaOptions.receiver
@@ -310,7 +329,10 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	sessionOptions.ResetFPGA = dcaOptions.reset
 	sessionOptions.CommandTimeout = dcaOptions.control.Timeout
 	sessionOptions.DrainTimeout = 3 * time.Second
-	sessionOptions.Log = func(message string) { fmt.Fprintln(stdout, "[capture] "+message) }
+	if stream != nil {
+		sessionOptions.Mirror = stream.mirror
+	}
+	sessionOptions.Log = func(message string) { fmt.Fprintln(diagnostics, "[capture] "+message) }
 	stats, err := session.Run(
 		ctx,
 		radarClient,
@@ -325,7 +347,7 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, formatCaptureStats(stats))
+	fmt.Fprintln(diagnostics, formatCaptureStats(stats))
 	return nil
 }
 
@@ -339,32 +361,33 @@ func loadCapturePlan(dialect radar.Dialect, path string, mode radar.Configuratio
 
 const captureSessionMaxConfigBytes = 4 << 20
 
-func loadCaptureOutputPlan(
-	dialect radar.Dialect,
-	path string,
-	mode radar.ConfigurationMode,
-	sessionDirectory bool,
-) (radar.CapturePlan, capturefile.SessionFinalizer, error) {
-	if !sessionDirectory {
-		plan, err := loadCapturePlan(dialect, path, mode)
-		return plan, nil, err
-	}
+type preparedCaptureOutput struct {
+	plan            radar.CapturePlan
+	configSnapshot  []byte
+	finalizeSession capturefile.SessionFinalizer
+}
+
+func loadCaptureOutputPlan(dialect radar.Dialect, path string) (preparedCaptureOutput, error) {
 	if dialect != radar.StudioCLI {
-		return radar.CapturePlan{}, nil, errors.New("capture session directories require the studio-cli dialect")
+		return preparedCaptureOutput{}, errors.New("capture session directories require the studio-cli dialect")
 	}
 	snapshot, err := readCaptureSessionConfig(path)
 	if err != nil {
-		return radar.CapturePlan{}, nil, err
+		return preparedCaptureOutput{}, err
 	}
-	plan, err := radar.BuildCaptureSessionV1Plan(snapshot, mode)
+	plan, err := radar.BuildCaptureSessionV1Plan(snapshot, radar.FullConfiguration)
 	if err != nil {
-		return radar.CapturePlan{}, nil, err
+		return preparedCaptureOutput{}, err
 	}
 	finalize, err := capturemanifest.NewV1Finalizer(snapshot, plan.RawCapture)
 	if err != nil {
-		return radar.CapturePlan{}, nil, err
+		return preparedCaptureOutput{}, err
 	}
-	return plan, finalize, nil
+	return preparedCaptureOutput{
+		plan:            plan,
+		configSnapshot:  snapshot,
+		finalizeSession: finalize,
+	}, nil
 }
 
 func readCaptureSessionConfig(path string) ([]byte, error) {
@@ -387,10 +410,10 @@ func readCaptureSessionConfig(path string) ([]byte, error) {
 	return snapshot, nil
 }
 
-func createCaptureOutput(path string, finalize capturefile.SessionFinalizer) (capturefile.Output, error) {
-	if finalize == nil {
-		return capturefile.Create(path)
-	}
+func createCaptureOutput(
+	path string,
+	finalize capturefile.SessionFinalizer,
+) (*capturefile.SessionDirectory, error) {
 	return capturefile.CreateSessionDirectory(path, finalize)
 }
 

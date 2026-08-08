@@ -62,7 +62,7 @@ func TestDebugCaptureCapturePreflightFailureDoesNotCreatePartOrTouchHardware(t *
 			config: unrepresentableConfig,
 			extraArgs: []string{
 				"--enhanced-port", "COM3", "--bss-fw", "bss.bin", "--mss-fw", "mss.bin",
-				"--d2xx-serial", "FT1234", "--session-dir",
+				"--d2xx-serial", "FT1234",
 			},
 			match: "exact adcCfg 2 1",
 		},
@@ -145,47 +145,34 @@ func TestDebugCaptureCaptureNativePreflightPrecedesOutputAndHardware(t *testing.
 
 func TestDebugCaptureCaptureOutputReservationPrecedesHardware(t *testing.T) {
 	config := writeDebugCaptureConfig(t, debugCaptureTestConfig)
-	for _, sessionDirectory := range []bool{false, true} {
-		name := "raw"
-		if sessionDirectory {
-			name = "session directory"
-		}
-		t.Run(name, func(t *testing.T) {
-			output := filepath.Join(t.TempDir(), "capture")
-			if err := os.WriteFile(output, []byte("existing"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			var hardwareCalls int
-			dependencies := preflightOnlyDebugCaptureDependencies(&hardwareCalls)
-			arguments := debugCaptureArguments(config, output)
-			if sessionDirectory {
-				arguments = append(arguments, "--session-dir")
-			}
-
-			err := runDebugCaptureCaptureWithDependencies(
-				arguments,
-				io.Discard,
-				io.Discard,
-				dependencies,
-			)
-			if err == nil || !strings.Contains(err.Error(), "already exists") {
-				t.Fatalf("output preflight error = %v", err)
-			}
-			if hardwareCalls != 0 {
-				t.Fatalf("output preflight made %d hardware call(s)", hardwareCalls)
-			}
-			contents, err := os.ReadFile(output)
-			if err != nil || string(contents) != "existing" {
-				t.Fatalf("existing output changed: %q, %v", contents, err)
-			}
-			assertPathDoesNotExist(t, output+".part")
-		})
+	output := filepath.Join(t.TempDir(), "capture-session")
+	if err := os.WriteFile(output, []byte("existing"), 0o644); err != nil {
+		t.Fatal(err)
 	}
+	var hardwareCalls int
+	dependencies := preflightOnlyDebugCaptureDependencies(&hardwareCalls)
+	err := runDebugCaptureCaptureWithDependencies(
+		debugCaptureArguments(config, output),
+		io.Discard,
+		io.Discard,
+		dependencies,
+	)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("output preflight error = %v", err)
+	}
+	if hardwareCalls != 0 {
+		t.Fatalf("output preflight made %d hardware call(s)", hardwareCalls)
+	}
+	contents, err := os.ReadFile(output)
+	if err != nil || string(contents) != "existing" {
+		t.Fatalf("existing output changed: %q, %v", contents, err)
+	}
+	assertPathDoesNotExist(t, output+".part")
 }
 
 func TestDebugCaptureCaptureReportsJoinedPostCommitCloseFailures(t *testing.T) {
 	config := writeDebugCaptureConfig(t, debugCaptureTestConfig)
-	outputPath := filepath.Join(t.TempDir(), "capture.bin")
+	outputPath := filepath.Join(t.TempDir(), "capture-session")
 	var events []string
 	dcaCloseCause := errors.New("late DCA close failure")
 	controllerCloseCause := errors.New("late controller close failure")
@@ -241,6 +228,9 @@ func TestDebugCaptureCaptureReportsJoinedPostCommitCloseFailures(t *testing.T) {
 				plan.ExpectedBytes,
 			)
 		}
+		if err := output.Truncate(plan.ExpectedBytes); err != nil {
+			return dca.CaptureStats{}, err
+		}
 		if err := output.CommitContext(ctx); err != nil {
 			return dca.CaptureStats{}, err
 		}
@@ -272,13 +262,13 @@ func TestDebugCaptureCaptureReportsJoinedPostCommitCloseFailures(t *testing.T) {
 	if !reflect.DeepEqual(events, wantEvents) {
 		t.Fatalf("events = %v, want %v", events, wantEvents)
 	}
-	if _, err := os.Stat(outputPath); err != nil {
+	if info, err := os.Stat(outputPath); err != nil || !info.IsDir() {
 		t.Fatalf("published output: %v", err)
 	}
 	assertPathDoesNotExist(t, outputPath+".part")
 }
 
-func TestDebugCaptureSessionDirectoryPublishesV1FromConfigSnapshot(t *testing.T) {
+func TestDebugCapturePublishesV1FromConfigSnapshot(t *testing.T) {
 	configContents := strings.Replace(
 		debugCaptureTestConfig,
 		"frameCfg 0 1 32 100 100 1 0",
@@ -344,9 +334,8 @@ func TestDebugCaptureSessionDirectoryPublishesV1FromConfigSnapshot(t *testing.T)
 		return dca.CaptureStats{OutputBytes: int64(len(adcBytes))}, nil
 	}
 
-	arguments := append(debugCaptureArguments(config, outputPath), "--session-dir")
 	if err := runDebugCaptureCaptureWithDependencies(
-		arguments,
+		debugCaptureArguments(config, outputPath),
 		io.Discard,
 		io.Discard,
 		dependencies,
@@ -415,12 +404,12 @@ func TestDebugCaptureCaptureHelpHasNoTextCLIRouteFlags(t *testing.T) {
 		t.Fatalf("Run returned %d: %s", code, stderr.String())
 	}
 	help := stdout.String() + stderr.String()
-	for _, expected := range []string{"--enhanced-port", "--bss-fw", "--mss-fw", "--d2xx-serial", "--d2xx-description", "--sop2-reset", "session-dir"} {
+	for _, expected := range []string{"--enhanced-port", "--bss-fw", "--mss-fw", "--d2xx-serial", "--d2xx-description", "--sop2-reset", "stream"} {
 		if !strings.Contains(help, expected) {
 			t.Errorf("help does not contain %s: %s", expected, help)
 		}
 	}
-	for _, forbidden := range []string{"--no-reconfig", "--baud", "--serial-timeout-ms"} {
+	for _, forbidden := range []string{"--no-reconfig", "session-dir", "--baud", "--serial-timeout-ms"} {
 		if strings.Contains(help, forbidden) {
 			t.Errorf("help contains forbidden text-CLI flag %s: %s", forbidden, help)
 		}

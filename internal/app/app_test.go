@@ -201,36 +201,63 @@ func TestCommandHelpDoesNotRequirePositionalsOrHardware(t *testing.T) {
 	}
 }
 
-func TestStudioCaptureHelpContainsNoReconfigureFlag(t *testing.T) {
+func TestStudioCaptureRejectsRemovedNoReconfigureFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := Run([]string{"studio-cli", "capture", "--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "no-reconfig") {
-		t.Fatalf("studio-cli capture help omits no-reconfig: %s", stderr.String())
+	if strings.Contains(stderr.String(), "no-reconfig") {
+		t.Fatalf("studio-cli capture help retains no-reconfig: %s", stderr.String())
 	}
+
+	config := writeValidConfig(t)
+	output := filepath.Join(t.TempDir(), "capture.bin")
+	stdout.Reset()
+	stderr.Reset()
+	arguments := []string{"studio-cli", "capture", config, output, "--port", "COM3", "--no-reconfig"}
+	if code := Run(arguments, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "flag provided but not defined: -no-reconfig") {
+		t.Fatalf("missing removed flag error: %s", stderr.String())
+	}
+	assertPathDoesNotExist(t, output)
+	assertPathDoesNotExist(t, output+".part")
 }
 
-func TestCaptureSessionDirectoryFlagScope(t *testing.T) {
-	for _, test := range []struct {
-		arguments []string
-		want      bool
-	}{
-		{arguments: []string{"studio-cli", "capture", "--help"}, want: true},
-		{arguments: []string{"debug-cli", "capture", "--help"}, want: true},
-		{arguments: []string{"studio-cli", "check", "--help"}, want: false},
+func TestCaptureCommandsRejectRemovedSessionDirectoryFlag(t *testing.T) {
+	for _, arguments := range [][]string{
+		{"studio-cli", "capture", "--help"},
+		{"debug-cli", "capture", "--help"},
+		{"studio-cli", "check", "--help"},
 	} {
-		t.Run(strings.Join(test.arguments, " "), func(t *testing.T) {
+		t.Run(strings.Join(arguments, " "), func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if code := Run(test.arguments, &stdout, &stderr); code != 0 {
+			if code := Run(arguments, &stdout, &stderr); code != 0 {
 				t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 			}
 			help := stdout.String() + stderr.String()
-			if got := strings.Contains(help, "session-dir"); got != test.want {
-				t.Fatalf("session-dir in help = %t, want %t:\n%s", got, test.want, help)
+			if strings.Contains(help, "session-dir") {
+				t.Fatalf("help retains removed session-dir flag:\n%s", help)
 			}
 		})
 	}
+
+	output := filepath.Join(t.TempDir(), "capture-session")
+	for _, arguments := range [][]string{
+		{"studio-cli", "capture", "CONFIG", output, "--session-dir"},
+		{"debug-cli", "capture", "CONFIG", output, "--session-dir"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := Run(arguments, &stdout, &stderr); code != 2 {
+			t.Fatalf("arguments %v: exit code = %d, stdout=%s stderr=%s", arguments, code, stdout.String(), stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "flag provided but not defined: -session-dir") {
+			t.Fatalf("arguments %v: missing removed flag error: %s", arguments, stderr.String())
+		}
+	}
+	assertPathDoesNotExist(t, output)
+	assertPathDoesNotExist(t, output+".part")
 }
 
 func TestStudioCaptureSessionContractPrecedesOutput(t *testing.T) {
@@ -245,7 +272,7 @@ func TestStudioCaptureSessionContractPrecedesOutput(t *testing.T) {
 	}
 	output := filepath.Join(t.TempDir(), "capture-session")
 	var stdout, stderr bytes.Buffer
-	arguments := []string{"studio-cli", "capture", config, output, "--port", "COM3", "--session-dir"}
+	arguments := []string{"studio-cli", "capture", config, output, "--port", "COM3"}
 	if code := Run(arguments, &stdout, &stderr); code != 4 {
 		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -267,7 +294,7 @@ func TestStudioCaptureSessionReservationPrecedesHardware(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	arguments := []string{"studio-cli", "capture", config, output, "--port", "COM3", "--session-dir"}
+	arguments := []string{"studio-cli", "capture", config, output, "--port", "COM3"}
 	if code := Run(arguments, &stdout, &stderr); code != 4 {
 		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -287,22 +314,17 @@ func TestStudioCaptureSessionOutputPublishesDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, finalize, err := loadCaptureOutputPlan(
-		radar.StudioCLI,
-		config,
-		radar.FullConfiguration,
-		true,
-	)
+	prepared, err := loadCaptureOutputPlan(radar.StudioCLI, config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	outputPath := filepath.Join(t.TempDir(), "capture-session")
-	output, err := createCaptureOutput(outputPath, finalize)
+	output, err := createCaptureOutput(outputPath, prepared.finalizeSession)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer output.Close()
-	adc := make([]byte, int(plan.ExpectedBytes))
+	adc := make([]byte, int(prepared.plan.ExpectedBytes))
 	if written, err := output.WriteAt(adc, 0); err != nil || written != len(adc) {
 		t.Fatalf("write ADC = %d, %v", written, err)
 	}
@@ -513,7 +535,7 @@ func TestIntegratedCaptureRaisesRawTailGuardBeforeOutputOrHardware(t *testing.T)
 	}
 }
 
-func TestIntegratedInfiniteCaptureRaisesAggregatedTimeoutsBeforeOutputOrHardware(t *testing.T) {
+func TestIntegratedInfiniteCaptureIsRejectedByStrictSessionContract(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "small-frames.cfg")
 	content := strings.Join([]string{
 		"flushCfg",
@@ -540,11 +562,11 @@ func TestIntegratedInfiniteCaptureRaisesAggregatedTimeoutsBeforeOutputOrHardware
 	if code := Run(arguments, &stdout, &stderr); code != 4 {
 		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "first-packet timeout raised from 30s to 31.866s") {
-		t.Fatalf("missing packet-aggregation timeout adjustment: %s", stdout.String())
+	if !strings.Contains(stderr.String(), "requires a finite frame count") {
+		t.Fatalf("missing strict finite-session rejection: %s", stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "idle timeout raised from 2.5s to 32.524s") {
-		t.Fatalf("missing inter-packet idle adjustment: %s", stdout.String())
+	if stdout.Len() != 0 {
+		t.Fatalf("rejected infinite capture wrote stdout: %s", stdout.String())
 	}
 	data, err := os.ReadFile(output)
 	if err != nil || string(data) != "keep" {
