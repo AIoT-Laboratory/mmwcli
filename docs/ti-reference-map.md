@@ -23,7 +23,7 @@ antenna geometry. The `mmwcli firmware verify FILE` command checks only this ass
 The complete Toolbox, package metadata, manifests, profiles, and source are not verification or
 capture prerequisites.
 
-## `debug-capture` MSS/BSS firmware
+## `debug-cli` MSS/BSS firmware
 
 The current executable offline asset contract comes from the mmWave Studio 2.1.1 RF evaluation
 firmware. The user only needs to supply these two xWR68xx files; installing or invoking the
@@ -34,12 +34,12 @@ mmWave Studio runtime is unnecessary:
 | BSS `rf_eval_firmware/radarss/xwr68xx_radarss.bin` | 240072 | `E2C69405394E35BA376EFE1A52305EE74DBD19F8BAB72BD5A9078878853CD77F` |
 | MSS `rf_eval_firmware/masterss/xwr68xx_masterss.bin` | 92992 | `316911D4A8DBA1762714A3A107071BD0CF06A135FAE29BFBBC92B037592DE060` |
 
-`mmwcli debug-capture check --bss-fw FILE --mss-fw FILE` also parses RPRC, validates xWR68xx memory
+`mmwcli debug-cli check --bss-fw FILE --mss-fw FILE` also parses RPRC, validates xWR68xx memory
 windows, and builds the memory-write plan. It does not open the radar, DCA1000, or a USB device. A
 successful command establishes only that the assets and write plan satisfy the offline contract; it
 does not validate the D2XX library, radar, and DCA1000 combination.
 
-During `debug-capture capture`, Enhanced COM only submits these files to SOP2 device memory. The host
+During `debug-cli capture`, Enhanced COM only submits these files to SOP2 device memory. The host
 then switches to FTDI D2XX A/B and carries mmWaveLink configuration, start, and stop over SPI/IRQ.
 The host translates the capture CFG into mmWaveLink messages rather than sending it as text. No
 mmWave Studio runtime is required. The two exact hashes in the table were used for the 2026-08-05

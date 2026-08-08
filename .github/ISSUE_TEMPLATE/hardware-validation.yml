@@ -16,7 +16,7 @@ body:
       description: Select the exact route exercised.
       options:
         - studio-cli acquisition
-        - debug-capture acquisition
+        - debug-cli acquisition
         - mmwcore offline decode
         - Other documented route
     validations:

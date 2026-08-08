@@ -28,7 +28,7 @@ substitute for a reviewed descriptor.
 
 ## Acquisition and decode matrix
 
-| Device or board | `mmwcli studio-cli` acquisition | `mmwcli debug-capture` acquisition | `mmwcore` raw layout | `mmwcore` antenna geometry |
+| Device or board | `mmwcli studio-cli` acquisition | `mmwcli debug-cli` acquisition | `mmwcore` raw layout | `mmwcore` antenna geometry |
 | --- | --- | --- | --- | --- |
 | IWR6843 ES2 part `0xE2` with the recorded DCA1000/host combination | Source-validated experimental at xWR68xx family level only; model, part, ES, and board are not observed | **Supported**; exact firmware and environment in the hardware smoke test only | **Supported** `group2_i_then_q` for the documented complex16 capture contract | Source-validated experimental IWR6843ISK preset when that is the actual board; the capture record does not prove geometry |
 | IWR6843ISK combinations outside that record | Source-validated experimental at xWR68xx family level only; no ISK identity is observed | Planned; no implicit relaxation of part/ES/asset checks | Source-validated experimental `group2_i_then_q` | Source-validated experimental IWR6843ISK preset |

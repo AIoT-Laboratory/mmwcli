@@ -1,6 +1,6 @@
 # IWR6843 + DCA1000 hardware smoke test
 
-Sections 1 through 5 define the two-run reuse validation for TI `studio_cli` firmware, IWR6843 ES2
+Sections 1 through 5 define repeatable full-configuration validation for TI `studio_cli` firmware, IWR6843 ES2
 part `0xE2`, and DCA1000 in functional/application mode. Version 0.1 has not completed hardware
 validation for this path.
 
@@ -60,7 +60,7 @@ Confirm that the radar booted in functional/application mode and replace `PORT` 
 operator-confirmed serial port:
 
 ```text
-mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-01.bin --port PORT
+mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-01 --port PORT
 ```
 
 The example CFG has 100 finite frames. Each frame has 64 chirps, and each chirp has 4 Rx channels ×
@@ -73,25 +73,24 @@ The example CFG has 100 finite frames. Each frame has 64 chirps, and each chirp 
 Pass criteria:
 
 - exit code 0;
-- `capture-01.bin` is exactly `26,214,400` bytes;
+- `capture-01/adc.bin` is exactly `26,214,400` bytes and `radar.cfg` plus `capture.json` are present;
 - statistics contain no missing, discarded, malformed, overlap, or fatal asynchronous status;
-- no `capture-01.bin.part` remains.
+- no `capture-01.part` remains.
 
-A non-empty file alone is not a pass. A retained `.part` file is failure evidence; do not rename it
-to present it as complete output.
+A non-empty `adc.bin` alone is not a pass. A retained `.part` directory is failure evidence; do
+not rename it to present it as complete output.
 
-## 4. Second run: reuse without reconfiguration
+## 4. Optional second full-configuration run
 
-Keep the firmware, SOP, CFG, serial port, and every connection unchanged. Do not reset the radar or
-DCA1000:
+Keep the firmware, SOP, CFG, serial port, and every connection unchanged when checking repeatability:
 
 ```text
-mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-02.bin --port PORT --no-reconfig
+mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-02 --port PORT
 ```
 
-The second run configures/starts/stops DCA1000 again, but does not reset its FPGA or resend the radar
-configuration; it restarts the radar with `sensorStart 0`. The same size and integrity criteria apply
-to both runs. A run that uses `--reset` is not valid reuse evidence.
+The second run repeats full preflight, DCA1000 setup, and the complete radar configuration. Capture
+has no configuration-reuse mode. The same size and integrity criteria apply to both runs; record any
+reset or power-cycle between them.
 
 ## 5. Interruptions and failures
 
@@ -99,22 +98,22 @@ to both runs. A run that uses `--reset` is not valid reuse evidence.
 - A DCA StartRecord response timeout leaves state indeterminate. mmwcli does not resend Start and issues one StopRecord for recovery.
 - A short DCA raw tail packet may be delayed by about two seconds; the default 2500 ms quiet/drain interval is expected.
 - Do not run DCA commands concurrently; they use the same local UDP port 4096 by default.
-- An existing `OUT` or `OUT.part` fails before hardware I/O and is never overwritten.
+- An existing `OUTDIR` or `OUTDIR.part` fails before hardware I/O and is never overwritten.
 
 ## Functional/application validation record requirements
 
 Record the radar model/ES, firmware version and hash, SOP, serial port, baud, DCA FPGA version, CFG
-hash, packet delay, output size for both runs, packet count, sequence gaps, out-of-order count, exit
-reason, `.part` state, and whether the second run explicitly used `--no-reconfig` without reset.
+hash, packet delay, output size for each run, packet count, sequence gaps, out-of-order count, exit
+reason, `.part` state, and any reset or power-cycle between runs.
 
 ## Debug mode 0.1 hardware validation record
 
 Debug mode uses the separate SOP2, Enhanced COM, and D2XX/mmWaveLink path and is not part of the
-`studio_cli` two-run reuse test. One finite-frame validation completed on 2026-08-05 with a command
-equivalent to the following; the operator supplied `PORT`, `PATH`, `BASE`, and `OUT` explicitly:
+`studio_cli` full-configuration test. One finite-frame validation completed on 2026-08-05 with a command
+equivalent to the following; the operator supplied `PORT`, `PATH`, `BASE`, and `OUTDIR` explicitly:
 
 ```text
-mmwcli debug-cli capture hardware/debug-cli-xwr6843-raw.cfg OUT --enhanced-port PORT --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin --d2xx-description BASE --sop2-reset --delay-us 100
+mmwcli debug-cli capture hardware/debug-cli-xwr6843-raw.cfg OUTDIR --enhanced-port PORT --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin --d2xx-description BASE --sop2-reset --delay-us 100
 ```
 
 | Item | Validated value |
@@ -130,7 +129,7 @@ mmwcli debug-cli capture hardware/debug-cli-xwr6843-raw.cfg OUT --enhanced-port 
 | SOP2 and transport | `--sop2-reset`; `--delay-us 100`; DCA FPGA not reset |
 | Expected/actual payload | `26,214,400` bytes / `26,214,400` bytes |
 | CLI statistics | `packets=18005 payload=26214400 output=26214400 gaps=0 outOfOrder=0 missing=0` |
-| Output transaction | `OUT` published successfully; no `OUT.part` remained |
+| Output transaction | `OUTDIR` published successfully with `adc.bin`, `radar.cfg`, and `capture.json`; no `OUTDIR.part` remained |
 | ADC output SHA-256 | `418AFFD7705341CDE90D55EBBB7D01EE4C00C512DAE02DA031E99F400EE08DA1` |
 
 The ADC output is not included in the repository or release. Its hash identifies retained laboratory

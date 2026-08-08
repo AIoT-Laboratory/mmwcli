@@ -15,12 +15,12 @@ the terms attached to each file and its manifest.
 functional route only requires the user to flash this device firmware; the complete Toolbox,
 reference source, profiles, manifests, and host tools are not build or runtime dependencies. The
 repository's `hardware/studio-cli-xwr6843-raw.cfg` is this project's raw-capture validation
-configuration, not an official TI monitor profile. The MSS/BSS firmware checked by `debug-capture`
+configuration, not an official TI monitor profile. The MSS/BSS firmware checked by `debug-cli`
 must also be supplied by the user.
 
 ## FTDI D2XX
 
-The optional `ftd2xx` build tag for `debug-capture` binds only the minimum D2XX ABI needed to open
+The optional `ftd2xx` build tag for `debug-cli` binds only the minimum D2XX ABI needed to open
 the A/B interfaces explicitly, initialize MPSSE, and carry the SPI/IRQ transport. The repository and
 release archives contain no FTDI library, header, driver, or installer. The official `ftd2xx.h` and
 `libftd2xx.so` used by Linux builds must also be supplied by the user. These files are outside this

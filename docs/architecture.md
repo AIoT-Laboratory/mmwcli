@@ -21,7 +21,7 @@ Go 1.26+ and the standard library define the core build. Default builds use `CGO
 - `studio-cli` uses the dedicated TI firmware at 921600 baud as a source-validated experimental
   xWR68xx family route.
 - `repl` is a `studio_cli` utility and accepts only that validated line protocol.
-- `debug-capture` downloads the recorded IWR6843 ES2 RF-evaluation firmware through Enhanced COM and controls mmWaveLink through D2XX.
+- `debug-cli` downloads the recorded IWR6843 ES2 RF-evaluation firmware through Enhanced COM and controls mmWaveLink through D2XX.
 
 Each text connection requires the exact `Platform: xWR68xx` family response before its first state
 write. That response does not observe or prove a model, part, ES, board, or antenna geometry, and
@@ -43,11 +43,11 @@ Integrated capture constructs an immutable plan before creating output or openin
 
 Advanced frames, continuous capture, monitor streams, loopback, software LVDS, and LVDS headers are rejected. A full `studio_cli` configuration begins with one exact `flushCfg`. `sensorStart`, when present, must be unique and last; the coordinator removes it before applying the configuration.
 
-`--no-reconfig` still runs the complete preflight against the declared CFG but sends only `sensorStart 0`. Exact source-derived xWR68xx and buffer limits belong in the [TI reference map](ti-reference-map.md).
+`studio-cli capture` always applies the complete preflighted configuration; capture does not reuse an existing radar configuration. Exact source-derived xWR68xx and buffer limits belong in the [TI reference map](ti-reference-map.md).
 
 ## Debug transport boundary
 
-`debug-capture` is not a UART dialect. The user supplies the recorded IWR6843 MSS/BSS firmware; mmwcli does not discover TI installations or load the mmWave Studio runtime.
+`debug-cli` is not a UART dialect. The user supplies the recorded IWR6843 MSS/BSS firmware; mmwcli does not discover TI installations or load the mmWave Studio runtime.
 
 Enhanced COM performs bounded firmware-memory download. Cold-start negotiation validates IWR6843 part `0xE2` and may switch once from 115200 to 921600 baud. A failed or indeterminate write is never retried.
 
@@ -100,19 +100,19 @@ whose close interrupts blocked writes.
 directory. mmwcore implements the matching decoder over a caller-owned `BinaryIO`; it does not own
 the process, pipe, or hardware. The decoder is exposed as `mmwcore.io.CaptureStreamReader`.
 
-The mmwcli application and public CLI do not yet construct this producer pipeline. No public command
-or flag emits capture-stream v1, so current command integration still ends at raw files or published
-capture-session directories. Application wiring must reserve stdout for binary records, keep
-diagnostics on stderr, share cancellation with capture cleanup, and emit COMMIT or ABORT followed by
-EOF. These missing application concerns do not move hardware ownership out of mmwcli.
+Both public capture routes always publish a capture-session v1 directory. With `--stream`, the
+application also connects the exact session output to the bounded Mirror and reserves stdout for
+binary capture-stream v1 records. Diagnostics remain on stderr, stream failure cancels the shared
+capture context, and terminal COMMIT or ABORT is followed by EOF. The published session directory
+remains the authoritative artifact; this does not move hardware ownership out of mmwcli.
 
 Multi-sensor coordination and clock uncertainty remain a separate, unimplemented aggregate contract; see the [multi-sensor synchronization design](multisensor-sync.md). It does not extend capture-stream v1 or move device/process ownership into mmwcore.
 
 ## Transactional output
 
-Output exists only as `OUT.part` during capture. Existing final or partial output fails before hardware access. Publication never overwrites `OUT` and occurs only after reception, radar cleanup, DCA cleanup, status checks, synchronization, and close succeed.
+Output exists only as `OUTDIR.part` during capture. Existing final or partial output fails before hardware access. Publication never overwrites `OUTDIR` and occurs only after reception, radar cleanup, DCA cleanup, status checks, synchronization, and close succeed.
 
-Raw-file mode publishes one ADC file. With `--session-dir`, `studio-cli capture` and `debug-capture capture` stage `adc.bin`, the exact `radar.cfg`, and versioned `capture.json`, then publish the directory through the same no-overwrite transaction. Session-directory output requires a finite, mmwcore-representable xWR68xx CFG with `adcCfg 2 1`.
+`studio-cli capture` and `debug-cli capture` always stage `adc.bin`, the exact `radar.cfg`, and versioned `capture.json`, then publish the capture-session v1 directory through the same no-overwrite transaction. Capture requires a finite, mmwcore-representable xWR68xx CFG with `adcCfg 2 1`; there is no bare-file output mode.
 
 The output parent is a cooperative namespace. These guarantees cover runtime atomic visibility and no-overwrite publication; they do not claim power-loss durability or protection from a same-user process mutating the staging directory.
 
