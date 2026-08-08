@@ -29,7 +29,6 @@ const (
 	xwr68xxPartNumberShift     = 18
 	xwr68xxPartNumberMask      = uint32(0xff)
 	iwr68xxES2PartNumber       = uint8(0xe2)
-	awr68xxPartNumber          = uint8(0x51)
 )
 
 type enhancedCOMBackend struct {
@@ -204,17 +203,16 @@ func gateXWR6843Part(ctx context.Context, client *enhancedCOMClient) (uint8, err
 	partNumber := uint8((efuseRow10 >> xwr68xxPartNumberShift) & xwr68xxPartNumberMask)
 	if !supportedXWR6843Part(partNumber) {
 		return 0, fmt.Errorf(
-			"unsupported part number 0x%02X; expected IWR68xx ES2 0x%02X or AWR68xx 0x%02X",
+			"unsupported part number 0x%02X; only validated IWR6843 ES2 part number 0x%02X is supported",
 			partNumber,
 			iwr68xxES2PartNumber,
-			awr68xxPartNumber,
 		)
 	}
 	return partNumber, nil
 }
 
 func supportedXWR6843Part(partNumber uint8) bool {
-	return partNumber == iwr68xxES2PartNumber || partNumber == awr68xxPartNumber
+	return partNumber == iwr68xxES2PartNumber
 }
 
 func (connection *enhancedCOMConnection) close() error {

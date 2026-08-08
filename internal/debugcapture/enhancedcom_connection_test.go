@@ -197,30 +197,42 @@ func TestOpenEnhancedCOMConnectionDoesNotNegotiateAfterInitialIOFailure(t *testi
 }
 
 func TestOpenEnhancedCOMConnectionGatesColdBootPartBeforeBaudWrites(t *testing.T) {
-	requestedProbe := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("x0 ??"), nil}}
-	coldBoot := &fakeEnhancedCOMTransport{reads: [][]byte{
-		[]byte("2\r\n"), nil,
-		[]byte("3400000\r\n"), nil,
-	}}
-	transports := []*fakeEnhancedCOMTransport{requestedProbe, coldBoot}
-	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
-		open: func(string, int, time.Duration) (enhancedCOMTransport, error) {
-			transport := transports[0]
-			transports = transports[1:]
-			return transport, nil
-		},
-		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
-	})
-	if err == nil || !strings.Contains(err.Error(), "unsupported part number 0xD0") {
-		t.Fatalf("error = %v", err)
+	tests := []struct {
+		name      string
+		efuse     string
+		wantError string
+	}{
+		{"AWR68xx", "1440000\r\n", "unsupported part number 0x51; only validated IWR6843 ES2 part number 0xE2 is supported"},
+		{"unvalidated part", "3400000\r\n", "unsupported part number 0xD0; only validated IWR6843 ES2 part number 0xE2 is supported"},
 	}
-	for _, write := range coldBoot.writes {
-		if strings.HasPrefix(string(write), "wr ") {
-			t.Fatalf("unsupported cold-boot target received a register write: %q", write)
-		}
-	}
-	if requestedProbe.closeCalls != 1 || coldBoot.closeCalls != 1 {
-		t.Fatalf("probe/cold close calls = %d/%d, want 1/1", requestedProbe.closeCalls, coldBoot.closeCalls)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestedProbe := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("x0 ??"), nil}}
+			coldBoot := &fakeEnhancedCOMTransport{reads: [][]byte{
+				[]byte("2\r\n"), nil,
+				[]byte(test.efuse), nil,
+			}}
+			transports := []*fakeEnhancedCOMTransport{requestedProbe, coldBoot}
+			_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+				open: func(string, int, time.Duration) (enhancedCOMTransport, error) {
+					transport := transports[0]
+					transports = transports[1:]
+					return transport, nil
+				},
+				wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+			})
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v", err)
+			}
+			for _, write := range coldBoot.writes {
+				if strings.HasPrefix(string(write), "wr ") {
+					t.Fatalf("unsupported cold-boot target received a register write: %q", write)
+				}
+			}
+			if requestedProbe.closeCalls != 1 || coldBoot.closeCalls != 1 {
+				t.Fatalf("probe/cold close calls = %d/%d, want 1/1", requestedProbe.closeCalls, coldBoot.closeCalls)
+			}
+		})
 	}
 }
 
@@ -452,32 +464,44 @@ func TestOpenEnhancedCOMConnectionDoesNotOwnFailedOpen(t *testing.T) {
 }
 
 func TestOpenEnhancedCOMConnectionRejectsUnsupportedPartBeforeRegisterWrites(t *testing.T) {
-	transport := &fakeEnhancedCOMTransport{reads: [][]byte{
-		[]byte("00000002"), nil,
-		[]byte("03400000"), nil,
-	}}
-	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
-		open: func(string, int, time.Duration) (enhancedCOMTransport, error) { return transport, nil },
-		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
-	})
-	if err == nil || !strings.Contains(err.Error(), "unsupported part number 0xD0") {
-		t.Fatalf("error = %v", err)
+	tests := []struct {
+		name      string
+		efuse     string
+		wantError string
+	}{
+		{"AWR68xx", "01440000", "unsupported part number 0x51; only validated IWR6843 ES2 part number 0xE2 is supported"},
+		{"unvalidated part", "03400000", "unsupported part number 0xD0; only validated IWR6843 ES2 part number 0xE2 is supported"},
 	}
-	if transport.closeCalls != 1 {
-		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
-	}
-	for _, write := range transport.writes {
-		if strings.HasPrefix(string(write), "wr ") {
-			t.Fatalf("unsupported part received a register write: %q", write)
-		}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := &fakeEnhancedCOMTransport{reads: [][]byte{
+				[]byte("00000002"), nil,
+				[]byte(test.efuse), nil,
+			}}
+			_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+				open: func(string, int, time.Duration) (enhancedCOMTransport, error) { return transport, nil },
+				wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+			})
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v", err)
+			}
+			if transport.closeCalls != 1 {
+				t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+			}
+			for _, write := range transport.writes {
+				if strings.HasPrefix(string(write), "wr ") {
+					t.Fatalf("unsupported part received a register write: %q", write)
+				}
+			}
+		})
 	}
 }
 
 func TestSupportedXWR6843PartNumbers(t *testing.T) {
-	if !supportedXWR6843Part(iwr68xxES2PartNumber) || !supportedXWR6843Part(awr68xxPartNumber) {
-		t.Fatal("supported xWR6843 part number was rejected")
+	if !supportedXWR6843Part(iwr68xxES2PartNumber) {
+		t.Fatal("validated IWR6843 ES2 part number was rejected")
 	}
-	for _, partNumber := range []uint8{0, 0xe0, 0xd0, 0xe3, 0x53} {
+	for _, partNumber := range []uint8{0, 0x51, 0xd0, 0xe0, 0xe1, 0xe3, 0xe4, 0xf0} {
 		if supportedXWR6843Part(partNumber) {
 			t.Fatalf("unsupported part number 0x%02X was accepted", partNumber)
 		}
