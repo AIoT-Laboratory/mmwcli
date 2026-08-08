@@ -89,7 +89,7 @@ REPL is a `studio_cli` utility, not another firmware backend. It accepts only th
 - Finite captures require exact byte coverage. Gaps, overlaps, short data, and extra data fail.
 - Output is staged as `OUT.part` and published as `OUT` without overwrite only after capture and cleanup succeed. Failure retains `.part`.
 - `studio-cli capture` and `debug-capture capture` accept `--session-dir`, publishing `adc.bin`, `radar.cfg`, and `capture.json` as one no-overwrite directory transaction.
-- Low-level DCA commands are serialized; `ping` is not a capture-readiness gate, and reset occurs only through an explicit command or option.
+- Low-level DCA commands are diagnostic/control operations only; ADC acquisition is available through `studio-cli capture` and `debug-capture capture`. `ping` is not a capture-readiness gate, and reset occurs only through an explicit command or option.
 - `sensorStop` stops the sensor only; it does not power off the radar or DCA1000.
 
 See the [architecture](docs/architecture.md), [hardware smoke test](docs/hardware-smoke-test.md), and [TI reference map](docs/ti-reference-map.md).

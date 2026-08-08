@@ -82,7 +82,7 @@ func captureInvocationHasCleanup(arguments []string) bool {
 		return false
 	}
 	switch strings.ToLower(arguments[0]) {
-	case "studio-cli", "dca", "debug-capture":
+	case "studio-cli", "debug-capture":
 		return true
 	default:
 		return false
@@ -265,7 +265,7 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "  mmwcli debug-capture capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
 	fmt.Fprintln(writer, "  mmwcli repl --port PORT [options]")
 	fmt.Fprintln(writer, "  mmwcli studio-cli check|version|apply|start|stop|capture ...")
-	fmt.Fprintln(writer, "  mmwcli dca ping|version|configure|start|stop|reset-fpga|reset-radar|capture ...")
+	fmt.Fprintln(writer, "  mmwcli dca ping|version|configure|start|stop|reset-fpga|reset-radar ...")
 	fmt.Fprintln(writer)
 	fmt.Fprintln(writer, "Use an explicit serial port such as COM3 or /dev/ttyACM0; mmwcli never probes ports.")
 }
@@ -282,7 +282,6 @@ func printRadarHelp(writer io.Writer, command string) {
 func printDCAHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "usage: mmwcli dca ping|version|start|stop|reset-fpga|reset-radar [options]")
 	fmt.Fprintln(writer, "       mmwcli dca configure [configuration options]")
-	fmt.Fprintln(writer, "       mmwcli dca capture OUT [configuration and receiver options]")
 }
 
 func printFirmwareHelp(writer io.Writer) {

@@ -75,7 +75,7 @@ The text and debug transports implement this lifecycle without being opened or m
 
 ## DCA1000 reception
 
-Capture does not automatically run SystemAlive/`ping` or reset the FPGA. Low-level DCA commands are serialized, and reset occurs only through an explicit command or option.
+Capture does not automatically run SystemAlive/`ping` or reset the FPGA. Low-level DCA commands are serialized diagnostic/control operations, not an independent ADC acquisition route. Reset occurs only through an explicit command or option.
 
 Control responses must be exactly eight bytes with the expected header, trailer, and command code. For TI CLI compatibility, mmwcli accepts matching responses from any IPv4 source address; the DCA control protocol does not authenticate the sender. Data packets remain restricted to the configured DCA address.
 

@@ -121,22 +121,17 @@ func TestDCAInvalidAddressFailsBeforeDial(t *testing.T) {
 	}
 }
 
-func TestIndependentCaptureRaisesRawTailGuardBeforeHardware(t *testing.T) {
-	output := filepath.Join(t.TempDir(), "already-exists.bin")
-	if err := os.WriteFile(output, []byte("keep"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+func TestDCAStandaloneCaptureIsRemoved(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "capture.bin")
 	var stdout, stderr bytes.Buffer
-	arguments := []string{"dca", "capture", output, "--idle-ms", "100"}
-	if code := Run(arguments, &stdout, &stderr); code != 4 {
+	if code := Run([]string{"dca", "capture", output}, &stdout, &stderr); code != 2 {
 		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "raised from 100ms to 2.5s") {
-		t.Fatalf("missing raw tail guard adjustment: %s", stdout.String())
+	if !strings.Contains(stderr.String(), "unknown dca command: capture") {
+		t.Fatalf("missing removed-command error: %s", stderr.String())
 	}
-	data, err := os.ReadFile(output)
-	if err != nil || string(data) != "keep" {
-		t.Fatalf("existing output changed: %q, %v", data, err)
+	for _, path := range []string{output, output + ".part"} {
+		assertPathDoesNotExist(t, path)
 	}
 }
 
@@ -145,14 +140,6 @@ func TestCaptureRejectsUnsupportedDCAFPGAConfigurationBeforeOutputOrHardware(t *
 		name      string
 		arguments []string
 	}{
-		{
-			name:      "independent multi mode",
-			arguments: []string{"dca", "capture", "OUTPUT", "--log-mode", "2"},
-		},
-		{
-			name:      "independent nondefault timer",
-			arguments: []string{"dca", "capture", "OUTPUT", "--timer", "31"},
-		},
 		{
 			name: "integrated SD mode",
 			arguments: []string{
@@ -196,7 +183,6 @@ func TestCommandHelpDoesNotRequirePositionalsOrHardware(t *testing.T) {
 		{"studio-cli", "apply", "--help"},
 		{"studio-cli", "capture", "--help"},
 		{"dca", "--help"},
-		{"dca", "capture", "--help"},
 		{"firmware", "--help"},
 		{"debug-capture", "--help"},
 		{"debug-capture", "check", "--help"},
@@ -229,7 +215,6 @@ func TestCaptureSessionDirectoryFlagScope(t *testing.T) {
 	}{
 		{arguments: []string{"studio-cli", "capture", "--help"}, want: true},
 		{arguments: []string{"debug-capture", "capture", "--help"}, want: true},
-		{arguments: []string{"dca", "capture", "--help"}, want: false},
 		{arguments: []string{"studio-cli", "check", "--help"}, want: false},
 	} {
 		t.Run(strings.Join(test.arguments, " "), func(t *testing.T) {
@@ -243,14 +228,6 @@ func TestCaptureSessionDirectoryFlagScope(t *testing.T) {
 			}
 		})
 	}
-
-	output := filepath.Join(t.TempDir(), "capture")
-	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"dca", "capture", output, "--session-dir"}, &stdout, &stderr); code != 2 {
-		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-	assertPathDoesNotExist(t, output)
-	assertPathDoesNotExist(t, output+".part")
 }
 
 func TestStudioCaptureSessionContractPrecedesOutput(t *testing.T) {
@@ -618,7 +595,6 @@ func TestREPLCancellationClassification(t *testing.T) {
 func TestOnlyCaptureInvocationsClaimCancellationCleanup(t *testing.T) {
 	for _, arguments := range [][]string{
 		{"studio-cli", "CAPTURE"},
-		{"dca", "capture"},
 	} {
 		if !captureInvocationHasCleanup(arguments) {
 			t.Fatalf("capture invocation was not cleanup eligible: %v", arguments)
@@ -627,6 +603,7 @@ func TestOnlyCaptureInvocationsClaimCancellationCleanup(t *testing.T) {
 	for _, arguments := range [][]string{
 		{"studio-cli", "start"},
 		{"demo", "capture"},
+		{"dca", "capture"},
 		{"dca", "stop"},
 		{"dca", "version"},
 		{"firmware", "verify"},

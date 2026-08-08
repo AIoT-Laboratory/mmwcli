@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,9 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"mmwcli/internal/capturefile"
 	"mmwcli/internal/dca"
-	"mmwcli/internal/session"
 )
 
 type dcaCommandOptions struct {
@@ -44,9 +41,9 @@ const (
 	dcaReceiverFlags
 )
 
-func runDCA(arguments []string, stdout, stderr io.Writer) (resultErr error) {
+func runDCA(arguments []string, stdout, stderr io.Writer) error {
 	if len(arguments) == 0 {
-		return usageError{message: "dca requires ping, version, configure, start, stop, reset-fpga, reset-radar, or capture"}
+		return usageError{message: "dca requires ping, version, configure, start, stop, reset-fpga, or reset-radar"}
 	}
 	if isHelp(arguments[0]) {
 		printDCAHelp(stdout)
@@ -55,7 +52,7 @@ func runDCA(arguments []string, stdout, stderr io.Writer) (resultErr error) {
 	action := strings.ToLower(arguments[0])
 	known := map[string]bool{
 		"ping": true, "version": true, "configure": true, "start": true, "stop": true,
-		"reset-fpga": true, "reset-radar": true, "capture": true,
+		"reset-fpga": true, "reset-radar": true,
 	}
 	if !known[action] {
 		return usageError{message: "unknown dca command: " + arguments[0]}
@@ -64,68 +61,17 @@ func runDCA(arguments []string, stdout, stderr io.Writer) (resultErr error) {
 	scope := dcaFlagScope(0)
 	if action == "configure" {
 		scope = dcaConfigurationFlags
-	} else if action == "capture" {
-		scope = dcaConfigurationFlags | dcaReceiverFlags
 	}
 
-	var outputPath string
-	rest := arguments[1:]
-	if action == "capture" {
-		if len(rest) != 0 && isHelp(rest[0]) {
-			_, err := parseDCAOptions("dca "+action, rest, stderr, scope)
-			return err
-		}
-		if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
-			return usageError{message: "dca capture requires an output file"}
-		}
-		outputPath = rest[0]
-		rest = rest[1:]
-	}
-
-	options, err := parseDCAOptions("dca "+action, rest, stderr, scope)
+	options, err := parseDCAOptions("dca "+action, arguments[1:], stderr, scope)
 	if err != nil {
 		return err
-	}
-	if action == "capture" {
-		if err := requireRawCaptureFPGAConfig(options.fpga); err != nil {
-			return err
-		}
-		if options.receiver.IdleTimeout < dca.RawModeTailFlushGuard {
-			fmt.Fprintf(
-				stdout,
-				"[capture] idle timeout raised from %s to %s for the DCA1000 raw tail flush\n",
-				options.receiver.IdleTimeout,
-				dca.RawModeTailFlushGuard,
-			)
-			options.receiver.IdleTimeout = dca.RawModeTailFlushGuard
-		}
-	}
-	var captureOutput *capturefile.File
-	if action == "capture" {
-		captureOutput, err = capturefile.Create(outputPath)
-		if err != nil {
-			return err
-		}
 	}
 	client, err := dca.Dial(options.control)
 	if err != nil {
-		if captureOutput != nil {
-			return errors.Join(err, captureOutput.Close())
-		}
 		return err
 	}
-	if action == "capture" {
-		defer func() {
-			resultErr = closeCaptureClient(
-				resultErr,
-				captureOutput.Committed(),
-				"DCA1000 control client",
-				client,
-			)
-		}()
-	} else {
-		defer client.Close()
-	}
+	defer client.Close()
 
 	ctx, stopSignal := hardwareSignalContext()
 	defer stopSignal()
@@ -187,8 +133,6 @@ func runDCA(arguments []string, stdout, stderr io.Writer) (resultErr error) {
 		}
 		fmt.Fprintln(stdout, "DCA1000 configure: OK")
 		return nil
-	case "capture":
-		return captureDCA(ctx, captureOutput, client, options, stdout)
 	default:
 		panic("unreachable DCA action")
 	}
@@ -196,9 +140,6 @@ func runDCA(arguments []string, stdout, stderr io.Writer) (resultErr error) {
 
 func parseDCAOptions(name string, arguments []string, stderr io.Writer, scope dcaFlagScope) (dcaCommandOptions, error) {
 	synopsis := "mmwcli " + name + " [options]"
-	if name == "dca capture" {
-		synopsis = "mmwcli dca capture OUT [options]"
-	}
 	flags := newCommandFlagSet(name, stderr, synopsis)
 	values := addDCAFlags(flags, "timeout-ms", scope)
 	if err := parseCommandFlags(flags, arguments); err != nil {
@@ -319,95 +260,6 @@ func requireRawCaptureFPGAConfig(config dca.FPGAConfig) error {
 	return nil
 }
 
-func captureDCA(ctx context.Context, output *capturefile.File, client *dca.Client, options dcaCommandOptions, stdout io.Writer) (resultErr error) {
-	defer func() {
-		if closeErr := output.Close(); closeErr != nil {
-			resultErr = errors.Join(resultErr, &session.CleanupError{Err: closeErr})
-		}
-	}()
-	// Establish a known non-recording state before reconfiguration. This is a
-	// single explicit StopRecord, not a SystemAlive/Ping readiness gate.
-	stopResponse, err := client.StopRecord(ctx)
-	if err != nil {
-		return fmt.Errorf("establish stopped DCA state: %w", err)
-	}
-	if err := requireDCAStatus(stopResponse); err != nil {
-		return err
-	}
-	if err := configureDCA(ctx, client, options); err != nil {
-		return err
-	}
-	receiver, err := dca.NewReceiver(options.receiver)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := receiver.Close(); closeErr != nil {
-			resultErr = errors.Join(resultErr, &session.CleanupError{Err: closeErr})
-		}
-	}()
-	if err := receiver.Start(ctx, output); err != nil {
-		return err
-	}
-	recording := false
-	defer func() {
-		if !recording {
-			return
-		}
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), options.control.Timeout)
-		response, cleanupErr := client.StopRecord(cleanupCtx)
-		cancel()
-		if cleanupErr == nil {
-			cleanupErr = requireDCAStatus(response)
-		}
-		if cleanupErr != nil {
-			resultErr = errors.Join(resultErr, &session.CleanupError{Err: cleanupErr})
-		}
-	}()
-	if _, err := client.StartRecordConvergent(ctx); err != nil {
-		return err
-	}
-	recording = true
-	if err := validateDCAAsyncStatuses(client.TakeAsyncStatuses()); err != nil {
-		return err
-	}
-	fmt.Fprintln(stdout, "DCA1000 armed; waiting for radar data (Ctrl+C stops and keeps .part on cancellation)")
-	stats, receiveErr := receiver.Wait(ctx)
-
-	recording = false // The following StopRecord is the one allowed attempt.
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), options.control.Timeout)
-	stopResponse, stopErr := client.StopRecord(cleanupCtx)
-	cancel()
-	if stopErr == nil {
-		stopErr = requireDCAStatus(stopResponse)
-	}
-	var controlDrainErr error
-	if stopErr == nil {
-		drainContext, drainCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		statuses, err := client.DrainAsyncStatuses(drainContext, 50*time.Millisecond)
-		drainCancel()
-		controlDrainErr = errors.Join(err, validateDCAAsyncStatuses(statuses))
-	}
-	cleanupErr := errors.Join(stopErr, controlDrainErr)
-	if cancellationErr := ctx.Err(); cancellationErr != nil {
-		receiveErr = errors.Join(receiveErr, cancellationErr)
-	}
-	if receiveErr != nil || cleanupErr != nil {
-		if cleanupErr != nil {
-			return errors.Join(receiveErr, &session.CleanupError{Err: cleanupErr})
-		}
-		return receiveErr
-	}
-	if err := validateCaptureStats(stats); err != nil {
-		return err
-	}
-	if err := output.CommitContext(ctx); err != nil {
-		return err
-	}
-	fmt.Fprintln(stdout, formatCaptureStats(stats))
-	return nil
-}
-
 func requireDCAStatus(response dca.Response) error {
 	if response.Status != 0 {
 		return &dca.StatusError{Command: response.Command, Status: response.Status}
@@ -421,22 +273,6 @@ func parseIPv4(option, value string) (net.IP, error) {
 		return nil, usageError{message: option + " must be an IPv4 address: " + value}
 	}
 	return address.To4(), nil
-}
-
-func validateCaptureStats(stats dca.CaptureStats) error {
-	if stats.PacketsReceived == 0 {
-		return errors.New("DCA1000 capture received no data packets")
-	}
-	if stats.MissingBytes != 0 || stats.DiscardedBeforeBasePackets != 0 {
-		return fmt.Errorf("DCA1000 capture is incomplete: missingBytes=%d discardedBeforeBase=%d", stats.MissingBytes, stats.DiscardedBeforeBasePackets)
-	}
-	if stats.MalformedPackets != 0 {
-		return fmt.Errorf("DCA1000 capture received %d malformed packet(s) from the configured device", stats.MalformedPackets)
-	}
-	if stats.OverlappingPackets != 0 {
-		return fmt.Errorf("DCA1000 capture received %d overlapping packet(s)", stats.OverlappingPackets)
-	}
-	return nil
 }
 
 func validateDCAAsyncStatuses(statuses []dca.Response) error {
