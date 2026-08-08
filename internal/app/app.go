@@ -43,6 +43,8 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 		err = runDebugCapture(arguments[1:], stdout, stderr)
 	case "multisensor":
 		err = runMultisensor(arguments[1:], stdout, stderr)
+	case "sensor-producer":
+		err = runSensorProducer(arguments[1:], os.Stdin, stdout, stderr)
 	case "repl":
 		err = runREPL(arguments[1:], os.Stdin, stdout, stderr, openStudioREPLClient)
 	case "studio-cli":
@@ -271,6 +273,7 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "  mmwcli debug-cli native-check")
 	fmt.Fprintln(writer, "  mmwcli debug-cli capture CFG OUTDIR --family FAMILY --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
 	fmt.Fprintln(writer, "  mmwcli multisensor check PLAN")
+	fmt.Fprintln(writer, "  mmwcli sensor-producer fixed-frames --plan PLAN --source SOURCE --frame-bytes N -- CAMERA_COMMAND [ARG...]")
 	fmt.Fprintln(writer, "  mmwcli repl --port PORT [options]")
 	fmt.Fprintln(writer, "  mmwcli studio-cli check|version|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli dca ping|version|configure|start|stop|reset-fpga|reset-radar ...")
