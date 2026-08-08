@@ -44,10 +44,64 @@ const (
 	xwr6843FrequencyScale = 2.7
 	xwr6843StartMinimum   = uint64(0x5471c71c)
 	xwr6843StartMaximum   = uint64(0x5ed097b4)
+	xwr1xxxFrequencyScale = 3.6
+	xwr1xxxStartMinimum   = uint64(0x5471c71b)
+	xwr1xxxStartMaximum   = uint64(0x5a000000)
 )
 
-// Plan is an immutable, offline translation of a validated studio_cli capture
-// plan into the mmWaveLink operations required by xWR6843 debug capture.
+type debugRFEncodingContract struct {
+	label                    string
+	frequencyScale           float64
+	startMinimum             uint64
+	startMaximum             uint64
+	slopeMaximum             int64
+	requireEven              bool
+	powerBackoffMaximum      byte
+	rxGainMinimum            uint64
+	rxGainMaximum            uint64
+	reservedRFGainTarget     uint64
+	sampleRateMaximum        uint64
+	complex1XSampleRateLimit uint16
+}
+
+func (policy debugRFEncodingPolicy) contract() (debugRFEncodingContract, error) {
+	switch policy {
+	case debugRFEncodingIWR6843ES2:
+		return debugRFEncodingContract{
+			label:                    "xWR6843",
+			frequencyScale:           xwr6843FrequencyScale,
+			startMinimum:             xwr6843StartMinimum,
+			startMaximum:             xwr6843StartMaximum,
+			slopeMaximum:             6905,
+			requireEven:              true,
+			powerBackoffMaximum:      26,
+			rxGainMinimum:            30,
+			rxGainMaximum:            48,
+			reservedRFGainTarget:     3,
+			sampleRateMaximum:        25000,
+			complex1XSampleRateLimit: 12500,
+		}, nil
+	case debugRFEncodingXWR1XXX77GHz:
+		return debugRFEncodingContract{
+			label:                    "xWR1xxx",
+			frequencyScale:           xwr1xxxFrequencyScale,
+			startMinimum:             xwr1xxxStartMinimum,
+			startMaximum:             xwr1xxxStartMaximum,
+			slopeMaximum:             2072,
+			powerBackoffMaximum:      20,
+			rxGainMinimum:            24,
+			rxGainMaximum:            52,
+			reservedRFGainTarget:     2,
+			sampleRateMaximum:        37500,
+			complex1XSampleRateLimit: 18750,
+		}, nil
+	default:
+		return debugRFEncodingContract{}, fmt.Errorf("unsupported debug-cli RF encoding policy %d", policy)
+	}
+}
+
+// Plan is an immutable, offline translation of a validated legacy capture
+// plan into the mmWaveLink operations required by one explicit debug family.
 // Its contents are intentionally opaque outside this package.
 type Plan struct {
 	source     radar.CapturePlan
@@ -121,13 +175,23 @@ func BuildPlan(source radar.CapturePlan) (Plan, error) {
 	return buildPlanForFamily(debugFamilyIWR6843ES2, source)
 }
 
+// BuildPlanForFamily performs the complete CFG-to-wire preflight for one
+// explicit closed family without opening a hardware transport.
+func BuildPlanForFamily(device radar.DeviceFamily, source radar.CapturePlan) (Plan, error) {
+	family, err := debugFamilyContractForDevice(device)
+	if err != nil {
+		return Plan{}, err
+	}
+	return buildPlanForFamily(family.id, source)
+}
+
 func buildPlanForFamily(familyID debugFamilyID, source radar.CapturePlan) (Plan, error) {
 	family, err := debugFamilyContractForID(familyID)
 	if err != nil {
 		return Plan{}, err
 	}
-	if family.rfPolicy != debugRFEncodingIWR6843ES2 {
-		return Plan{}, fmt.Errorf("unsupported debug-cli RF encoding policy %d", family.rfPolicy)
+	if _, err := family.rfPolicy.contract(); err != nil {
+		return Plan{}, err
 	}
 	snapshot := cloneRadarCapturePlan(source)
 	if snapshot.Dialect != radar.StudioCLI {
@@ -136,7 +200,7 @@ func buildPlanForFamily(familyID debugFamilyID, source radar.CapturePlan) (Plan,
 	if snapshot.Mode != radar.FullConfiguration {
 		return Plan{}, errors.New("debug capture requires a full radar configuration")
 	}
-	if err := validateRadarCapturePlan(snapshot); err != nil {
+	if err := validateRadarCapturePlan(snapshot, family); err != nil {
 		return Plan{}, err
 	}
 
@@ -155,12 +219,16 @@ func buildPlanForFamily(familyID debugFamilyID, source radar.CapturePlan) (Plan,
 	}, nil
 }
 
-func validateRadarCapturePlan(source radar.CapturePlan) error {
+func validateRadarCapturePlan(source radar.CapturePlan, family debugFamilyContract) error {
 	commands := append([]string(nil), source.ConfigurationCommands...)
 	if source.DeclaredStartCommand != "" {
 		commands = append(commands, source.DeclaredStartCommand)
 	}
-	rebuilt, err := radar.BuildCapturePlan(source.Dialect, commands, source.Mode)
+	device, err := family.deviceFamily()
+	if err != nil {
+		return err
+	}
+	rebuilt, err := radar.BuildCapturePlanForFamily(device, commands)
 	if err != nil {
 		return fmt.Errorf("invalid debug-cli source plan: %w", err)
 	}
@@ -237,6 +305,10 @@ func parseMMWaveLinkConfiguration(
 	family debugFamilyContract,
 ) (mmWaveLinkConfiguration, error) {
 	var result mmWaveLinkConfiguration
+	encoding, err := family.rfPolicy.contract()
+	if err != nil {
+		return result, err
+	}
 	counts := make(map[string]int)
 	for _, command := range commands {
 		fields := strings.Fields(command)
@@ -278,20 +350,20 @@ func parseMMWaveLinkConfiguration(
 			result.iqSwap, result.interleave = iqSwap, interleave
 		case "profileCfg":
 			counts[name]++
-			profile, err := parseMMWaveLinkProfile(fields, command)
+			profile, err := parseMMWaveLinkProfile(fields, command, family, encoding)
 			if err != nil {
 				return result, err
 			}
 			result.profile = profile
 		case "chirpCfg":
-			chirp, err := parseMMWaveLinkChirp(fields, command, family)
+			chirp, err := parseMMWaveLinkChirp(fields, command, family, encoding)
 			if err != nil {
 				return result, err
 			}
 			result.chirps = append(result.chirps, chirp)
 		case "frameCfg":
 			counts[name]++
-			frame, err := parseMMWaveLinkFrame(fields, command)
+			frame, err := parseMMWaveLinkFrame(fields, command, family)
 			if err != nil {
 				return result, err
 			}
@@ -330,9 +402,11 @@ func parseMMWaveLinkConfiguration(
 	if len(result.chirps) < 1 || len(result.chirps) > 5 {
 		return result, fmt.Errorf("debug capture requires 1..5 chirpCfg commands, got %d", len(result.chirps))
 	}
-	if result.adcFormat == 1 && result.profile.sampleRate > 12500 {
+	if result.adcFormat == 1 && result.profile.sampleRate > encoding.complex1XSampleRateLimit {
 		return result, fmt.Errorf(
-			"xWR6843 regular complex1x ADC sample rate must be in 2000..12500 ksps, got %d",
+			"%s regular complex1x ADC sample rate must be in 2000..%d ksps, got %d",
+			family.platform,
+			encoding.complex1XSampleRateLimit,
 			result.profile.sampleRate,
 		)
 	}
@@ -443,7 +517,12 @@ func parseMMWaveLinkADCBuf(fields []string, command string) (uint8, uint8, error
 	return 1, 1, nil
 }
 
-func parseMMWaveLinkProfile(fields []string, command string) (mmWaveLinkProfileConfiguration, error) {
+func parseMMWaveLinkProfile(
+	fields []string,
+	command string,
+	family debugFamilyContract,
+	encoding debugRFEncodingContract,
+) (mmWaveLinkProfileConfiguration, error) {
 	var result mmWaveLinkProfileConfiguration
 	if len(fields) != 15 {
 		return result, fmt.Errorf("profileCfg must contain fourteen arguments: %s", command)
@@ -453,15 +532,15 @@ func parseMMWaveLinkProfile(fields []string, command string) (mmWaveLinkProfileC
 		return result, invalidOrRange(err, "profileCfg profile ID", "0", command)
 	}
 
-	start, err := parseScaledUnsigned(fields[2], float64(uint64(1)<<26)/xwr6843FrequencyScale, math.MaxUint32, false, "profileCfg start frequency")
+	start, err := parseScaledUnsigned(fields[2], float64(uint64(1)<<26)/encoding.frequencyScale, math.MaxUint32, false, "profileCfg start frequency")
 	if err != nil {
 		return result, err
 	}
-	if start < xwr6843StartMinimum || start > xwr6843StartMaximum {
-		return result, fmt.Errorf("xWR6843 profileCfg converted start frequency %#x is outside %#x..%#x", start, xwr6843StartMinimum, xwr6843StartMaximum)
+	if start < encoding.startMinimum || start > encoding.startMaximum {
+		return result, fmt.Errorf("%s profileCfg converted start frequency %#x is outside %#x..%#x", encoding.label, start, encoding.startMinimum, encoding.startMaximum)
 	}
-	if start&1 != 0 {
-		return result, fmt.Errorf("xWR6843 profileCfg converted start frequency %#x must be even", start)
+	if encoding.requireEven && start&1 != 0 {
+		return result, fmt.Errorf("%s profileCfg converted start frequency %#x must be even", encoding.label, start)
 	}
 	result.startFrequency = uint32(start)
 
@@ -479,8 +558,15 @@ func parseMMWaveLinkProfile(fields []string, command string) (mmWaveLinkProfileC
 	if err != nil {
 		return result, err
 	}
-	if powerBackoff>>24 != 0 || byte(powerBackoff) > 26 || byte(powerBackoff>>8) > 26 || byte(powerBackoff>>16) > 26 {
-		return result, fmt.Errorf("profileCfg TX power backoff %#x has reserved bits or a per-TX code above 26", powerBackoff)
+	if powerBackoff>>24 != 0 ||
+		byte(powerBackoff) > encoding.powerBackoffMaximum ||
+		byte(powerBackoff>>8) > encoding.powerBackoffMaximum ||
+		byte(powerBackoff>>16) > encoding.powerBackoffMaximum {
+		return result, fmt.Errorf(
+			"profileCfg TX power backoff %#x has reserved bits or a per-TX code above %d",
+			powerBackoff,
+			encoding.powerBackoffMaximum,
+		)
 	}
 	result.powerBackoff = uint32(powerBackoff)
 
@@ -495,17 +581,17 @@ func parseMMWaveLinkProfile(fields []string, command string) (mmWaveLinkProfileC
 
 	slope, err := parseScaledSigned(
 		fields[8],
-		float64(uint64(1)<<26)/(xwr6843FrequencyScale*1000*900),
+		float64(uint64(1)<<26)/(encoding.frequencyScale*1000*900),
 		0,
-		6905,
+		encoding.slopeMaximum,
 		false,
 		"profileCfg frequency slope",
 	)
 	if err != nil {
 		return result, err
 	}
-	if slope&1 != 0 {
-		return result, fmt.Errorf("xWR6843 profileCfg converted frequency slope %d must be even", slope)
+	if encoding.requireEven && slope&1 != 0 {
+		return result, fmt.Errorf("%s profileCfg converted frequency slope %d must be even", encoding.label, slope)
 	}
 	result.frequencySlope = int16(slope)
 
@@ -524,9 +610,14 @@ func parseMMWaveLinkProfile(fields []string, command string) (mmWaveLinkProfileC
 	}
 	result.samples = uint16(samples)
 
-	rate, err := parseUnsigned(fields[11], 25000, "profileCfg ADC sample rate")
+	rate, err := parseUnsigned(fields[11], encoding.sampleRateMaximum, "profileCfg ADC sample rate")
 	if err != nil || rate < 2000 {
-		return result, invalidOrRange(err, "profileCfg ADC sample rate", "2000..25000", command)
+		return result, invalidOrRange(
+			err,
+			"profileCfg ADC sample rate",
+			fmt.Sprintf("2000..%d", encoding.sampleRateMaximum),
+			command,
+		)
 	}
 	result.sampleRate = uint16(rate)
 
@@ -546,8 +637,9 @@ func parseMMWaveLinkProfile(fields []string, command string) (mmWaveLinkProfileC
 	}
 	baseGain := rxGain & 0x3f
 	rfTarget := (rxGain >> 6) & 0x03
-	if rxGain>>8 != 0 || baseGain < 30 || baseGain > 48 || baseGain&1 != 0 || rfTarget == 3 {
-		return result, fmt.Errorf("profileCfg RX gain %#x is invalid for xWR6843 ES2", rxGain)
+	if rxGain>>8 != 0 || baseGain < encoding.rxGainMinimum || baseGain > encoding.rxGainMaximum ||
+		baseGain&1 != 0 || rfTarget == encoding.reservedRFGainTarget {
+		return result, fmt.Errorf("profileCfg RX gain %#x is invalid for %s", rxGain, family.identity)
 	}
 	result.rxGain = uint16(rxGain)
 	return result, nil
@@ -579,6 +671,7 @@ func parseMMWaveLinkChirp(
 	fields []string,
 	command string,
 	family debugFamilyContract,
+	encoding debugRFEncodingContract,
 ) (mmWaveLinkChirpConfiguration, error) {
 	var result mmWaveLinkChirpConfiguration
 	if len(fields) != 9 {
@@ -602,28 +695,28 @@ func parseMMWaveLinkChirp(
 	startVariation, err := parseFloat32ProductUnsigned(
 		fields[4],
 		float32(uint64(1)<<26),
-		xwr6843FrequencyScale*1e9,
+		encoding.frequencyScale*1e9,
 		8388607,
 		"chirpCfg start frequency variation",
 	)
 	if err != nil {
 		return result, err
 	}
-	if startVariation&1 != 0 {
-		return result, fmt.Errorf("xWR6843 chirpCfg converted start frequency variation %d must be even", startVariation)
+	if encoding.requireEven && startVariation&1 != 0 {
+		return result, fmt.Errorf("%s chirpCfg converted start frequency variation %d must be even", encoding.label, startVariation)
 	}
 	slopeVariation, err := parseFloat32ProductUnsigned(
 		fields[5],
 		float32(uint64(1)<<26),
-		xwr6843FrequencyScale*1e6*900,
+		encoding.frequencyScale*1e6*900,
 		63,
 		"chirpCfg slope variation",
 	)
 	if err != nil {
 		return result, err
 	}
-	if slopeVariation&1 != 0 {
-		return result, fmt.Errorf("xWR6843 chirpCfg converted slope variation %d must be even", slopeVariation)
+	if encoding.requireEven && slopeVariation&1 != 0 {
+		return result, fmt.Errorf("%s chirpCfg converted slope variation %d must be even", encoding.label, slopeVariation)
 	}
 	idle, err := parseScaledUnsigned(fields[6], 100, 4096, true, "chirpCfg idle variation")
 	if err != nil {
@@ -650,7 +743,11 @@ func parseMMWaveLinkChirp(
 	return result, nil
 }
 
-func parseMMWaveLinkFrame(fields []string, command string) (mmWaveLinkFrameConfiguration, error) {
+func parseMMWaveLinkFrame(
+	fields []string,
+	command string,
+	family debugFamilyContract,
+) (mmWaveLinkFrameConfiguration, error) {
 	var result mmWaveLinkFrameConfiguration
 	if len(fields) != 8 {
 		return result, fmt.Errorf("frameCfg must contain seven arguments: %s", command)
@@ -679,7 +776,7 @@ func parseMMWaveLinkFrame(fields []string, command string) (mmWaveLinkFrameConfi
 		return result, err
 	}
 	if period < 60000 || period > 268400000 {
-		return result, fmt.Errorf("xWR6843 frameCfg converted period %d is outside 60000..268400000", period)
+		return result, fmt.Errorf("%s frameCfg converted period %d is outside 60000..268400000", family.platform, period)
 	}
 	trigger, err := parseUnsigned(fields[6], 1, "frameCfg trigger")
 	if err != nil || trigger != 1 {

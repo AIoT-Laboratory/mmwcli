@@ -272,14 +272,30 @@ type firmwareSubmissionPlans struct {
 }
 
 func preflightFirmwareSubmission(assets Assets) (firmwareSubmissionPlans, error) {
+	family, err := debugFamilyContractForID(assets.family)
+	if err != nil {
+		return firmwareSubmissionPlans{}, fmt.Errorf("invalid debug-cli firmware family: %w", err)
+	}
 	if len(assets.BSS.image.sections) == 0 {
 		return firmwareSubmissionPlans{}, errors.New("debug-cli BSS firmware has no RPRC sections")
 	}
-	if assets.BSS.image.sections[0].address != 0 {
-		return firmwareSubmissionPlans{}, fmt.Errorf(
-			"debug-cli BSS firmware uses unsupported patch entry 0x%X; xWR6843 ROM image entry must be zero",
-			assets.BSS.image.sections[0].address,
-		)
+	switch family.imagePolicy {
+	case debugFirmwareImageIWR6843RPRC:
+		if assets.BSS.image.sections[0].address != 0 {
+			return firmwareSubmissionPlans{}, fmt.Errorf(
+				"debug-cli BSS firmware uses unsupported patch entry 0x%X; xWR6843 ROM image entry must be zero",
+				assets.BSS.image.sections[0].address,
+			)
+		}
+	case debugFirmwareImageLegacyPatchRPRC:
+		if assets.BSS.image.entryPoints[0] == 0 || assets.BSS.image.sections[0].address == 0 {
+			return firmwareSubmissionPlans{}, fmt.Errorf(
+				"debug-cli %s BSS firmware must be a legacy patch RPRC with nonzero entry point and first section",
+				family.platform,
+			)
+		}
+	default:
+		return firmwareSubmissionPlans{}, fmt.Errorf("unsupported debug-cli firmware image policy %d", family.imagePolicy)
 	}
 	bss, err := preflightFirmwareFile(assets.BSS, "BSS", rprcTargetBSS)
 	if err != nil {

@@ -78,7 +78,7 @@ func bootstrapMMWaveLinkForFamily(
 	if err != nil {
 		return mmWaveLinkDeviceDiagnostics{}, err
 	}
-	if family.bootPolicy != debugBootXWR68xxRFEval {
+	if family.bootPolicy != debugBootXWR68xxRFEval && family.bootPolicy != debugBootWarmRFEval {
 		return mmWaveLinkDeviceDiagnostics{}, fmt.Errorf("unsupported debug-cli boot policy %d", family.bootPolicy)
 	}
 	return bootstrapMMWaveLinkForContract(ctx, client, family)
@@ -113,6 +113,7 @@ func bootstrapMMWaveLinkForContract(
 		rhcpDirectionHostToMSS,
 		mmWaveLinkDeviceStatusGetMessageID,
 		family.runtime.mss,
+		family.runtime.policy,
 	)
 	if err != nil {
 		return diagnostics, err
@@ -158,6 +159,7 @@ func bootstrapMMWaveLinkForContract(
 		rhcpDirectionHostToBSS,
 		mmWaveLinkRFStatusGetMessageID,
 		family.runtime.rf,
+		family.runtime.policy,
 	)
 	if err != nil {
 		return diagnostics, err
@@ -187,6 +189,7 @@ func queryMMWaveLinkVersion(
 	direction rhcpDirection,
 	messageID uint16,
 	expected mmWaveLinkFirmwareRelease,
+	policy debugRuntimePolicy,
 ) (mmWaveLinkFirmwareVersion, error) {
 	var version mmWaveLinkFirmwareVersion
 	response, err := client.execute(ctx, mmWaveLinkCommand{
@@ -209,15 +212,22 @@ func queryMMWaveLinkVersion(
 		return version, fmt.Errorf("decode %s version: %w", component, err)
 	}
 	actual := version.release()
-	if actual != expected {
+	switch policy {
+	case debugRuntimeExact:
+		if actual == expected {
+			return version, nil
+		}
 		return version, fmt.Errorf(
 			"unsupported %s firmware %s; expected %s",
 			component,
 			actual,
 			expected,
 		)
+	case debugRuntimeDiagnostic:
+		return version, nil
+	default:
+		return version, fmt.Errorf("unsupported debug-cli runtime policy %d", policy)
 	}
-	return version, nil
 }
 
 func decodeMMWaveLinkFirmwareVersion(data []byte) (mmWaveLinkFirmwareVersion, error) {

@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"mmwcli/internal/radar"
 )
 
 const (
@@ -19,6 +21,20 @@ const (
 	MSSName   = "xwr68xx_masterss.bin"
 	MSSSize   = int64(92992)
 	MSSSHA256 = "316911D4A8DBA1762714A3A107071BD0CF06A135FAE29BFBBC92B037592DE060"
+
+	xwr16xxBSSName   = "xwr16xx_radarss.bin"
+	xwr16xxBSSSize   = int64(35728)
+	xwr16xxBSSSHA256 = "0B134A14D539292BB7E8E20C14676CEABAC2265D131C24F0526A21087ABCAD8C"
+	xwr16xxMSSName   = "xwr16xx_masterss.bin"
+	xwr16xxMSSSize   = int64(52904)
+	xwr16xxMSSSHA256 = "B4044513BA44C3290639AD4C416DAF37E72DEB43567FC0DE0314DAF2546130DF"
+
+	xwr18xxBSSName   = "xwr18xx_radarss.bin"
+	xwr18xxBSSSize   = int64(35728)
+	xwr18xxBSSSHA256 = "0B134A14D539292BB7E8E20C14676CEABAC2265D131C24F0526A21087ABCAD8C"
+	xwr18xxMSSName   = "xwr18xx_masterss.bin"
+	xwr18xxMSSSize   = int64(52904)
+	xwr18xxMSSSHA256 = "B4044513BA44C3290639AD4C416DAF37E72DEB43567FC0DE0314DAF2546130DF"
 )
 
 type File struct {
@@ -66,12 +82,24 @@ func CheckAssets(bssPath, mssPath string) (Assets, error) {
 	return checkAssetsForFamily(debugFamilyIWR6843ES2, bssPath, mssPath)
 }
 
+// CheckAssetsForFamily pins both user-supplied RF-evaluation images to the
+// exact names, sizes, and digests of one explicit device family.
+func CheckAssetsForFamily(device radar.DeviceFamily, bssPath, mssPath string) (Assets, error) {
+	family, err := debugFamilyContractForDevice(device)
+	if err != nil {
+		return Assets{}, err
+	}
+	return checkAssetsForFamily(family.id, bssPath, mssPath)
+}
+
 func checkAssetsForFamily(familyID debugFamilyID, bssPath, mssPath string) (Assets, error) {
 	family, err := debugFamilyContractForID(familyID)
 	if err != nil {
 		return Assets{}, err
 	}
-	if family.imagePolicy != debugFirmwareImageIWR6843RPRC {
+	switch family.imagePolicy {
+	case debugFirmwareImageIWR6843RPRC, debugFirmwareImageLegacyPatchRPRC:
+	default:
 		return Assets{}, fmt.Errorf("unsupported debug-cli firmware image policy %d", family.imagePolicy)
 	}
 	assets, err := checkAssets(bssPath, mssPath, family.assets)
@@ -105,7 +133,7 @@ func checkAssets(bssPath, mssPath string, expected contracts) (Assets, error) {
 	if err != nil {
 		return Assets{}, err
 	}
-	return Assets{BSS: bssFile, MSS: mssFile, family: debugFamilyIWR6843ES2}, nil
+	return Assets{BSS: bssFile, MSS: mssFile}, nil
 }
 
 func inspectCandidate(path, role string) (candidate, error) {

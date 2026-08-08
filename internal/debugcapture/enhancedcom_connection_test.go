@@ -65,6 +65,108 @@ func TestOpenEnhancedCOMConnectionUsesTIDebugBaudAndGatesPart(t *testing.T) {
 	}
 }
 
+func TestExperimentalFamiliesUseOnlyWarm921600Monitor(t *testing.T) {
+	tests := []struct {
+		name     string
+		familyID debugFamilyID
+		efuse    string
+		part     uint8
+	}{
+		{name: "xwr16xx", familyID: debugFamilyXWR16XX, efuse: "01800000", part: 0x60},
+		{name: "xwr18xx", familyID: debugFamilyXWR18XX, efuse: "03400000", part: 0xd0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := &fakeEnhancedCOMTransport{reads: [][]byte{
+				[]byte("2\r\n"), nil,
+				[]byte(test.efuse + "\r\n"), nil,
+			}}
+			var bauds []int
+			connection, err := openEnhancedCOMConnectionForFamilyWithBackend(
+				context.Background(),
+				"COM3",
+				test.familyID,
+				enhancedCOMBackend{
+					open: func(_ string, baud int, _ time.Duration) (enhancedCOMTransport, error) {
+						bauds = append(bauds, baud)
+						return transport, nil
+					},
+					wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(bauds, []int{enhancedCOMBaud}) || connection.family != test.familyID ||
+				connection.partNumber != test.part {
+				t.Fatalf("bauds/family/part = %v/%d/0x%02X", bauds, connection.family, connection.partNumber)
+			}
+			for _, write := range transport.writes {
+				if strings.HasPrefix(string(write), "wr ") {
+					t.Fatalf("warm-only family performed register write %q", write)
+				}
+			}
+			if err := connection.close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestExperimentalFamiliesNeverNegotiateColdBaud(t *testing.T) {
+	for _, familyID := range []debugFamilyID{debugFamilyXWR16XX, debugFamilyXWR18XX} {
+		transport := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("x0 ??"), nil}}
+		var bauds []int
+		_, err := openEnhancedCOMConnectionForFamilyWithBackend(
+			context.Background(),
+			"COM3",
+			familyID,
+			enhancedCOMBackend{
+				open: func(_ string, baud int, _ time.Duration) (enhancedCOMTransport, error) {
+					bauds = append(bauds, baud)
+					return transport, nil
+				},
+				wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+			},
+		)
+		if !errors.Is(err, errEnhancedCOMInvalidResponse) || !strings.Contains(err.Error(), "required 921600 baud") {
+			t.Fatalf("family %d error = %v", familyID, err)
+		}
+		if !slices.Equal(bauds, []int{enhancedCOMBaud}) || transport.closeCalls != 1 {
+			t.Fatalf("family %d bauds/closes = %v/%d", familyID, bauds, transport.closeCalls)
+		}
+		for _, write := range transport.writes {
+			if strings.HasPrefix(string(write), "wr ") {
+				t.Fatalf("family %d failed warm probe performed register write %q", familyID, write)
+			}
+		}
+	}
+}
+
+func TestExperimentalFamilyRejectsForeignPartBeforeRegisterWrites(t *testing.T) {
+	transport := &fakeEnhancedCOMTransport{reads: [][]byte{
+		[]byte("2\r\n"), nil,
+		[]byte("03400000\r\n"), nil,
+	}}
+	_, err := openEnhancedCOMConnectionForFamilyWithBackend(
+		context.Background(),
+		"COM3",
+		debugFamilyXWR16XX,
+		enhancedCOMBackend{
+			open: func(string, int, time.Duration) (enhancedCOMTransport, error) { return transport, nil },
+			wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "unsupported xWR16xx part number 0xD0") {
+		t.Fatalf("foreign part error = %v", err)
+	}
+	for _, write := range transport.writes {
+		if strings.HasPrefix(string(write), "wr ") {
+			t.Fatalf("foreign part performed register write %q", write)
+		}
+	}
+}
+
 func TestOpenEnhancedCOMConnectionNegotiatesColdBootBaudOnce(t *testing.T) {
 	requestedProbe := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("x0 ??"), nil}}
 	coldBoot := &fakeEnhancedCOMTransport{reads: [][]byte{

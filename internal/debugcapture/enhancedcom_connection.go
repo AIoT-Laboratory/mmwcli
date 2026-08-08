@@ -43,9 +43,10 @@ type enhancedCOMConnection struct {
 	family     debugFamilyID
 }
 
-// openEnhancedCOMConnection opens only the explicitly named port. It performs
-// Studio's fixed 921600/115200 negotiation, but never scans ports or guesses
-// any other rate.
+// openEnhancedCOMConnection opens only the explicitly named port. The
+// validated xWR68xx route may perform Studio's fixed 921600/115200
+// negotiation; source-validated xWR16xx/xWR18xx routes require an already
+// responsive 921600 monitor and never touch the xWR68xx baud registers.
 func openEnhancedCOMConnection(ctx context.Context, portName string) (*enhancedCOMConnection, error) {
 	return openEnhancedCOMConnectionForFamily(ctx, portName, debugFamilyIWR6843ES2)
 }
@@ -98,12 +99,21 @@ func openEnhancedCOMConnectionForFamilyWithBackend(
 	if err != nil {
 		return nil, err
 	}
-	if family.bootPolicy != debugBootXWR68xxRFEval {
+	if family.bootPolicy != debugBootXWR68xxRFEval && family.bootPolicy != debugBootWarmRFEval {
 		return nil, fmt.Errorf("unsupported debug-cli boot policy %d", family.bootPolicy)
 	}
 
 	client, probeValue, safeToNegotiate, err := openInitializedEnhancedCOMClient(ctx, portName, enhancedCOMBaud, backend)
 	if err != nil {
+		if family.bootPolicy == debugBootWarmRFEval {
+			return nil, fmt.Errorf(
+				"probe %s Enhanced COM monitor on %q at required %d baud: %w",
+				family.platform,
+				portName,
+				enhancedCOMBaud,
+				err,
+			)
+		}
 		if !safeToNegotiate {
 			return nil, err
 		}
@@ -119,7 +129,7 @@ func openEnhancedCOMConnectionForFamilyWithBackend(
 
 	partNumber, err := gateDebugFamilyPart(ctx, client, family)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("gate xWR6843 part identity on %q: %w", portName, err), client.close())
+		return nil, errors.Join(fmt.Errorf("gate %s part identity on %q: %w", family.platform, portName, err), client.close())
 	}
 	return &enhancedCOMConnection{
 		client:     client,
@@ -174,6 +184,9 @@ func negotiateEnhancedCOMBaud(
 	backend enhancedCOMBackend,
 	family debugFamilyContract,
 ) (*enhancedCOMClient, uint32, error) {
+	if family.bootPolicy != debugBootXWR68xxRFEval {
+		return nil, 0, fmt.Errorf("debug-cli boot policy %d does not permit xWR68xx baud negotiation", family.bootPolicy)
+	}
 	if err := backend.wait(ctx, enhancedCOMNegotiationOpenWait); err != nil {
 		return nil, 0, err
 	}
@@ -192,7 +205,7 @@ func negotiateEnhancedCOMBaud(
 		return fail(fmt.Errorf("probe Enhanced COM port %q at cold-boot baud %d: %w", portName, enhancedCOMColdBootBaud, err))
 	}
 	if _, err := gateDebugFamilyPart(ctx, coldBootClient, family); err != nil {
-		return fail(fmt.Errorf("gate xWR6843 part identity at cold-boot baud %d: %w", enhancedCOMColdBootBaud, err))
+		return fail(fmt.Errorf("gate %s part identity at cold-boot baud %d: %w", family.platform, enhancedCOMColdBootBaud, err))
 	}
 	if err := backend.wait(ctx, enhancedCOMBaudRegisterWait); err != nil {
 		return fail(err)
@@ -236,20 +249,15 @@ func gateDebugFamilyPart(
 		return 0, fmt.Errorf("read xWR68xx part identity: %w", err)
 	}
 	partNumber := uint8((efuseRow10 >> xwr68xxPartNumberShift) & xwr68xxPartNumberMask)
-	if partNumber != family.partNumber {
-		return 0, fmt.Errorf(
-			"unsupported part number 0x%02X; only validated %s part number 0x%02X is supported",
-			partNumber,
-			family.identity,
-			family.partNumber,
-		)
+	if !family.supportsPart(partNumber) {
+		return 0, family.unsupportedPartError(partNumber)
 	}
 	return partNumber, nil
 }
 
 func supportedXWR6843Part(partNumber uint8) bool {
 	family, err := debugFamilyContractForID(debugFamilyIWR6843ES2)
-	return err == nil && partNumber == family.partNumber
+	return err == nil && family.supportsPart(partNumber)
 }
 
 func (connection *enhancedCOMConnection) close() error {
@@ -274,15 +282,15 @@ func (connection *enhancedCOMConnection) submitFirmware(
 	if err != nil {
 		return firmwareSubmissionReceipt{}, errors.Join(err, connection.close())
 	}
-	if family.bootPolicy != debugBootXWR68xxRFEval {
+	if family.bootPolicy != debugBootXWR68xxRFEval && family.bootPolicy != debugBootWarmRFEval {
 		return firmwareSubmissionReceipt{}, errors.Join(
 			fmt.Errorf("unsupported debug-cli boot policy %d", family.bootPolicy),
 			connection.close(),
 		)
 	}
-	if !connection.verified || connection.partNumber != family.partNumber {
+	if !connection.verified || !family.supportsPart(connection.partNumber) {
 		return firmwareSubmissionReceipt{}, errors.Join(
-			errors.New("Enhanced COM connection has not passed the xWR6843 SOP2 monitor and part identity gate"),
+			fmt.Errorf("Enhanced COM connection has not passed the %s SOP2 monitor and part identity gate", family.platform),
 			connection.close(),
 		)
 	}
