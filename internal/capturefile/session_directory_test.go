@@ -65,6 +65,39 @@ func TestSessionDirectoryCommitPublishesCompleteDirectory(t *testing.T) {
 	}
 }
 
+func TestSessionDirectoryExposesADCArtifactOnlyAfterPublication(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "capture")
+	session, err := CreateSessionDirectory(output, testSessionFinalizer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.CommittedADCArtifact(); err == nil {
+		t.Fatal("staged session exposed committed ADC evidence")
+	}
+
+	payload := []byte("adc")
+	if _, err := session.WriteAt(payload, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Truncate(int64(len(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.CommitContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := session.CommittedADCArtifact()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.SizeBytes != int64(len(payload)) {
+		t.Fatalf("artifact size = %d, want %d", artifact.SizeBytes, len(payload))
+	}
+	wantDigest := sha256.Sum256(payload)
+	if artifact.SHA256 != wantDigest {
+		t.Fatalf("artifact SHA-256 = %x, want %x", artifact.SHA256, wantDigest)
+	}
+}
+
 func entryNames(entries []os.DirEntry) []string {
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {

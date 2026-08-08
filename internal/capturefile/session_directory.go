@@ -120,6 +120,7 @@ type SessionDirectory struct {
 	adcFinal  string
 	file      *os.File
 	finalize  SessionFinalizer
+	artifact  SessionADCArtifact
 	committed bool
 }
 
@@ -230,6 +231,7 @@ func (s *SessionDirectory) CommitContext(ctx context.Context) error {
 	if err := publishDirectoryNoReplace(s.partPath, s.finalPath); err != nil {
 		return fmt.Errorf("publish capture session %s: %w", s.finalPath, err)
 	}
+	s.artifact = adc
 	s.committed = true
 	return nil
 }
@@ -358,3 +360,13 @@ func (s *SessionDirectory) Close() error {
 func (s *SessionDirectory) FinalPath() string { return s.finalPath }
 func (s *SessionDirectory) PartPath() string  { return s.partPath }
 func (s *SessionDirectory) Committed() bool   { return s.committed }
+
+// CommittedADCArtifact returns immutable ADC evidence only after the complete
+// session directory has been published successfully. Callers must not use a
+// staged ADC hash as proof that a capture stream may emit COMMIT.
+func (s *SessionDirectory) CommittedADCArtifact() (SessionADCArtifact, error) {
+	if s == nil || !s.committed {
+		return SessionADCArtifact{}, errors.New("capture session directory is not committed")
+	}
+	return s.artifact, nil
+}
