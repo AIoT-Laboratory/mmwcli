@@ -18,7 +18,6 @@ body:
         - studio-cli acquisition
         - debug-capture acquisition
         - mmwcore offline decode
-        - mmwcli stream to mmwcore
         - Other documented route
     validations:
       required: true

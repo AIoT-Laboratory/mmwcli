@@ -70,7 +70,7 @@ golden fixture.
 ## Help validate another combination
 
 Hardware owners are invited to submit the
-[hardware validation issue form](../.github/ISSUE_TEMPLATE/hardware-validation.yml). A useful
+[hardware validation issue form](https://github.com/AIoT-Laboratory/mmwcli/issues/new?template=hardware-validation.yml). A useful
 report identifies the route, exact device/board/part/ES, firmware SHA-256 values, runtime and host
 versions, D2XX and DCA1000 versions, CFG hash, last completed stage, result, and a redacted log.
 Reports of failures are as useful as successes.

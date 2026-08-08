@@ -21,7 +21,8 @@ caller's stream, or resume an incomplete session.
 The proposed aggregate schemas are `mmwcli.multisensor_session.v1` for the published directory and
 `mmwcli.multisensor_stream.v1` for provisional delivery. One random session ID binds both. Every
 source has a unique stable `source_id`, a kind such as `radar` or `camera`, a producer name and
-version, a finite item and byte limit, a payload contract, and exactly one clock contract.
+version, a finite item and byte limit, a payload contract, exactly one clock contract, and an
+immutable `required` boolean declared before acquisition starts.
 
 The coordinator stages this shape under `OUT.part`:
 
@@ -83,6 +84,21 @@ event; validation rejects an absent required event, a missing or unexpected dupl
 and cardinality outside that declaration. Valid event IDs exclude `MAX_U64`, never wrap, and session
 creation aborts rather than overflowing the ID space.
 
+### Physical synchronization event ledger
+
+`session.json` owns one closed `sync_events` ledger. Each entry identifies one physical event with
+a unique `sync_event_id`, the event clock's `clock_id`, raw event tick and wrap count, a closed edge
+value (`rising` or `falling`), a closed evidence kind plus generator/observer and routing identity,
+the supporting observation IDs, and a nonnegative `uncertainty_ns`. The event clock and tick obey
+the same wrap and affine-mapping rules as source index ticks.
+
+The coordinator creates a ledger entry only from accepted trigger-generation or
+hardware-observation evidence. A source `index.bin` may only reference an existing ledger ID;
+equal item indices,
+producer-local counters, arrival order, or equal self-assigned numbers do not establish a shared
+physical event. Ledger IDs are session-local, immutable after first reference, and every reference
+must agree with the source's declared per-event cardinality.
+
 ## Clock model
 
 A source clock declares:
@@ -102,12 +118,16 @@ only for the recorded host and boot. A clock observation contains one source tic
 `host_before_ns` and `host_after_ns`, sampled immediately before and after the observation. The true
 host time is an interval, not their midpoint by assertion, and `before <= after` is required.
 
-Source time is mapped to host monotonic time by non-overlapping affine segments. Each segment
-declares a half-open unwrapped-tick range, source and host origins, a positive rational scale
+Source time is mapped to host monotonic time by ordered affine segments. Each segment declares a
+nonempty half-open unwrapped-tick range, source and host origins, a positive rational scale
 `scale_num / scale_den` in host nanoseconds per source tick, the supporting observation IDs, and a
-nonnegative `uncertainty_ns`. Consumers do not extrapolate outside a segment. The reported interval
-uses floor for its lower bound and ceiling for its upper bound; uncertainty includes observation
-width, fit residual, drift allowance, trigger latency, and quantization.
+nonnegative `uncertainty_ns`. Segment ranges may meet but never overlap; checked arithmetic must fit
+the declared integer domains, and nominal mapped time must not move backwards at a segment boundary.
+Every index tick of a completed source and every referenced event-ledger tick must be covered by
+exactly one segment. Gaps, duplicate coverage, or a tick outside all segments invalidate the source;
+consumers never extrapolate. The reported interval uses floor for its lower bound and ceiling for
+its upper bound; uncertainty includes observation width, fit residual, drift allowance, trigger
+latency, and quantization.
 
 DCA1000 packet arrival time and camera pipe arrival time are transport observations, never radar
 sample or camera exposure time. Software-triggered radar frame times are derived from the bounded
@@ -118,10 +138,10 @@ start interval.
 
 - `software_barrier`: sources are armed behind a coordinator barrier and receive bounded host
   start intervals. It provides alignment with measured uncertainty, not simultaneous sampling.
-- `external_trigger`: required sources bind each triggered item to the same recorded physical event
-  through `sync_event_id`; `MAX_U64` is invalid where an event is required. Required-source event
-  sets and declared per-event cardinalities must agree, without assuming one item per event or
-  matching item indices. Trigger routing and sensor response uncertainty remain explicit.
+- `external_trigger`: required sources bind each triggered item to the same physical-event ledger
+  entry through `sync_event_id`; `MAX_U64` is invalid where an event is required. Required-source
+  event sets and declared per-event cardinalities must agree, without assuming one item per event
+  or matching item indices. Trigger routing and sensor response uncertainty remain explicit.
 - `ptp`: a source clock has recorded PTP domain/grandmaster evidence and a bounded mapping to the
   aggregate clock. Merely using Ethernet or wall-clock time does not qualify.
 
@@ -135,12 +155,24 @@ then EOF. ITEM data is provisional. END binds source ID, counts, payload and ind
 SHA-256 values, but it is not a commit. Missing END, missing EOF, trailing bytes, a clock/index
 violation, or producer exit disagreement aborts the source.
 
-Only after every required source has reached END+EOF, all hardware/process cleanup has succeeded,
-all indices and hashes have been revalidated, and the complete directory has been published without
-overwrite may the coordinator emit the single global COMMIT followed by EOF. COMMIT is constructed
-from the already-published directory evidence and carries the session ID and `session.json` digest.
+A source's declared `required` value cannot be downgraded after start. A required source may publish
+only with outcome `complete`, which requires END+EOF and successful validation. An optional source
+has exactly one terminal outcome: `complete`, `failed`, or `omitted`. `failed` and `omitted` sources
+contribute no payload/index leaves to the published directory; any staged partial leaves are
+rejected before publication. All declared sources must reach one terminal outcome and all producer/device
+cleanup must finish before the aggregate can be published. A source-level `complete` remains
+provisional and is never a substitute for the global COMMIT.
+
+Only after every required source is `complete`, every optional source is terminal, all cleanup has
+succeeded, all indices, event references, clock mappings, and hashes have been revalidated, and the
+complete directory has been published without overwrite may the coordinator emit the single global
+COMMIT followed by EOF. The COMMIT is constructed from the already-published directory evidence
+and carries the session ID and `session.json` digest.
 If COMMIT delivery fails, the directory remains valid while the live aggregate stream is rejected.
-Failure attempts one global ABORT followed by EOF; truncation or missing EOF is also an abort.
+Any required-source failure, terminal disagreement, validation/cleanup failure, or publication
+failure forbids COMMIT and attempts one global ABORT followed by EOF; truncation or missing EOF is
+also an abort. An allowed optional-source failure is recorded in `session.json` but does not change
+a successfully published aggregate into an abort.
 
 Each source queue, item size, item count, payload total, reorder window, and aggregate memory total
 has a configured hard bound. The coordinator writes accepted bytes to the staged artifact before
