@@ -14,44 +14,18 @@ import (
 
 // Dialect describes one device-side text CLI firmware family.
 type Dialect struct {
-	name              string
-	defaultBaud       int
-	requiresPlatform  bool
-	restrictToRawOnly bool
-	family            DeviceFamily
+	name             string
+	defaultBaud      int
+	requiresPlatform bool
+	family           DeviceFamily
 }
 
-var (
-	// SDKDemo is the text CLI exposed by the mmWave SDK demo firmware.
-	SDKDemo = sdkDemoDialect(xwr68xxFamily)
-
-	// StudioCLI is TI's xWR68xx studio_cli device firmware dialect.
-	StudioCLI = Dialect{
-		name:              "studio-cli",
-		defaultBaud:       921600,
-		requiresPlatform:  true,
-		restrictToRawOnly: true,
-		family:            xwr68xxFamily,
-	}
-)
-
-func sdkDemoDialect(family DeviceFamily) Dialect {
-	return Dialect{
-		name:             "demo",
-		defaultBaud:      115200,
-		requiresPlatform: true,
-		family:           family,
-	}
-}
-
-// SDKDemoForFamily constructs the SDK demo dialect for one strict canonical
-// device-family name.
-func SDKDemoForFamily(name string) (Dialect, error) {
-	family, err := ParseDeviceFamily(name)
-	if err != nil {
-		return Dialect{}, err
-	}
-	return sdkDemoDialect(family), nil
+// StudioCLI is TI's xWR68xx studio_cli device firmware dialect.
+var StudioCLI = Dialect{
+	name:             "studio-cli",
+	defaultBaud:      921600,
+	requiresPlatform: true,
+	family:           xwr68xxFamily,
 }
 
 func (d Dialect) Name() string { return d.name }
@@ -64,7 +38,7 @@ func (d Dialect) RequiresPlatformVerification() bool { return d.requiresPlatform
 func (d Dialect) DeviceFamily() DeviceFamily { return d.family }
 
 func (d Dialect) valid() bool {
-	return d.name != "" && d.defaultBaud > 0 && d.family.valid()
+	return d == StudioCLI && d.family.valid()
 }
 
 // TerminalStatus is the state found while accumulating a command response.
@@ -226,20 +200,11 @@ var studioOutOfScopeCommands = map[string]struct{}{
 	"psloopcfg": {}, "paloopcfg": {}, "misccfg": {},
 }
 
-// ValidateConfiguration enforces dialect-specific configuration boundaries.
-// A full SDK demo configuration begins with exactly one case-sensitive
-// flushCfg but otherwise accepts firmware-specific commands. The studio_cli
-// dialect additionally enforces its audited raw-only command surface. A
-// flushCfg supplied to studio_cli in reuse mode must still be first.
+// ValidateConfiguration enforces the audited studio_cli raw-only command
+// surface. A flushCfg supplied in reuse mode must still be first.
 func (d Dialect) ValidateConfiguration(commands []string, full bool) error {
 	if !d.valid() {
 		return errors.New("invalid radar CLI dialect")
-	}
-	if !d.restrictToRawOnly {
-		if full {
-			return validateSDKDemoFullConfiguration(commands)
-		}
-		return nil
 	}
 
 	flushes := 0
@@ -279,24 +244,6 @@ func (d Dialect) ValidateConfiguration(commands []string, full bool) error {
 	}
 	if full && flushes != 1 {
 		return errors.New("full studio_cli configuration must begin with exactly one flushCfg; use reuse mode for a second capture")
-	}
-	return nil
-}
-
-func validateSDKDemoFullConfiguration(commands []string) error {
-	const requirement = "full SDK demo configuration must begin with exactly one case-sensitive flushCfg command"
-	if len(commands) == 0 {
-		return errors.New(requirement)
-	}
-	first := strings.Fields(commands[0])
-	if len(first) != 1 || first[0] != "flushCfg" {
-		return errors.New(requirement)
-	}
-	for _, command := range commands[1:] {
-		fields := strings.Fields(command)
-		if len(fields) != 0 && strings.EqualFold(fields[0], "flushCfg") {
-			return errors.New(requirement)
-		}
 	}
 	return nil
 }

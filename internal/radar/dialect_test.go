@@ -7,70 +7,29 @@ import (
 	"testing"
 )
 
-func TestDialectBaudRatesAndPlatformGates(t *testing.T) {
-	if SDKDemo.Name() != "demo" || SDKDemo.DefaultBaud() != 115200 {
-		t.Fatalf("SDKDemo = %q/%d", SDKDemo.Name(), SDKDemo.DefaultBaud())
-	}
+func TestStudioDialectBaudRateAndPlatformGate(t *testing.T) {
 	if StudioCLI.Name() != "studio-cli" || StudioCLI.DefaultBaud() != 921600 {
 		t.Fatalf("StudioCLI = %q/%d", StudioCLI.Name(), StudioCLI.DefaultBaud())
 	}
-	if !SDKDemo.RequiresPlatformVerification() || !StudioCLI.RequiresPlatformVerification() {
-		t.Fatal("text CLI dialect does not require platform verification")
+	if !StudioCLI.RequiresPlatformVerification() {
+		t.Fatal("studio_cli does not require platform verification")
 	}
-	if SDKDemo.DeviceFamily() != xwr68xxFamily || StudioCLI.DeviceFamily() != xwr68xxFamily {
-		t.Fatal("default demo and studio_cli dialects must remain bound to xwr68xx")
+	if StudioCLI.DeviceFamily() != xwr68xxFamily {
+		t.Fatal("studio_cli must remain bound to xwr68xx")
 	}
 }
 
-func TestDeviceFamilyDescriptors(t *testing.T) {
-	tests := []struct {
-		name      string
-		family    DeviceFamily
-		platforms [2]string
-		rxMask    uint64
-		txMask    uint64
-		minimum   float64
-		maximum   float64
-	}{
-		{name: "xwr16xx", family: xwr16xxFamily, platforms: [2]string{"xWR16xx"}, rxMask: 0x0f, txMask: 0x03, minimum: 76, maximum: 81},
-		{name: "xwr18xx", family: xwr18xxFamily, platforms: [2]string{"xWR18xx"}, rxMask: 0x0f, txMask: 0x07, minimum: 76, maximum: 81},
-		{name: "xwr64xx", family: xwr64xxFamily, platforms: [2]string{"xWR64xx"}, rxMask: 0x0f, txMask: 0x07, minimum: 57, maximum: 64},
-		{name: "xwr68xx", family: xwr68xxFamily, platforms: [2]string{"xWR68xx"}, rxMask: 0x0f, txMask: 0x07, minimum: 57, maximum: 64},
+func TestXWR68xxDeviceFamilyDescriptor(t *testing.T) {
+	family := xwr68xxFamily
+	if !family.valid() || family.Name() != "xwr68xx" ||
+		family.versionPlatforms != [2]string{"xWR68xx"} ||
+		family.receiverMask != 0x0f || family.transmitterMask != 0x07 ||
+		family.minimumStartFrequencyGHz != 57 || family.maximumStartFrequencyGHz != 64 ||
+		family.adcBufBytes != 32*1024 || family.lvdsLaneCount != 2 {
+		t.Fatalf("descriptor = %+v", family)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			family, err := ParseDeviceFamily(test.name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if family != test.family || family.Name() != test.name {
-				t.Fatalf("ParseDeviceFamily(%q) = %+v", test.name, family)
-			}
-			if family.versionPlatforms != test.platforms ||
-				family.receiverMask != test.rxMask || family.transmitterMask != test.txMask ||
-				family.minimumStartFrequencyGHz != test.minimum || family.maximumStartFrequencyGHz != test.maximum ||
-				family.adcBufBytes != 32*1024 || family.lvdsLaneCount != 2 {
-				t.Fatalf("descriptor = %+v", family)
-			}
-
-			dialect, err := SDKDemoForFamily(test.name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if dialect.Name() != "demo" || dialect.DefaultBaud() != 115200 ||
-				!dialect.RequiresPlatformVerification() || dialect.DeviceFamily() != family {
-				t.Fatalf("SDKDemoForFamily(%q) = %+v", test.name, dialect)
-			}
-		})
-	}
-
-	for _, name := range []string{"", "XWR16XX", " xwr16xx", "xwr16xx ", "xwr14xx", "xWR18xx_AOP"} {
-		if _, err := ParseDeviceFamily(name); err == nil {
-			t.Errorf("ParseDeviceFamily(%q) accepted a non-canonical name", name)
-		}
-		if _, err := SDKDemoForFamily(name); err == nil {
-			t.Errorf("SDKDemoForFamily(%q) accepted a non-canonical name", name)
-		}
+	if (DeviceFamily{}).valid() {
+		t.Fatal("zero device-family descriptor is valid")
 	}
 }
 
@@ -141,58 +100,24 @@ func TestAlreadyStoppedIsNarrow(t *testing.T) {
 }
 
 func TestVerifyPlatformResponse(t *testing.T) {
-	for _, dialect := range []Dialect{SDKDemo, StudioCLI} {
-		for _, response := range []string{
-			"Platform                : xWR68xx\r\nDone\r\n",
-			"Platform:xwr68XX\nDone\n",
-			"Banner\nPlatform : xWR68xx\n",
-		} {
-			if err := dialect.VerifyPlatformResponse(response); err != nil {
-				t.Errorf("%s valid response rejected: %v", dialect.Name(), err)
-			}
-		}
-		for _, response := range []string{
-			"Platform : xWR18xx\nDone\n",
-			"PlatformName : xWR68xx\nDone\n",
-			"Device Info : xWR6843\nDone\n",
-		} {
-			if err := dialect.VerifyPlatformResponse(response); err == nil {
-				t.Errorf("%s invalid response accepted: %q", dialect.Name(), response)
-			}
+	for _, response := range []string{
+		"Platform                : xWR68xx\r\nDone\r\n",
+		"Platform:xwr68XX\nDone\n",
+		"Banner\nPlatform : xWR68xx\n",
+	} {
+		if err := StudioCLI.VerifyPlatformResponse(response); err != nil {
+			t.Errorf("valid response rejected: %v", err)
 		}
 	}
-}
-
-func TestSDKDemoFamilyPlatformResponses(t *testing.T) {
-	tests := []struct {
-		family   string
-		accepted []string
-		rejected []string
-	}{
-		{family: "xwr16xx", accepted: []string{"xWR16xx"}, rejected: []string{"xWR18xx", "xWR68xx"}},
-		{family: "xwr18xx", accepted: []string{"xWR18xx"}, rejected: []string{"xWR18xx_AOP", "xWR16xx", "xWR68xx"}},
-		{family: "xwr64xx", accepted: []string{"xWR64xx"}, rejected: []string{"xWR68xx", "xWR18xx"}},
-		{family: "xwr68xx", accepted: []string{"xWR68xx"}, rejected: []string{"xWR68xx_AOP", "xWR64xx"}},
-	}
-	for _, test := range tests {
-		t.Run(test.family, func(t *testing.T) {
-			dialect, err := SDKDemoForFamily(test.family)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, platform := range test.accepted {
-				response := "Platform : " + platform + "\nDone\n"
-				if err := dialect.VerifyPlatformResponse(response); err != nil {
-					t.Errorf("accepted platform %q rejected: %v", platform, err)
-				}
-			}
-			for _, platform := range test.rejected {
-				response := "Platform : " + platform + "\nDone\n"
-				if err := dialect.VerifyPlatformResponse(response); err == nil {
-					t.Errorf("unsupported platform %q accepted", platform)
-				}
-			}
-		})
+	for _, response := range []string{
+		"Platform : xWR18xx\nDone\n",
+		"Platform : xWR68xx_AOP\nDone\n",
+		"PlatformName : xWR68xx\nDone\n",
+		"Device Info : xWR6843\nDone\n",
+	} {
+		if err := StudioCLI.VerifyPlatformResponse(response); err == nil {
+			t.Errorf("invalid response accepted: %q", response)
+		}
 	}
 }
 
@@ -200,9 +125,6 @@ func TestStudioRawOnlyAllowlist(t *testing.T) {
 	commands := validCommands()
 	if err := StudioCLI.ValidateConfiguration(commands, true); err != nil {
 		t.Fatalf("valid raw-only commands rejected: %v", err)
-	}
-	if err := SDKDemo.ValidateConfiguration([]string{"flushCfg", "unextendedDemoCommand 1"}, true); err != nil {
-		t.Fatalf("SDK demo command was subjected to studio allowlist: %v", err)
 	}
 }
 

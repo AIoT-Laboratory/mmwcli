@@ -220,8 +220,8 @@ func TestStudioPlatformMismatchBlocksStateCommand(t *testing.T) {
 	}
 }
 
-func TestSDKDemoSendsVersionBeforeStart(t *testing.T) {
-	client, transport := newScriptedClient(t, SDKDemo,
+func TestStudioSendsVersionBeforeStart(t *testing.T) {
+	client, transport := newScriptedClient(t, StudioCLI,
 		scriptedExchange{command: "version", response: "Platform                : xWR68xx\nDone\n"},
 		scriptedExchange{command: "sensorStart", response: "Done\n"},
 	)
@@ -233,8 +233,8 @@ func TestSDKDemoSendsVersionBeforeStart(t *testing.T) {
 	}
 }
 
-func TestSDKDemoPlatformMismatchBlocksStateWrites(t *testing.T) {
-	plan, err := BuildCapturePlan(SDKDemo, validCommands(), FullConfiguration)
+func TestStudioPlatformMismatchBlocksStateWrites(t *testing.T) {
+	plan, err := BuildCapturePlan(StudioCLI, validCommands(), FullConfiguration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestSDKDemoPlatformMismatchBlocksStateWrites(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			client, transport := newScriptedClient(t, SDKDemo,
+			client, transport := newScriptedClient(t, StudioCLI,
 				scriptedExchange{command: "version", response: "Platform : xWR18xx\nDone\n"},
 			)
 			if err := test.run(client); err == nil || !strings.Contains(err.Error(), "unsupported platform") {
@@ -261,8 +261,8 @@ func TestSDKDemoPlatformMismatchBlocksStateWrites(t *testing.T) {
 	}
 }
 
-func TestSDKDemoCaptureLifecycleVerifiesBeforeFirstStateWrite(t *testing.T) {
-	plan, err := BuildCapturePlan(SDKDemo, validCommands(), FullConfiguration)
+func TestStudioCaptureLifecycleVerifiesBeforeFirstStateWrite(t *testing.T) {
+	plan, err := BuildCapturePlan(StudioCLI, validCommands(), FullConfiguration)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestSDKDemoCaptureLifecycleVerifiesBeforeFirstStateWrite(t *testing.T) {
 		scriptedExchange{command: "sensorStart", response: "Done\n"},
 		scriptedExchange{command: "sensorStop", response: "Done\n"},
 	)
-	client, transport := newScriptedClient(t, SDKDemo, script...)
+	client, transport := newScriptedClient(t, StudioCLI, script...)
 	if _, err := client.Stop(); err != nil {
 		t.Fatal(err)
 	}
@@ -331,11 +331,12 @@ func TestApplyRejectsReuseAndDialectMismatchWithoutIO(t *testing.T) {
 		t.Fatal("Apply touched transport for invalid reuse plan")
 	}
 
-	demoPlan, err := BuildCapturePlan(SDKDemo, validCommands(), FullConfiguration)
+	mismatchedPlan, err := BuildCapturePlan(StudioCLI, validCommands(), FullConfiguration)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Apply(demoPlan); err == nil {
+	mismatchedPlan.Dialect = Dialect{}
+	if err := client.Apply(mismatchedPlan); err == nil {
 		t.Fatal("Apply accepted mismatched dialect")
 	}
 }
@@ -394,7 +395,7 @@ func TestSendCommandReportsUnknownResultAtEOF(t *testing.T) {
 
 func TestZeroLengthSerialReadBecomesBoundedUnknownResult(t *testing.T) {
 	transport := &zeroReadTransport{}
-	client, err := NewClient(transport, SDKDemo, 20*time.Millisecond)
+	client, err := NewClient(transport, StudioCLI, 20*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +411,7 @@ func TestZeroLengthSerialReadBecomesBoundedUnknownResult(t *testing.T) {
 
 func TestTricklingResponseCannotRenewContextDeadline(t *testing.T) {
 	transport := &trickleTransport{delay: 2 * time.Millisecond}
-	client, err := NewClient(transport, SDKDemo, time.Second)
+	client, err := NewClient(transport, StudioCLI, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +449,7 @@ func TestSendCommandBoundsResponse(t *testing.T) {
 }
 
 func TestSendCommandRejectsMultilineInjectionBeforeIO(t *testing.T) {
-	client, transport := newScriptedClient(t, SDKDemo)
+	client, transport := newScriptedClient(t, StudioCLI)
 	if _, err := client.SendCommand("sensorStop\nsensorStart"); err == nil {
 		t.Fatal("multiline command accepted")
 	}
@@ -460,7 +461,7 @@ func TestSendCommandRejectsMultilineInjectionBeforeIO(t *testing.T) {
 func TestSendCommandPurgesLateTerminalBeforeNextCommand(t *testing.T) {
 	transport := &purgingTransport{}
 	transport.stale.WriteString("Done\n")
-	client, err := NewClient(transport, SDKDemo, time.Second)
+	client, err := NewClient(transport, StudioCLI, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +477,7 @@ func TestSendCommandPurgesLateTerminalBeforeNextCommand(t *testing.T) {
 
 func TestDesynchronizedCommandRequiresItsOwnEchoBeforeTerminal(t *testing.T) {
 	transport := &purgingTransport{response: "Done\nsensorStop\nError -57\n"}
-	client, err := NewClient(transport, SDKDemo, time.Second)
+	client, err := NewClient(transport, StudioCLI, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +491,7 @@ func TestDesynchronizedCommandRequiresItsOwnEchoBeforeTerminal(t *testing.T) {
 
 func TestCanceledCommandReleasesMutexForRecovery(t *testing.T) {
 	transport := &cancelRecoveryTransport{}
-	client, err := NewClient(transport, SDKDemo, time.Second)
+	client, err := NewClient(transport, StudioCLI, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +519,7 @@ func TestCanceledCommandReleasesMutexForRecovery(t *testing.T) {
 }
 
 func TestClientCloseIsIdempotent(t *testing.T) {
-	client, transport := newScriptedClient(t, SDKDemo)
+	client, transport := newScriptedClient(t, StudioCLI)
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}

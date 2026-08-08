@@ -179,10 +179,10 @@ func TestBuildPlanRejectsInvalidWireConfiguration(t *testing.T) {
 func TestBuildPlanRequiresExactCapturePlan(t *testing.T) {
 	source := goldenDebugCaptureSource(t)
 
-	demo := cloneRadarCapturePlan(source)
-	demo.Dialect = radar.SDKDemo
-	if _, err := BuildPlan(demo); err == nil || !strings.Contains(err.Error(), "studio-cli") {
-		t.Fatalf("SDK demo error = %v", err)
+	invalidDialect := cloneRadarCapturePlan(source)
+	invalidDialect.Dialect = radar.Dialect{}
+	if _, err := BuildPlan(invalidDialect); err == nil || !strings.Contains(err.Error(), "studio-cli") {
+		t.Fatalf("invalid dialect error = %v", err)
 	}
 
 	reuse := cloneRadarCapturePlan(source)

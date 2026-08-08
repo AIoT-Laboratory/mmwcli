@@ -62,80 +62,6 @@ func TestBuildFullCapturePlan(t *testing.T) {
 	}
 }
 
-func TestSDKDemoDeviceFamilyCapturePreflight(t *testing.T) {
-	tests := []struct {
-		family         string
-		platform       string
-		startFrequency int
-		wrongFrequency int
-	}{
-		{family: "xwr16xx", platform: "xWR16xx", startFrequency: 77, wrongFrequency: 60},
-		{family: "xwr18xx", platform: "xWR18xx", startFrequency: 77, wrongFrequency: 60},
-		{family: "xwr64xx", platform: "xWR64xx", startFrequency: 60, wrongFrequency: 77},
-		{family: "xwr68xx", platform: "xWR68xx", startFrequency: 60, wrongFrequency: 77},
-	}
-	for _, test := range tests {
-		t.Run(test.family, func(t *testing.T) {
-			dialect, err := SDKDemoForFamily(test.family)
-			if err != nil {
-				t.Fatal(err)
-			}
-			commands := captureCommandsForFamily(test.family, test.startFrequency)
-			plan, err := BuildCapturePlan(dialect, commands, FullConfiguration)
-			if err != nil {
-				t.Fatalf("valid %s plan rejected: %v", test.family, err)
-			}
-			if plan.Dialect.DeviceFamily().Name() != test.family || plan.ExpectedBytes != 26_214_400 {
-				t.Fatalf("unexpected %s plan: %+v", test.family, plan)
-			}
-
-			commands = captureCommandsForFamily(test.family, test.wrongFrequency)
-			if _, err := BuildCapturePlan(dialect, commands, FullConfiguration); err == nil ||
-				!strings.Contains(err.Error(), "start frequency") {
-				t.Fatalf("wrong-band plan error = %v", err)
-			}
-
-			commands = replaceCommand(
-				captureCommandsForFamily(test.family, test.startFrequency),
-				"frameCfg",
-				"frameCfg 0 1 256 100 100 1 0",
-			)
-			if _, err := BuildCapturePlan(dialect, commands, FullConfiguration); err == nil ||
-				!strings.Contains(err.Error(), test.platform+" frameCfg loop count") {
-				t.Fatalf("family-specific frame error = %v", err)
-			}
-		})
-	}
-}
-
-func TestXWR16xxRejectsTX2(t *testing.T) {
-	dialect, err := SDKDemoForFamily("xwr16xx")
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests := []struct {
-		name     string
-		commands []string
-	}{
-		{
-			name:     "channel mask",
-			commands: replaceCommand(captureCommandsForFamily("xwr16xx", 77), "channelCfg", "channelCfg 15 7 0"),
-		},
-		{
-			name:     "chirp mask",
-			commands: replaceCommand(captureCommandsForFamily("xwr16xx", 77), "chirpCfg", "chirpCfg 0 0 0 0 0 0 0 4"),
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := BuildCapturePlan(dialect, test.commands, FullConfiguration); err == nil ||
-				!strings.Contains(err.Error(), "TX0..TX1") {
-				t.Fatalf("TX2 error = %v", err)
-			}
-		})
-	}
-}
-
 func TestBuildPlanSynthesizesAndSeparatesStart(t *testing.T) {
 	withoutStart := validCommands()[:len(validCommands())-1]
 	plan, err := BuildCapturePlan(StudioCLI, withoutStart, FullConfiguration)
@@ -189,33 +115,6 @@ func TestInfiniteFramePlan(t *testing.T) {
 	}
 }
 
-func TestSDKDemoExpectedBytesUsesSelectedFrameProfile(t *testing.T) {
-	commands := replaceCommand(validCommands(), "channelCfg", "channelCfg 5 7 0")
-	commands = replaceCommandsByName(
-		commands,
-		"profileCfg",
-		"profileCfg 0 60 7 3 24 0 0 166 1 64 12500 0 0 158",
-		"profileCfg 1 60 7 3 24 0 0 166 1 128 12500 0 0 158",
-	)
-	commands = replaceCommandsByName(
-		commands,
-		"chirpCfg",
-		"chirpCfg 0 1 1 0 0 0 0 1",
-		"chirpCfg 2 2 1 0 0 0 0 4",
-	)
-	commands = replaceCommand(commands, "frameCfg", "frameCfg 0 2 2 3 100 1 0")
-
-	plan, err := BuildCapturePlan(SDKDemo, commands, FullConfiguration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 3 chirps * 128 samples * 2 loops * 2 RX *
-	// 4 bytes/complex16 sample * 3 frames.
-	if plan.ExpectedBytes != 18_432 {
-		t.Fatalf("ExpectedBytes = %d, want 18432", plan.ExpectedBytes)
-	}
-}
-
 func TestExpectedBytesSingleReceiverSingleChirp(t *testing.T) {
 	commands := replaceCommand(validCommands(), "channelCfg", "channelCfg 1 7 0")
 	commands = replaceCommandsByName(commands, "chirpCfg", "chirpCfg 0 0 0 0 0 0 0 1")
@@ -227,71 +126,6 @@ func TestExpectedBytesSingleReceiverSingleChirp(t *testing.T) {
 	}
 	if plan.ExpectedBytes != 1_024 {
 		t.Fatalf("ExpectedBytes = %d, want 1024", plan.ExpectedBytes)
-	}
-}
-
-func TestSDKDemoExpectedBytesRejectsMixedFrameProfiles(t *testing.T) {
-	commands := replaceCommandsByName(
-		validCommands(),
-		"profileCfg",
-		"profileCfg 0 60 7 3 24 0 0 166 1 64 12500 0 0 158",
-		"profileCfg 1 60 7 3 24 0 0 166 1 128 12500 0 0 158",
-	)
-	commands = replaceCommandsByName(
-		commands,
-		"chirpCfg",
-		"chirpCfg 0 0 0 0 0 0 0 1",
-		"chirpCfg 1 1 1 0 0 0 0 4",
-	)
-
-	_, err := BuildCapturePlan(SDKDemo, commands, FullConfiguration)
-	if err == nil || !strings.Contains(err.Error(), "mixed profile IDs") {
-		t.Fatalf("error = %v, want mixed-profile rejection", err)
-	}
-}
-
-func TestSDKDemoADCBufContract(t *testing.T) {
-	for _, command := range []string{
-		"adcbufCfg -1 0 0 0 1",
-		"adcbufCfg -1 0 1 1 1",
-		"adcbufCfg 0 0 0 0 1",
-		"adcbufCfg 0 0 1 1 1",
-	} {
-		t.Run("accept "+command, func(t *testing.T) {
-			commands := replaceCommand(validCommands(), "adcbufCfg", command)
-			plan, err := BuildCapturePlan(SDKDemo, commands, FullConfiguration)
-			if err != nil {
-				t.Fatalf("SDK demo rejected a bounded complex, one-chirp ADCBuf layout: %v", err)
-			}
-			if plan.ExpectedBytes != 26_214_400 {
-				t.Fatalf("ExpectedBytes = %d, want 26214400", plan.ExpectedBytes)
-			}
-		})
-	}
-
-	tests := []struct {
-		name    string
-		command []string
-		match   string
-	}{
-		{name: "real format", command: []string{"adcbufCfg -1 1 1 1 1"}, match: "complex ADCBuf format"},
-		{name: "multi chirp threshold", command: []string{"adcbufCfg -1 0 1 1 2"}, match: "chirpThreshold=1"},
-		{name: "negative subframe", command: []string{"adcbufCfg -2 0 1 1 1"}, match: "subframe -1 or 0"},
-		{name: "nonlegacy subframe", command: []string{"adcbufCfg 1 0 1 1 1"}, match: "subframe -1 or 0"},
-		{name: "negative IQ swap", command: []string{"adcbufCfg -1 0 -1 1 1"}, match: "IQ swap must be 0 or 1"},
-		{name: "high IQ swap", command: []string{"adcbufCfg -1 0 2 1 1"}, match: "IQ swap must be 0 or 1"},
-		{name: "negative channel interleave", command: []string{"adcbufCfg -1 0 1 -1 1"}, match: "channel interleave must be 0 or 1"},
-		{name: "high channel interleave", command: []string{"adcbufCfg -1 0 1 2 1"}, match: "channel interleave must be 0 or 1"},
-		{name: "duplicate", command: []string{"adcbufCfg -1 0 1 1 1", "adcbufCfg 0 0 0 0 1"}, match: "exactly one adcbufCfg"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			commands := replaceCommandsByName(validCommands(), "adcbufCfg", test.command...)
-			_, err := BuildCapturePlan(SDKDemo, commands, FullConfiguration)
-			if err == nil || !strings.Contains(err.Error(), test.match) {
-				t.Fatalf("error = %v, want substring %q", err, test.match)
-			}
-		})
 	}
 }
 
@@ -336,6 +170,7 @@ func TestExpectedBytesRejectsAmbiguousOrIncompleteMapping(t *testing.T) {
 			)
 		}, match: "profile ID 0"},
 		{name: "profile ID outside xWR68xx range", mutate: replace("profileCfg", "profileCfg 4 60 7 3 24 0 0 166 1 256 12500 0 0 158"), match: "0..3"},
+		{name: "start frequency outside xWR68xx band", mutate: replace("profileCfg", "profileCfg 0 77 7 3 24 0 0 166 1 256 12500 0 0 158"), match: "outside 57..64 GHz"},
 		{name: "studio negative frequency slope", mutate: replace("profileCfg", "profileCfg 0 60 7 3 24 0 0 -166 1 256 12500 0 0 158"), match: "negative profileCfg frequency slope"},
 		{name: "zero ADC samples", mutate: replace("profileCfg", "profileCfg 0 60 7 3 24 0 0 166 1 0 12500 0 0 158"), match: "must be positive"},
 		{name: "ADC sample integer overflow", mutate: replace("profileCfg", "profileCfg 0 60 7 3 24 0 0 166 1 65536 12500 0 0 158"), match: "invalid profileCfg numAdcSamples"},
@@ -562,56 +397,6 @@ func TestCapturePlanRejectsInvalidContracts(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSDKDemoPlanAllowsDemoCommandAfterRequiredFlush(t *testing.T) {
-	commands := append([]string{"flushCfg", "customDemoCommand 1"}, validCommands()[1:]...)
-	plan, err := BuildCapturePlan(SDKDemo, commands, FullConfiguration)
-	if err != nil {
-		t.Fatalf("SDK demo plan rejected demo-specific command: %v", err)
-	}
-	if plan.Dialect != SDKDemo {
-		t.Fatalf("wrong plan dialect: %+v", plan.Dialect)
-	}
-}
-
-func TestSDKDemoFullConfigurationRequiresExactLeadingFlush(t *testing.T) {
-	tests := []struct {
-		name     string
-		commands []string
-	}{
-		{name: "missing", commands: validCommands()[1:]},
-		{name: "misplaced", commands: append([]string{"customDemoCommand 1"}, validCommands()...)},
-		{name: "wrong case", commands: replaceCommand(validCommands(), "flushCfg", "FlushCfg")},
-		{name: "arguments", commands: replaceCommand(validCommands(), "flushCfg", "flushCfg 1")},
-		{name: "duplicate", commands: append([]string{"flushCfg"}, validCommands()...)},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := BuildCapturePlan(SDKDemo, test.commands, FullConfiguration)
-			if err == nil || !strings.Contains(err.Error(), "exactly one case-sensitive flushCfg") {
-				t.Fatalf("error = %v, want exact leading flushCfg rejection", err)
-			}
-		})
-	}
-}
-
-func captureCommandsForFamily(family string, startFrequency int) []string {
-	commands := replaceCommand(
-		validCommands(),
-		"profileCfg",
-		fmt.Sprintf("profileCfg 0 %d 7 3 24 0 0 166 1 256 12500 0 0 158", startFrequency),
-	)
-	if family != "xwr16xx" {
-		return commands
-	}
-	commands = replaceCommand(commands, "channelCfg", "channelCfg 15 3 0")
-	return replaceCommandsByName(
-		commands,
-		"chirpCfg",
-		"chirpCfg 0 0 0 0 0 0 0 1",
-		"chirpCfg 1 1 0 0 0 0 0 2",
-	)
 }
 
 func replaceCommand(commands []string, name, replacement string) []string {
