@@ -360,7 +360,7 @@ func loadCaptureOutputPlan(
 	if err != nil {
 		return radar.CapturePlan{}, nil, err
 	}
-	finalize, err := capturemanifest.NewV1Finalizer(snapshot, capturemanifest.ADCLayoutGroup2IThenQ)
+	finalize, err := capturemanifest.NewV1Finalizer(snapshot, plan.RawCapture)
 	if err != nil {
 		return radar.CapturePlan{}, nil, err
 	}

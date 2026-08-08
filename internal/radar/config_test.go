@@ -33,6 +33,16 @@ func TestBuildFullCapturePlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	contract := plan.RawCapture
+	if !contract.Valid() || contract != StudioCLI.DeviceFamily().RawCaptureContract() ||
+		contract.Vendor() != "ti" || contract.Family() != "xwr68xx" ||
+		contract.Model() != "" || contract.Revision() != "" ||
+		contract.IdentitySource() != "route_declaration" ||
+		contract.ConfigFormat() != "ti_mmwave_legacy_cli.v1" ||
+		contract.DataType() != "int16" || contract.ByteOrder() != "little" ||
+		contract.LaneCount() != 2 || contract.Layout() != "group2_i_then_q" {
+		t.Fatalf("unexpected raw capture contract: %+v", contract)
+	}
 	if plan.StartCommand != "sensorStart" || plan.DeclaredStartCommand != "sensorStart" || plan.StartWasSynthesized {
 		t.Fatalf("unexpected start plan: %+v", plan)
 	}

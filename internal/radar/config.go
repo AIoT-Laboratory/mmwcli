@@ -32,11 +32,14 @@ const (
 	maximumFramePeriod       = 1342 * time.Millisecond
 )
 
-// CapturePlan is the hardware-independent result of CFG parsing and preflight.
+// CapturePlan is the device-bound result of CFG parsing and preflight.
 // ConfigurationCommands never contains sensorStart. StartCommand is the exact
 // command that an orchestrator should send only after its data sink is armed.
 type CapturePlan struct {
-	Dialect               Dialect
+	Dialect Dialect
+	// RawCapture is the closed hardware and raw-wire descriptor established by
+	// the dialect's validated DeviceFamily.
+	RawCapture            RawCaptureContract
 	Mode                  ConfigurationMode
 	ConfigurationCommands []string
 	DeclaredStartCommand  string
@@ -164,6 +167,7 @@ func BuildCapturePlan(dialect Dialect, commands []string, mode ConfigurationMode
 	}
 	return CapturePlan{
 		Dialect:               dialect,
+		RawCapture:            dialect.family.RawCaptureContract(),
 		Mode:                  mode,
 		ConfigurationCommands: append([]string(nil), configuration...),
 		DeclaredStartCommand:  declaredStart,

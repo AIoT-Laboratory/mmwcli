@@ -12,11 +12,13 @@ import (
 	"testing"
 
 	"mmwcli/internal/capturefile"
+	"mmwcli/internal/radar"
 )
 
 func TestV1FinalizerPublishesSelfContainedSession(t *testing.T) {
 	config := []byte("flushCfg\r\nframeCfg 0 1 1 1 100 1 0\r\n")
-	finalizer, err := NewV1Finalizer(config, ADCLayoutGroup2IThenQ)
+	contract := testRawCaptureContract(t)
+	finalizer, err := NewV1Finalizer(config, contract)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,17 +56,23 @@ func TestV1FinalizerPublishesSelfContainedSession(t *testing.T) {
 	configSHA256 := sha256.Sum256(wantConfig)
 	want := v1Manifest{
 		Schema: SchemaV1,
+		Hardware: v1Hardware{
+			Vendor:         "ti",
+			Family:         "xwr68xx",
+			IdentitySource: "route_declaration",
+		},
 		ADC: v1ADC{
 			Path:      capturefile.SessionADCFileName,
-			DataType:  ADCDataTypeInt16,
-			ByteOrder: ADCByteOrderLittleEndian,
-			Layout:    string(ADCLayoutGroup2IThenQ),
+			DataType:  "int16",
+			ByteOrder: "little",
+			LaneCount: 2,
+			Layout:    "group2_i_then_q",
 			SizeBytes: int64(len(adcData)),
 			SHA256:    hex.EncodeToString(adcSHA256[:]),
 		},
 		RadarConfig: v1RadarConfig{
 			Path:   RadarConfigFileName,
-			Format: RadarConfigFormatXWR68xx,
+			Format: "ti_mmwave_legacy_cli.v1",
 			SHA256: hex.EncodeToString(configSHA256[:]),
 		},
 	}
@@ -99,17 +107,28 @@ func assertV1WireContract(
 	if err := json.Unmarshal(manifestData, &wire); err != nil {
 		t.Fatal(err)
 	}
-	requireJSONKeys(t, wire, "schema", "adc", "radar_config")
+	requireJSONKeys(t, wire, "schema", "hardware", "adc", "radar_config")
 	if wire["schema"] != "mmwcli.capture_session.v1" {
 		t.Fatalf("wire schema = %v", wire["schema"])
+	}
+	hardware, ok := wire["hardware"].(map[string]any)
+	if !ok {
+		t.Fatalf("wire hardware = %#v", wire["hardware"])
+	}
+	requireJSONKeys(t, hardware, "vendor", "family", "model", "revision", "identity_source")
+	if hardware["vendor"] != "ti" || hardware["family"] != "xwr68xx" ||
+		hardware["model"] != "" || hardware["revision"] != "" ||
+		hardware["identity_source"] != "route_declaration" {
+		t.Fatalf("wire hardware = %#v", hardware)
 	}
 	adc, ok := wire["adc"].(map[string]any)
 	if !ok {
 		t.Fatalf("wire adc = %#v", wire["adc"])
 	}
-	requireJSONKeys(t, adc, "path", "dtype", "byte_order", "layout", "size_bytes", "sha256")
+	requireJSONKeys(t, adc, "path", "dtype", "byte_order", "lane_count", "layout", "size_bytes", "sha256")
 	if adc["path"] != "adc.bin" || adc["dtype"] != "int16" || adc["byte_order"] != "little" ||
-		adc["layout"] != "group2_i_then_q" || adc["size_bytes"] != float64(adcSize) ||
+		adc["lane_count"] != float64(2) || adc["layout"] != "group2_i_then_q" ||
+		adc["size_bytes"] != float64(adcSize) ||
 		adc["sha256"] != hex.EncodeToString(adcSHA256[:]) {
 		t.Fatalf("wire adc = %#v", adc)
 	}
@@ -118,7 +137,7 @@ func assertV1WireContract(
 		t.Fatalf("wire radar_config = %#v", wire["radar_config"])
 	}
 	requireJSONKeys(t, config, "path", "format", "sha256")
-	if config["path"] != "radar.cfg" || config["format"] != "ti_xwr68xx_legacy_cli" ||
+	if config["path"] != "radar.cfg" || config["format"] != "ti_mmwave_legacy_cli.v1" ||
 		config["sha256"] != hex.EncodeToString(configSHA256[:]) {
 		t.Fatalf("wire radar_config = %#v", config)
 	}
@@ -153,18 +172,18 @@ func entryNames(entries []os.DirEntry) []string {
 }
 
 func TestNewV1FinalizerRejectsInvalidContractInputs(t *testing.T) {
+	validContract := testRawCaptureContract(t)
 	for _, test := range []struct {
-		name   string
-		config []byte
-		layout ADCLayout
+		name     string
+		config   []byte
+		contract radar.RawCaptureContract
 	}{
-		{name: "nil config", layout: ADCLayoutGroup2IThenQ},
-		{name: "blank config", config: []byte(" \r\n\t"), layout: ADCLayoutGroup2IThenQ},
-		{name: "missing layout", config: []byte("flushCfg\n")},
-		{name: "unknown layout", config: []byte("flushCfg\n"), layout: ADCLayout("interleaved")},
+		{name: "nil config", contract: validContract},
+		{name: "blank config", config: []byte(" \r\n\t"), contract: validContract},
+		{name: "missing contract", config: []byte("flushCfg\n")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := NewV1Finalizer(test.config, test.layout); err == nil {
+			if _, err := NewV1Finalizer(test.config, test.contract); err == nil {
 				t.Fatal("NewV1Finalizer accepted invalid contract inputs")
 			}
 		})
@@ -172,7 +191,7 @@ func TestNewV1FinalizerRejectsInvalidContractInputs(t *testing.T) {
 }
 
 func TestV1FinalizerRejectsNonInt16ADCSize(t *testing.T) {
-	finalizer, err := NewV1Finalizer([]byte("flushCfg\n"), ADCLayoutGroup2IThenQ)
+	finalizer, err := NewV1Finalizer([]byte("flushCfg\n"), testRawCaptureContract(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,23 +225,87 @@ func TestV1FinalizerRejectsNonInt16ADCSize(t *testing.T) {
 }
 
 func TestV1ManifestValidationRejectsInvalidDigests(t *testing.T) {
+	contract := testRawCaptureContract(t)
 	record := v1Manifest{
 		Schema: SchemaV1,
+		Hardware: v1Hardware{
+			Vendor:         contract.Vendor(),
+			Family:         contract.Family(),
+			Model:          contract.Model(),
+			Revision:       contract.Revision(),
+			IdentitySource: contract.IdentitySource(),
+		},
 		ADC: v1ADC{
 			Path:      capturefile.SessionADCFileName,
-			DataType:  ADCDataTypeInt16,
-			ByteOrder: ADCByteOrderLittleEndian,
-			Layout:    string(ADCLayoutGroup2IThenQ),
+			DataType:  contract.DataType(),
+			ByteOrder: contract.ByteOrder(),
+			LaneCount: contract.LaneCount(),
+			Layout:    contract.Layout(),
 			SizeBytes: 1,
 			SHA256:    "ABC",
 		},
 		RadarConfig: v1RadarConfig{
 			Path:   RadarConfigFileName,
-			Format: RadarConfigFormatXWR68xx,
+			Format: contract.ConfigFormat(),
 			SHA256: "0",
 		},
 	}
-	if _, err := encodeV1(record); err == nil {
+	if _, err := encodeV1(record, contract); err == nil {
 		t.Fatal("encodeV1 accepted invalid SHA-256 digests")
 	}
+}
+
+func TestV1ManifestValidationRejectsContractDrift(t *testing.T) {
+	contract := testRawCaptureContract(t)
+	validDigest := hex.EncodeToString(make([]byte, sha256.Size))
+	base := v1Manifest{
+		Schema: SchemaV1,
+		Hardware: v1Hardware{
+			Vendor:         contract.Vendor(),
+			Family:         contract.Family(),
+			Model:          contract.Model(),
+			Revision:       contract.Revision(),
+			IdentitySource: contract.IdentitySource(),
+		},
+		ADC: v1ADC{
+			Path:      capturefile.SessionADCFileName,
+			DataType:  contract.DataType(),
+			ByteOrder: contract.ByteOrder(),
+			LaneCount: contract.LaneCount(),
+			Layout:    contract.Layout(),
+			SizeBytes: 2,
+			SHA256:    validDigest,
+		},
+		RadarConfig: v1RadarConfig{
+			Path:   RadarConfigFileName,
+			Format: contract.ConfigFormat(),
+			SHA256: validDigest,
+		},
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*v1Manifest)
+	}{
+		{name: "hardware", mutate: func(record *v1Manifest) { record.Hardware.Model = "iwr6843" }},
+		{name: "lane count", mutate: func(record *v1Manifest) { record.ADC.LaneCount = 4 }},
+		{name: "layout", mutate: func(record *v1Manifest) { record.ADC.Layout = "group4_i_then_q" }},
+		{name: "config format", mutate: func(record *v1Manifest) { record.RadarConfig.Format = "ti_xwr68xx_legacy_cli" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			record := base
+			test.mutate(&record)
+			if _, err := encodeV1(record, contract); err == nil {
+				t.Fatal("encodeV1 accepted manifest fields that drifted from the plan contract")
+			}
+		})
+	}
+}
+
+func testRawCaptureContract(t *testing.T) radar.RawCaptureContract {
+	t.Helper()
+	contract := radar.StudioCLI.DeviceFamily().RawCaptureContract()
+	if !contract.Valid() {
+		t.Fatal("StudioCLI has no valid raw capture contract")
+	}
+	return contract
 }

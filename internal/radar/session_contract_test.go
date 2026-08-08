@@ -66,6 +66,17 @@ func TestValidateCaptureSessionV1PlanBindsExactSemantics(t *testing.T) {
 		}
 	})
 
+	t.Run("tampered raw capture contract", func(t *testing.T) {
+		tampered := plan
+		tampered.RawCapture.model = "iwr6843"
+		if sameCaptureGeometry(plan, tampered) {
+			t.Fatal("capture geometry ignored the raw capture contract")
+		}
+		if err := ValidateCaptureSessionV1Plan(snapshot, tampered); err == nil {
+			t.Fatal("capture plan with a different raw capture contract was accepted")
+		}
+	})
+
 	t.Run("different CFG with same geometry", func(t *testing.T) {
 		alternate := replaceCommand(
 			validCommands(),

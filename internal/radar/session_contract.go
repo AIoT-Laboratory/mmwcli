@@ -74,6 +74,7 @@ func ValidateCaptureSessionV1Plan(snapshot []byte, actual CapturePlan) error {
 
 func sameCapturePlan(left, right CapturePlan) bool {
 	return left.Dialect == right.Dialect &&
+		left.RawCapture == right.RawCapture &&
 		left.Mode == right.Mode &&
 		slices.Equal(left.ConfigurationCommands, right.ConfigurationCommands) &&
 		left.DeclaredStartCommand == right.DeclaredStartCommand &&
@@ -122,7 +123,8 @@ func parseCaptureSessionV1Commands(snapshot []byte) ([]string, error) {
 }
 
 func sameCaptureGeometry(left, right CapturePlan) bool {
-	return left.Mode == right.Mode &&
+	return left.RawCapture == right.RawCapture &&
+		left.Mode == right.Mode &&
 		left.ExpectedDCADataFormat == right.ExpectedDCADataFormat &&
 		left.BytesPerFrame == right.BytesPerFrame &&
 		left.ExpectedBytes == right.ExpectedBytes &&
