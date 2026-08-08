@@ -8,17 +8,33 @@ import (
 )
 
 func TestBuildCaptureSessionV1PlanAcceptsRepositoryConfigs(t *testing.T) {
-	for _, name := range []string{"studio-cli-xwr6843-raw.cfg", "debug-cli-xwr6843-raw.cfg"} {
-		t.Run(name, func(t *testing.T) {
-			snapshot, err := os.ReadFile(filepath.Join("..", "..", "hardware", name))
+	tests := []struct {
+		name          string
+		family        string
+		bytesPerFrame int64
+		expectedBytes int64
+	}{
+		{name: "studio-cli-xwr6843-raw.cfg", family: "xwr68xx", bytesPerFrame: 262_144, expectedBytes: 26_214_400},
+		{name: "debug-cli-xwr6843-raw.cfg", family: "xwr68xx", bytesPerFrame: 262_144, expectedBytes: 26_214_400},
+		{name: "debug-cli-xwr16xx-raw.cfg", family: "xwr16xx", bytesPerFrame: 262_144, expectedBytes: 26_214_400},
+		{name: "debug-cli-xwr18xx-raw.cfg", family: "xwr18xx", bytesPerFrame: 393_216, expectedBytes: 39_321_600},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot, err := os.ReadFile(filepath.Join("..", "..", "hardware", test.name))
 			if err != nil {
 				t.Fatal(err)
 			}
-			plan, err := BuildCaptureSessionV1Plan(snapshot, FullConfiguration)
+			family, err := ParseDeviceFamily(test.family)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if plan.ExpectedBytes != 26_214_400 || plan.BytesPerFrame != 262_144 {
+			plan, err := BuildCaptureSessionV1PlanForFamily(family, snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.DeviceFamily() != family ||
+				plan.ExpectedBytes != test.expectedBytes || plan.BytesPerFrame != test.bytesPerFrame {
 				t.Fatalf("plan sizes = frame %d total %d", plan.BytesPerFrame, plan.ExpectedBytes)
 			}
 		})
