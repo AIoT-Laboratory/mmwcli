@@ -72,7 +72,7 @@ func checkAssetsForFamily(familyID debugFamilyID, bssPath, mssPath string) (Asse
 		return Assets{}, err
 	}
 	if family.imagePolicy != debugFirmwareImageIWR6843RPRC {
-		return Assets{}, fmt.Errorf("unsupported debug-capture firmware image policy %d", family.imagePolicy)
+		return Assets{}, fmt.Errorf("unsupported debug-cli firmware image policy %d", family.imagePolicy)
 	}
 	assets, err := checkAssets(bssPath, mssPath, family.assets)
 	if err != nil {
@@ -94,7 +94,7 @@ func checkAssets(bssPath, mssPath string, expected contracts) (Assets, error) {
 	}
 	defer mss.file.Close()
 	if os.SameFile(bss.info, mss.info) {
-		return Assets{}, errors.New("debug-capture BSS and MSS firmware must be different files")
+		return Assets{}, errors.New("debug-cli BSS and MSS firmware must be different files")
 	}
 
 	bssFile, err := verifyCandidate(bss, expected.bss)
@@ -111,24 +111,24 @@ func checkAssets(bssPath, mssPath string, expected contracts) (Assets, error) {
 func inspectCandidate(path, role string) (candidate, error) {
 	cleaned := strings.Trim(strings.TrimSpace(path), `"`)
 	if cleaned == "" {
-		return candidate{}, fmt.Errorf("debug-capture %s firmware path is empty", role)
+		return candidate{}, fmt.Errorf("debug-cli %s firmware path is empty", role)
 	}
 	absolute, err := filepath.Abs(cleaned)
 	if err != nil {
-		return candidate{}, fmt.Errorf("resolve debug-capture %s firmware %q: %w", role, cleaned, err)
+		return candidate{}, fmt.Errorf("resolve debug-cli %s firmware %q: %w", role, cleaned, err)
 	}
 	file, err := os.Open(absolute)
 	if err != nil {
-		return candidate{}, fmt.Errorf("open debug-capture %s firmware %s: %w", role, absolute, err)
+		return candidate{}, fmt.Errorf("open debug-cli %s firmware %s: %w", role, absolute, err)
 	}
 	info, err := file.Stat()
 	if err != nil {
 		file.Close()
-		return candidate{}, fmt.Errorf("stat debug-capture %s firmware %s: %w", role, absolute, err)
+		return candidate{}, fmt.Errorf("stat debug-cli %s firmware %s: %w", role, absolute, err)
 	}
 	if !info.Mode().IsRegular() {
 		file.Close()
-		return candidate{}, fmt.Errorf("debug-capture %s firmware is not a regular file: %s", role, absolute)
+		return candidate{}, fmt.Errorf("debug-cli %s firmware is not a regular file: %s", role, absolute)
 	}
 	return candidate{path: absolute, info: info, file: file}, nil
 }
@@ -136,7 +136,7 @@ func inspectCandidate(path, role string) (candidate, error) {
 func verifyCandidate(candidate candidate, expected fileContract) (File, error) {
 	if candidate.info.Size() != expected.size {
 		return File{}, fmt.Errorf(
-			"debug-capture %s firmware size mismatch: expected=%d actual=%d path=%s",
+			"debug-cli %s firmware size mismatch: expected=%d actual=%d path=%s",
 			expected.role,
 			expected.size,
 			candidate.info.Size(),
@@ -145,11 +145,11 @@ func verifyCandidate(candidate candidate, expected fileContract) (File, error) {
 	}
 	content, err := io.ReadAll(io.LimitReader(candidate.file, expected.size+1))
 	if err != nil {
-		return File{}, fmt.Errorf("read debug-capture %s firmware %s: %w", expected.role, candidate.path, err)
+		return File{}, fmt.Errorf("read debug-cli %s firmware %s: %w", expected.role, candidate.path, err)
 	}
 	if int64(len(content)) != expected.size {
 		return File{}, fmt.Errorf(
-			"debug-capture %s firmware changed while reading: expected=%d actual=%d path=%s",
+			"debug-cli %s firmware changed while reading: expected=%d actual=%d path=%s",
 			expected.role,
 			expected.size,
 			len(content),
@@ -160,7 +160,7 @@ func verifyCandidate(candidate candidate, expected fileContract) (File, error) {
 	digest := strings.ToUpper(hex.EncodeToString(hash[:]))
 	if !strings.EqualFold(digest, expected.sha256) {
 		return File{}, fmt.Errorf(
-			"debug-capture %s firmware SHA-256 mismatch: expected=%s actual=%s path=%s",
+			"debug-cli %s firmware SHA-256 mismatch: expected=%s actual=%s path=%s",
 			expected.role,
 			expected.sha256,
 			digest,
@@ -169,11 +169,11 @@ func verifyCandidate(candidate candidate, expected fileContract) (File, error) {
 	}
 	image, err := parseRPRC(content)
 	if err != nil {
-		return File{}, fmt.Errorf("parse debug-capture %s firmware RPRC %s: %w", expected.role, candidate.path, err)
+		return File{}, fmt.Errorf("parse debug-cli %s firmware RPRC %s: %w", expected.role, candidate.path, err)
 	}
 	writes, err := planMemoryWrites(image, expected.target)
 	if err != nil {
-		return File{}, fmt.Errorf("plan debug-capture %s firmware writes %s: %w", expected.role, candidate.path, err)
+		return File{}, fmt.Errorf("plan debug-cli %s firmware writes %s: %w", expected.role, candidate.path, err)
 	}
 	return File{
 		Role:        expected.role,

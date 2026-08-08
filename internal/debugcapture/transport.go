@@ -13,7 +13,7 @@ import (
 	"mmwcli/internal/d2xx"
 )
 
-var ErrD2XXTransportClosed = errors.New("debug-capture D2XX transport is closed")
+var ErrD2XXTransportClosed = errors.New("debug-cli D2XX transport is closed")
 
 const (
 	nativeOperationTimeout = 10 * time.Second

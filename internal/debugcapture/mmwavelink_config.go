@@ -127,7 +127,7 @@ func buildPlanForFamily(familyID debugFamilyID, source radar.CapturePlan) (Plan,
 		return Plan{}, err
 	}
 	if family.rfPolicy != debugRFEncodingIWR6843ES2 {
-		return Plan{}, fmt.Errorf("unsupported debug-capture RF encoding policy %d", family.rfPolicy)
+		return Plan{}, fmt.Errorf("unsupported debug-cli RF encoding policy %d", family.rfPolicy)
 	}
 	snapshot := cloneRadarCapturePlan(source)
 	if snapshot.Dialect != radar.StudioCLI {
@@ -162,10 +162,10 @@ func validateRadarCapturePlan(source radar.CapturePlan) error {
 	}
 	rebuilt, err := radar.BuildCapturePlan(source.Dialect, commands, source.Mode)
 	if err != nil {
-		return fmt.Errorf("invalid debug-capture source plan: %w", err)
+		return fmt.Errorf("invalid debug-cli source plan: %w", err)
 	}
 	if !reflect.DeepEqual(rebuilt, source) {
-		return errors.New("debug-capture source plan metadata does not match its configuration commands")
+		return errors.New("debug-cli source plan metadata does not match its configuration commands")
 	}
 	return nil
 }
@@ -241,7 +241,7 @@ func parseMMWaveLinkConfiguration(
 	for _, command := range commands {
 		fields := strings.Fields(command)
 		if len(fields) == 0 {
-			return result, errors.New("debug-capture configuration contains an empty command")
+			return result, errors.New("debug-cli configuration contains an empty command")
 		}
 		name := fields[0]
 		switch name {
@@ -308,7 +308,7 @@ func parseMMWaveLinkConfiguration(
 				return result, fmt.Errorf("debug capture requires exact lvdsStreamCfg -1 0 1 0: %s", command)
 			}
 		default:
-			return result, fmt.Errorf("command %q is not part of the debug-capture configuration contract", name)
+			return result, fmt.Errorf("command %q is not part of the debug-cli configuration contract", name)
 		}
 	}
 

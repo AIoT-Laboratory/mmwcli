@@ -79,7 +79,7 @@ func bootstrapMMWaveLinkForFamily(
 		return mmWaveLinkDeviceDiagnostics{}, err
 	}
 	if family.bootPolicy != debugBootXWR68xxRFEval {
-		return mmWaveLinkDeviceDiagnostics{}, fmt.Errorf("unsupported debug-capture boot policy %d", family.bootPolicy)
+		return mmWaveLinkDeviceDiagnostics{}, fmt.Errorf("unsupported debug-cli boot policy %d", family.bootPolicy)
 	}
 	return bootstrapMMWaveLinkForContract(ctx, client, family)
 }

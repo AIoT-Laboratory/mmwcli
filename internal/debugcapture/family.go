@@ -34,7 +34,7 @@ type debugRuntimeContract struct {
 }
 
 // debugFamilyContract is deliberately private and closed. It binds only the
-// family-sensitive facts exercised by the current debug-capture path; adding a
+// family-sensitive facts exercised by the current debug-cli path; adding a
 // new family requires implementing every referenced policy before its ID can
 // resolve to a canonical contract.
 type debugFamilyContract struct {
@@ -80,7 +80,7 @@ func debugFamilyContractForID(id debugFamilyID) (debugFamilyContract, error) {
 	case debugFamilyIWR6843ES2:
 		return iwr6843ES2DebugFamily, nil
 	default:
-		return debugFamilyContract{}, fmt.Errorf("unsupported debug-capture family id %d", id)
+		return debugFamilyContract{}, fmt.Errorf("unsupported debug-cli family id %d", id)
 	}
 }
 
@@ -94,7 +94,7 @@ func (family debugFamilyContract) valid() bool {
 }
 
 // ValidateRawCaptureFPGAConfig applies the DCA contract of the only public
-// debug-capture family. It preserves the existing two-lane xWR68xx validation.
+// debug-cli family. It preserves the existing two-lane xWR68xx validation.
 func ValidateRawCaptureFPGAConfig(config dca.FPGAConfig) error {
 	family, err := debugFamilyContractForID(debugFamilyIWR6843ES2)
 	if err != nil {
@@ -108,7 +108,7 @@ func (policy debugCapturePolicy) validateDCA(config dca.FPGAConfig) error {
 	case debugCaptureTwoLaneDCAType2:
 		return dca.ValidateRawCaptureFPGAConfig(config)
 	default:
-		return fmt.Errorf("unsupported debug-capture DCA policy %d", policy)
+		return fmt.Errorf("unsupported debug-cli DCA policy %d", policy)
 	}
 }
 
@@ -117,6 +117,6 @@ func (policy debugCapturePolicy) laneEnablePayload() ([]byte, error) {
 	case debugCaptureTwoLaneDCAType2:
 		return []byte{3, 0, 0, 0}, nil
 	default:
-		return nil, fmt.Errorf("unsupported debug-capture lane policy %d", policy)
+		return nil, fmt.Errorf("unsupported debug-cli lane policy %d", policy)
 	}
 }

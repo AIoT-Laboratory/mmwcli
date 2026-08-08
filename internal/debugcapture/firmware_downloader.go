@@ -273,11 +273,11 @@ type firmwareSubmissionPlans struct {
 
 func preflightFirmwareSubmission(assets Assets) (firmwareSubmissionPlans, error) {
 	if len(assets.BSS.image.sections) == 0 {
-		return firmwareSubmissionPlans{}, errors.New("debug-capture BSS firmware has no RPRC sections")
+		return firmwareSubmissionPlans{}, errors.New("debug-cli BSS firmware has no RPRC sections")
 	}
 	if assets.BSS.image.sections[0].address != 0 {
 		return firmwareSubmissionPlans{}, fmt.Errorf(
-			"debug-capture BSS firmware uses unsupported patch entry 0x%X; xWR6843 ROM image entry must be zero",
+			"debug-cli BSS firmware uses unsupported patch entry 0x%X; xWR6843 ROM image entry must be zero",
 			assets.BSS.image.sections[0].address,
 		)
 	}
@@ -294,25 +294,25 @@ func preflightFirmwareSubmission(assets Assets) (firmwareSubmissionPlans, error)
 
 func preflightFirmwareFile(file File, role string, target rprcTarget) ([]memoryWrite, error) {
 	if file.Role != role {
-		return nil, fmt.Errorf("debug-capture %s firmware role is %q", role, file.Role)
+		return nil, fmt.Errorf("debug-cli %s firmware role is %q", role, file.Role)
 	}
 	if file.Sections != len(file.image.sections) || file.RPRCVersion != file.image.version ||
 		file.EntryPoint != file.image.entryPoints[0] {
-		return nil, fmt.Errorf("debug-capture %s firmware metadata does not match its RPRC image", role)
+		return nil, fmt.Errorf("debug-cli %s firmware metadata does not match its RPRC image", role)
 	}
 	planned, err := planMemoryWrites(file.image, target)
 	if err != nil {
-		return nil, fmt.Errorf("plan debug-capture %s firmware submission: %w", role, err)
+		return nil, fmt.Errorf("plan debug-cli %s firmware submission: %w", role, err)
 	}
 	if len(planned) == 0 {
-		return nil, fmt.Errorf("debug-capture %s firmware has no memory writes", role)
+		return nil, fmt.Errorf("debug-cli %s firmware has no memory writes", role)
 	}
 	if file.Writes != len(planned) || !equalMemoryWrites(file.writePlan, planned) {
-		return nil, fmt.Errorf("debug-capture %s firmware write plan does not match its RPRC image", role)
+		return nil, fmt.Errorf("debug-cli %s firmware write plan does not match its RPRC image", role)
 	}
 	for index, write := range planned {
 		if _, err := encodeEnhancedCOMBlockWrite(write.address, write.data); err != nil {
-			return nil, fmt.Errorf("debug-capture %s firmware block %d: %w", role, index, err)
+			return nil, fmt.Errorf("debug-cli %s firmware block %d: %w", role, index, err)
 		}
 	}
 	return planned, nil

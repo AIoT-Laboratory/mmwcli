@@ -99,7 +99,7 @@ func openEnhancedCOMConnectionForFamilyWithBackend(
 		return nil, err
 	}
 	if family.bootPolicy != debugBootXWR68xxRFEval {
-		return nil, fmt.Errorf("unsupported debug-capture boot policy %d", family.bootPolicy)
+		return nil, fmt.Errorf("unsupported debug-cli boot policy %d", family.bootPolicy)
 	}
 
 	client, probeValue, safeToNegotiate, err := openInitializedEnhancedCOMClient(ctx, portName, enhancedCOMBaud, backend)
@@ -276,7 +276,7 @@ func (connection *enhancedCOMConnection) submitFirmware(
 	}
 	if family.bootPolicy != debugBootXWR68xxRFEval {
 		return firmwareSubmissionReceipt{}, errors.Join(
-			fmt.Errorf("unsupported debug-capture boot policy %d", family.bootPolicy),
+			fmt.Errorf("unsupported debug-cli boot policy %d", family.bootPolicy),
 			connection.close(),
 		)
 	}
@@ -288,7 +288,7 @@ func (connection *enhancedCOMConnection) submitFirmware(
 	}
 	if assets.family != connection.family {
 		return firmwareSubmissionReceipt{}, errors.Join(
-			fmt.Errorf("debug-capture firmware family %d does not match Enhanced COM family %d", assets.family, connection.family),
+			fmt.Errorf("debug-cli firmware family %d does not match Enhanced COM family %d", assets.family, connection.family),
 			connection.close(),
 		)
 	}
