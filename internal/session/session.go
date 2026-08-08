@@ -62,11 +62,11 @@ type Participant interface {
 	Finish(context.Context, bool) error
 }
 
-// RadarStartObserver is an optional Participant capability. The two host
-// timestamps bracket the successful radar start call and retain Go's monotonic
-// clock reading for in-process synchronization.
-type RadarStartObserver interface {
-	RadarStarted(before, after time.Time)
+// RadarFrameStartObserver is an optional Participant capability. The lower
+// host timestamp precedes the radar start command; the upper timestamp is the
+// first received ADC packet. Together they conservatively bracket frame start.
+type RadarFrameStartObserver interface {
+	RadarFrameStartObserved(lower, upper time.Time)
 }
 
 // CleanupError marks a failure that occurred while converging hardware or
@@ -472,24 +472,23 @@ func Run(
 		log("capture participant started")
 	}
 	radarMayBeRunning = true
-	radarStartBefore := time.Now()
-	radarStartIssuedAt = radarStartBefore
+	radarStartIssuedAt = time.Now()
 	if plan.Mode == radar.ReuseConfiguration {
 		_, err = radarControl.StartWithoutReconfigurationContext(ctx)
 	} else {
 		_, err = radarControl.StartContext(ctx)
 	}
-	radarStartAfter := time.Now()
 	if err != nil {
 		return stats, fmt.Errorf("start radar: %w", err)
-	}
-	if observer, ok := participant.(RadarStartObserver); ok {
-		observer.RadarStarted(radarStartBefore, radarStartAfter)
 	}
 	log("radar started")
 
 	if err := receiver.WaitForFirst(ctx); err != nil {
 		return stats, err
+	}
+	firstPacketAt := receiver.Stats().FirstPacketAt
+	if observer, ok := participant.(RadarFrameStartObserver); ok && !firstPacketAt.IsZero() {
+		observer.RadarFrameStartObserved(radarStartIssuedAt, firstPacketAt)
 	}
 	if plan.InfiniteFrames {
 		stats, err = receiver.Wait(ctx)
@@ -499,7 +498,6 @@ func Run(
 		return stats, err
 	}
 
-	firstPacketAt := receiver.Stats().FirstPacketAt
 	if firstPacketAt.IsZero() {
 		return stats, errors.New("DCA1000 receiver reported a first packet without a timestamp")
 	}

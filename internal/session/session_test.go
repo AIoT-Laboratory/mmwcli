@@ -139,8 +139,8 @@ type fakeParticipant struct {
 }
 
 type radarStartWindow struct {
-	before time.Time
-	after  time.Time
+	lower time.Time
+	upper time.Time
 }
 
 type fakeObservedParticipant struct {
@@ -148,9 +148,9 @@ type fakeObservedParticipant struct {
 	windows []radarStartWindow
 }
 
-func (f *fakeObservedParticipant) RadarStarted(before, after time.Time) {
-	*f.events = append(*f.events, "participantRadarStarted")
-	f.windows = append(f.windows, radarStartWindow{before: before, after: after})
+func (f *fakeObservedParticipant) RadarFrameStartObserved(lower, upper time.Time) {
+	*f.events = append(*f.events, "participantRadarFrameStartObserved")
+	f.windows = append(f.windows, radarStartWindow{lower: lower, upper: upper})
 }
 
 func (f *fakeParticipant) Arm(context.Context) error {
@@ -819,6 +819,13 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 	}
 	events := []string{}
 	participant := &fakeObservedParticipant{fakeParticipant: &fakeParticipant{events: &events}}
+	receiver := &fakeReceiver{
+		events: &events,
+		stats: dca.CaptureStats{
+			PacketsReceived: 1,
+			OutputBytes:     plan.ExpectedBytes,
+		},
+	}
 	options := DefaultOptions()
 	options.Participant = participant
 
@@ -827,13 +834,7 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 		&fakeFiniteFrameRadar{fakeRadar: &fakeRadar{events: &events}},
 		&fakeDCA{events: &events},
 		func(dca.ReceiverConfig) (DataReceiver, error) {
-			return &fakeReceiver{
-				events: &events,
-				stats: dca.CaptureStats{
-					PacketsReceived: 1,
-					OutputBytes:     plan.ExpectedBytes,
-				},
-			}, nil
+			return receiver, nil
 		},
 		plan,
 		output,
@@ -845,7 +846,7 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 	want := []string{
 		"version", "sensorStop", "dcaStop", "dcaConfigure", "apply",
 		"participantArm", "receiverStart", "dcaStart", "participantStart", "sensorStart",
-		"participantRadarStarted", "receiverFirst", "receiverWait", "frameEnd", "receiverWait", "dcaStop", "dcaDrain",
+		"receiverFirst", "participantRadarFrameStartObserved", "receiverWait", "frameEnd", "receiverWait", "dcaStop", "dcaDrain",
 		"receiverClose", "participantFinish:true",
 	}
 	if !reflect.DeepEqual(events, want) {
@@ -854,8 +855,11 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 	if !reflect.DeepEqual(participant.finished, []bool{true}) {
 		t.Fatalf("participant outcomes = %v, want [true]", participant.finished)
 	}
-	if len(participant.windows) != 1 || participant.windows[0].after.Before(participant.windows[0].before) {
+	if len(participant.windows) != 1 || participant.windows[0].upper.Before(participant.windows[0].lower) {
 		t.Fatalf("radar start windows = %#v", participant.windows)
+	}
+	if !participant.windows[0].upper.Equal(receiver.stats.FirstPacketAt) {
+		t.Fatalf("observer upper = %v, receiver FirstPacketAt = %v", participant.windows[0].upper, receiver.stats.FirstPacketAt)
 	}
 	if _, err := os.Stat(finalPath); err != nil {
 		t.Fatalf("participant capture was not committed: %v", err)
@@ -889,7 +893,7 @@ func TestRadarStartFailureDoesNotNotifyParticipant(t *testing.T) {
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Run error = %v, want %v", err, wantErr)
 	}
-	if len(participant.windows) != 0 || containsEvent(events, "participantRadarStarted") {
+	if len(participant.windows) != 0 || containsEvent(events, "participantRadarFrameStartObserved") {
 		t.Fatalf("observer notified after failed radar start: windows=%v events=%v", participant.windows, events)
 	}
 	if !containsEvent(events, "sensorStart") {
