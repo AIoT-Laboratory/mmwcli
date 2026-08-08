@@ -22,10 +22,6 @@ const (
 	CaptureSessionSchemaV1 = "mmwcli.capture_session.v1"
 
 	producerName       = "mmwcli"
-	adcDataType        = "int16"
-	adcByteOrder       = "little"
-	adcLayout          = "group2_i_then_q"
-	radarConfigFormat  = "ti_xwr68xx_legacy_cli"
 	maximumVersionSize = 128
 )
 
@@ -91,6 +87,7 @@ type sessionRecordV1 struct {
 	StreamID    string              `json:"stream_id"`
 	Producer    producerRecordV1    `json:"producer"`
 	Mode        string              `json:"mode"`
+	Hardware    hardwareRecordV1    `json:"hardware"`
 	Capture     captureRecordV1     `json:"capture"`
 	ADC         adcRecordV1         `json:"adc"`
 	RadarConfig radarConfigRecordV1 `json:"radar_config"`
@@ -100,6 +97,14 @@ type sessionRecordV1 struct {
 type producerRecordV1 struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
+}
+
+type hardwareRecordV1 struct {
+	Vendor         string `json:"vendor"`
+	Family         string `json:"family"`
+	Model          string `json:"model"`
+	Revision       string `json:"revision"`
+	IdentitySource string `json:"identity_source"`
 }
 
 type captureRecordV1 struct {
@@ -114,6 +119,7 @@ type captureRecordV1 struct {
 type adcRecordV1 struct {
 	DataType  string `json:"dtype"`
 	ByteOrder string `json:"byte_order"`
+	LaneCount uint8  `json:"lane_count"`
 	Layout    string `json:"layout"`
 }
 
@@ -156,6 +162,7 @@ func buildSessionPayload(
 		return nil, captureShape{}, err
 	}
 	configDigest := sha256.Sum256(radarConfig)
+	contract := plan.RawCapture
 	record := sessionRecordV1{
 		Schema:   SchemaV1,
 		StreamID: streamIDString(session.StreamID),
@@ -164,6 +171,13 @@ func buildSessionPayload(
 			Version: session.ProducerVersion,
 		},
 		Mode: string(session.Mode),
+		Hardware: hardwareRecordV1{
+			Vendor:         contract.Vendor(),
+			Family:         contract.Family(),
+			Model:          contract.Model(),
+			Revision:       contract.Revision(),
+			IdentitySource: contract.IdentitySource(),
+		},
 		Capture: captureRecordV1{
 			FrameCount:           shape.frameCount,
 			FrameBytes:           shape.frameBytes,
@@ -173,12 +187,13 @@ func buildSessionPayload(
 			ADCByteOffsetOrigin:  0,
 		},
 		ADC: adcRecordV1{
-			DataType:  adcDataType,
-			ByteOrder: adcByteOrder,
-			Layout:    adcLayout,
+			DataType:  contract.DataType(),
+			ByteOrder: contract.ByteOrder(),
+			LaneCount: contract.LaneCount(),
+			Layout:    contract.Layout(),
 		},
 		RadarConfig: radarConfigRecordV1{
-			Format:    radarConfigFormat,
+			Format:    contract.ConfigFormat(),
 			SizeBytes: uint64(len(radarConfig)),
 			SHA256:    hex.EncodeToString(configDigest[:]),
 		},
@@ -214,6 +229,9 @@ func validateSession(
 	}
 	if session.Mode != CaptureModeStudioCLI && session.Mode != CaptureModeDebugCapture {
 		return captureShape{}, fmt.Errorf("unsupported capture stream mode %q", session.Mode)
+	}
+	if !plan.RawCapture.Valid() {
+		return captureShape{}, errors.New("capture stream raw capture contract is invalid")
 	}
 	if len(radarConfig) == 0 || len(bytes.TrimSpace(radarConfig)) == 0 {
 		return captureShape{}, errors.New("capture stream radar configuration is empty")
