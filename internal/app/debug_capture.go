@@ -107,6 +107,7 @@ func runDebugCaptureCaptureWithDependencies(
 	descriptionBase := flags.String("d2xx-description", "", "D2XX description base for the A/B interfaces")
 	sop2Reset := flags.Bool("sop2-reset", false, "set SOP2 with D2XX C/D and pulse target reset before Enhanced COM")
 	streamOutput := flags.Bool("stream", false, "also emit capture-stream v1 on stdout")
+	multisensorPlanPath := flags.String("multisensor-plan", "", "external sensor plan JSON file")
 	dcaValues := addDCAFlags(flags, "dca-timeout-ms", dcaConfigurationFlags|dcaReceiverFlags)
 
 	if len(arguments) != 0 && isHelp(arguments[0]) {
@@ -121,6 +122,9 @@ func runDebugCaptureCaptureWithDependencies(
 	}
 	if flags.NArg() != 0 {
 		return usageError{message: "unexpected debug-cli capture arguments: " + strings.Join(flags.Args(), " ")}
+	}
+	if *streamOutput && *multisensorPlanPath != "" {
+		return usageError{message: "--stream and --multisensor-plan are mutually exclusive"}
 	}
 	device, err := parseDebugCaptureDeviceFamily(*familyName)
 	if err != nil {
@@ -185,6 +189,7 @@ func runDebugCaptureCaptureWithDependencies(
 
 	stats, err := runDebugCaptureHardware(
 		diagnostics,
+		stderr,
 		streamStdout,
 		outputPath,
 		prepared,
@@ -194,6 +199,7 @@ func runDebugCaptureCaptureWithDependencies(
 		*sop2Reset,
 		linkPlan,
 		dcaOptions,
+		*multisensorPlanPath,
 		dependencies,
 	)
 	if err != nil {
@@ -367,6 +373,7 @@ func preflightDebugCaptureBounds(
 
 func runDebugCaptureHardware(
 	stdout io.Writer,
+	producerStderr io.Writer,
 	streamStdout *os.File,
 	outputPath string,
 	prepared preparedCaptureOutput,
@@ -376,21 +383,26 @@ func runDebugCaptureHardware(
 	resetSOP2 bool,
 	linkPlan debugcapture.Plan,
 	dcaOptions dcaCommandOptions,
+	multisensorPlanPath string,
 	dependencies debugCaptureDependencies,
 ) (stats dca.CaptureStats, resultErr error) {
 	plan := prepared.plan
 	// Reserving the OUT.part file or directory is the final preflight and
 	// precedes every hardware I/O.
-	output, err := createCaptureOutput(outputPath, prepared.finalizeSession)
+	ctx, stopSignal := dependencies.context()
+	defer stopSignal()
+	output, aggregate, err := createCaptureDestination(
+		ctx, outputPath, multisensorPlanPath, prepared, producerStderr, stopSignal,
+	)
 	if err != nil {
 		return stats, err
 	}
 	defer func() {
 		resultErr = joinDebugCaptureCleanup(resultErr, "capture output", output.Close())
 	}()
-
-	ctx, stopSignal := dependencies.context()
-	defer stopSignal()
+	if aggregate != nil {
+		defer func() { resultErr = aggregate.finish(ctx, resultErr) }()
+	}
 	var stream *activeCaptureStream
 	if streamStdout != nil {
 		stream, err = startCaptureStream(
@@ -447,6 +459,9 @@ func runDebugCaptureHardware(
 	sessionOptions.DrainTimeout = 3 * time.Second
 	if stream != nil {
 		sessionOptions.Mirror = stream.mirror
+	}
+	if aggregate != nil {
+		sessionOptions.Participant = aggregate
 	}
 	sessionOptions.Log = func(message string) { fmt.Fprintln(stdout, "[capture] "+message) }
 	stats, err = dependencies.runSession(

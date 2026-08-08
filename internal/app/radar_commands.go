@@ -174,6 +174,7 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	serialTimeoutMS := flags.Int("serial-timeout-ms", 10000, "serial command timeout")
 	streamOutput := false
 	flags.BoolVar(&streamOutput, "stream", false, "also emit capture-stream v1 on stdout")
+	multisensorPlanPath := flags.String("multisensor-plan", "", "external sensor plan JSON file")
 	dcaValues := addDCAFlags(flags, "dca-timeout-ms", dcaConfigurationFlags|dcaReceiverFlags)
 	if len(arguments) != 0 && isHelp(arguments[0]) {
 		return parseCommandFlags(flags, arguments)
@@ -187,6 +188,9 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	}
 	if flags.NArg() != 0 {
 		return usageError{message: "unexpected capture arguments: " + strings.Join(flags.Args(), " ")}
+	}
+	if streamOutput && *multisensorPlanPath != "" {
+		return usageError{message: "--stream and --multisensor-plan are mutually exclusive"}
 	}
 	if *portName == "" {
 		return usageError{message: "--port is required; mmwcli never scans serial ports"}
@@ -268,14 +272,25 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	}
 	printCapturePlan(diagnostics, plan)
 
-	// Reserve the OUT.part file or directory before any hardware access.
-	output, err := createCaptureOutput(outputPath, prepared.finalizeSession)
+	var stats dca.CaptureStats
+	ctx, stopSignal := hardwareSignalContext()
+	defer stopSignal()
+	// Reserve OUT.part and complete external READY before hardware access.
+	output, aggregate, err := createCaptureDestination(
+		ctx, outputPath, *multisensorPlanPath, prepared, stderr, stopSignal,
+	)
 	if err != nil {
 		return err
 	}
 	defer func() { resultErr = errorsJoin(resultErr, output.Close()) }()
-	ctx, stopSignal := hardwareSignalContext()
-	defer stopSignal()
+	if aggregate != nil {
+		defer func() {
+			if resultErr == nil {
+				fmt.Fprintln(diagnostics, formatCaptureStats(stats))
+			}
+		}()
+		defer func() { resultErr = aggregate.finish(ctx, resultErr) }()
+	}
 	var stream *activeCaptureStream
 	if streamOutput {
 		stream, err = startCaptureStream(
@@ -332,8 +347,11 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	if stream != nil {
 		sessionOptions.Mirror = stream.mirror
 	}
+	if aggregate != nil {
+		sessionOptions.Participant = aggregate
+	}
 	sessionOptions.Log = func(message string) { fmt.Fprintln(diagnostics, "[capture] "+message) }
-	stats, err := session.Run(
+	stats, err = session.Run(
 		ctx,
 		radarClient,
 		dcaClient,
@@ -347,7 +365,9 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(diagnostics, formatCaptureStats(stats))
+	if aggregate == nil {
+		fmt.Fprintln(diagnostics, formatCaptureStats(stats))
+	}
 	return nil
 }
 
