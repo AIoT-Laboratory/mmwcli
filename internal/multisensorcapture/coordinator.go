@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"mmwcli/internal/multisensor"
+	"mmwcli/internal/multisensorstream"
 	"mmwcli/internal/sensorproducer"
 )
 
@@ -42,10 +43,18 @@ type StartProducerFunc func(
 	sensorproducer.ProcessOptions,
 ) (ProducerProcess, error)
 
+// ItemSink receives provisional external-source items after the authoritative
+// payload and in-memory index have accepted them. Implementations must return
+// when ctx is canceled and may be called concurrently by different sources.
+type ItemSink interface {
+	WriteItem(context.Context, multisensorstream.Item) error
+}
+
 type Options struct {
 	ReadyTimeout      time.Duration
 	Stderr            io.Writer
 	StartProducer     StartProducerFunc
+	ItemSink          ItemSink
 	OnRequiredFailure func(error)
 }
 
@@ -148,7 +157,7 @@ func Start(
 			process, err = starter(ctx, append([]string(nil), sourcePlan.Argv...), sessionID, sourcePlan.SourceID,
 				sensorproducer.ProcessOptions{Stderr: options.Stderr, QueueSize: sourcePlan.QueueSize})
 			if err == nil {
-				slot.worker, err = newSourceWorker(ctx, sessionID, sourcePlan, sourcePath, process,
+				slot.worker, err = newSourceWorker(ctx, sessionID, sourcePlan, sourcePath, process, options.ItemSink,
 					func(failure error) { coordinator.requiredFailure(sourcePlan, failure) })
 			}
 		}

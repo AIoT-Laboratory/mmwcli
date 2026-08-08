@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"mmwcli/internal/multisensor"
+	"mmwcli/internal/multisensorstream"
 	"mmwcli/internal/sensorproducer"
 )
 
@@ -25,6 +26,7 @@ type sourceWorker struct {
 	sessionID string
 	sourceDir string
 	process   ProducerProcess
+	itemSink  ItemSink
 
 	drainCancel context.CancelFunc
 	done        chan struct{}
@@ -42,6 +44,7 @@ func newSourceWorker(
 	plan SourcePlan,
 	sourceDir string,
 	process ProducerProcess,
+	itemSink ItemSink,
 	onFailure func(error),
 ) (*sourceWorker, error) {
 	payloadPath := filepath.Join(sourceDir, plan.Payload.Filename)
@@ -52,7 +55,7 @@ func newSourceWorker(
 	drainCtx, cancel := context.WithCancel(ctx)
 	worker := &sourceWorker{
 		plan: plan, sessionID: sessionID, sourceDir: sourceDir, process: process,
-		drainCancel: cancel, done: make(chan struct{}),
+		itemSink: itemSink, drainCancel: cancel, done: make(chan struct{}),
 	}
 	go func() {
 		worker.drain(payload, drainCtx)
@@ -197,6 +200,16 @@ func (worker *sourceWorker) readStream(
 				SyncEventID: item.SyncEventID,
 			})
 			index.PayloadBytes = payloadEnd
+			if worker.itemSink != nil {
+				err := worker.itemSink.WriteItem(ctx, multisensorstream.Item{
+					SourceID: worker.plan.SourceID, ItemIndex: item.ItemIndex,
+					Tick: item.Tick, WrapCount: item.WrapCount, DurationTicks: item.DurationTicks,
+					SyncEventID: item.SyncEventID, Payload: record.Payload,
+				})
+				if err != nil {
+					return metadata, index, payloadHash, fmt.Errorf("write producer ITEM sink: %w", err)
+				}
+			}
 		case sensorproducer.FrameEnd:
 			if metadata == nil || ended || eofFrame {
 				return metadata, index, payloadHash, errors.New("producer END frame is out of order")

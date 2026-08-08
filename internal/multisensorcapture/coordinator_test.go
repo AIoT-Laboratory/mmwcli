@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"mmwcli/internal/multisensor"
+	"mmwcli/internal/multisensorstream"
 	"mmwcli/internal/sensorproducer"
 )
 
@@ -28,8 +29,13 @@ func TestCoordinatorRecordsCompleteExternalSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sourcePath, err := directory.SourcePath("camera-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &recordingItemSink{payloadPath: filepath.Join(sourcePath, "frames.bin")}
 	coordinator, err := Start(context.Background(), validPlan(true, limits), testSessionID, directory, Options{
-		StartProducer: fakeStarter(producer), OnRequiredFailure: func(error) {
+		StartProducer: fakeStarter(producer), ItemSink: sink, OnRequiredFailure: func(error) {
 			t.Error("unexpected required-source failure callback")
 		},
 	})
@@ -57,10 +63,6 @@ func TestCoordinatorRecordsCompleteExternalSource(t *testing.T) {
 	if source.Outcome != multisensor.OutcomeComplete || source.ItemCount != 2 || source.PayloadBytes != 5 {
 		t.Fatalf("unexpected source: %+v", source)
 	}
-	sourcePath, err := directory.SourcePath("camera-0")
-	if err != nil {
-		t.Fatal(err)
-	}
 	payload, err := os.ReadFile(filepath.Join(sourcePath, "frames.bin"))
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +81,24 @@ func TestCoordinatorRecordsCompleteExternalSource(t *testing.T) {
 	if len(index.Entries) != 2 || index.Entries[1].PayloadOffset != 3 || index.PayloadBytes != 5 {
 		t.Fatalf("unexpected index: %+v", index)
 	}
+	items, authoritativePayloads, sinkErr := sink.snapshot()
+	if sinkErr != nil {
+		t.Fatal(sinkErr)
+	}
+	if len(items) != 2 || string(items[0].Payload) != string(payloads[0]) ||
+		string(items[1].Payload) != string(payloads[1]) {
+		t.Fatalf("sink items = %+v", items)
+	}
+	if items[1].SourceID != "camera-0" || items[1].ItemIndex != index.Entries[1].ItemIndex ||
+		items[1].Tick != index.Entries[1].Tick || items[1].WrapCount != index.Entries[1].WrapCount ||
+		items[1].DurationTicks != index.Entries[1].DurationTicks ||
+		items[1].SyncEventID != index.Entries[1].SyncEventID {
+		t.Fatalf("sink item does not match authoritative index: item=%+v index=%+v", items[1], index.Entries[1])
+	}
+	if len(authoritativePayloads) != 2 || string(authoritativePayloads[0]) != string(payloads[0]) ||
+		string(authoritativePayloads[1]) != string(payload) {
+		t.Fatalf("authority snapshots before sink = %v", authoritativePayloads)
+	}
 	if calls := producer.callList(); strings.Join(calls, ",") != "READY,ARM,START,STOP,WAIT" {
 		t.Fatalf("producer calls = %v", calls)
 	}
@@ -87,6 +107,69 @@ func TestCoordinatorRecordsCompleteExternalSource(t *testing.T) {
 	sources, err := coordinator.Sources()
 	if err != nil || sources[0].Artifacts[0].SHA256 == "mutated" {
 		t.Fatalf("Sources clone = %+v, err=%v", sources, err)
+	}
+}
+
+func TestCoordinatorItemSinkFailureFollowsSourceRequirement(t *testing.T) {
+	for _, required := range []bool{true, false} {
+		t.Run(map[bool]string{true: "required", false: "optional"}[required], func(t *testing.T) {
+			limits := multisensor.SourceLimits{MaxItems: 2, MaxItemBytes: 4, MaxPayloadBytes: 8}
+			producer := newFakeProducer(testRecords(t, [][]byte{{1, 2, 3}}, false, limits))
+			wantErr := errors.New("stdout unavailable")
+			failed := make(chan error, 1)
+			cancelled, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			coordinator, directory := newTestCoordinator(t, producer, required, limits, Options{
+				ItemSink: itemSinkFunc(func(context.Context, multisensorstream.Item) error { return wantErr }),
+				OnRequiredFailure: func(err error) {
+					failed <- err
+					cancel()
+				},
+			})
+			if err := coordinator.Arm(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := coordinator.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			err := coordinator.Finish(context.Background(), true)
+			if required {
+				if !errors.Is(err, wantErr) {
+					t.Fatalf("required Finish error = %v", err)
+				}
+				select {
+				case callbackErr := <-failed:
+					if !errors.Is(callbackErr, wantErr) || cancelled.Err() == nil {
+						t.Fatalf("required callback = %v, cancellation = %v", callbackErr, cancelled.Err())
+					}
+				default:
+					t.Fatal("required sink failure did not cancel capture")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("optional Finish error = %v", err)
+			}
+			select {
+			case callbackErr := <-failed:
+				t.Fatalf("optional sink failure invoked required callback: %v", callbackErr)
+			default:
+			}
+			sources, err := coordinator.Sources()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(sources) != 1 || sources[0].Outcome != multisensor.OutcomeFailed {
+				t.Fatalf("optional source outcome = %+v", sources)
+			}
+			path, pathErr := directory.SourcePath("camera-0")
+			if pathErr != nil {
+				t.Fatal(pathErr)
+			}
+			if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("optional failed source directory remains: %v", statErr)
+			}
+		})
 	}
 }
 
@@ -304,6 +387,45 @@ type fakeProducer struct {
 	closeOnce  sync.Once
 	calls      []string
 	readyBlock bool
+}
+
+type itemSinkFunc func(context.Context, multisensorstream.Item) error
+
+func (sink itemSinkFunc) WriteItem(ctx context.Context, item multisensorstream.Item) error {
+	return sink(ctx, item)
+}
+
+type recordingItemSink struct {
+	mu          sync.Mutex
+	payloadPath string
+	items       []multisensorstream.Item
+	snapshots   [][]byte
+	err         error
+}
+
+func (sink *recordingItemSink) WriteItem(_ context.Context, item multisensorstream.Item) error {
+	authoritative, err := os.ReadFile(sink.payloadPath)
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if err != nil {
+		sink.err = err
+		return err
+	}
+	item.Payload = append([]byte(nil), item.Payload...)
+	sink.items = append(sink.items, item)
+	sink.snapshots = append(sink.snapshots, authoritative)
+	return nil
+}
+
+func (sink *recordingItemSink) snapshot() ([]multisensorstream.Item, [][]byte, error) {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	items := append([]multisensorstream.Item(nil), sink.items...)
+	snapshots := make([][]byte, len(sink.snapshots))
+	for index := range snapshots {
+		snapshots[index] = append([]byte(nil), sink.snapshots[index]...)
+	}
+	return items, snapshots, sink.err
 }
 
 func newFakeProducer(records []sensorproducer.Record) *fakeProducer {
