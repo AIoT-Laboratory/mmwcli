@@ -37,6 +37,7 @@ type RecordType uint16
 const (
 	RecordSession RecordType = iota + 1
 	RecordRadarConfig
+	RecordRadarStart
 	RecordItem
 	RecordEnd
 	RecordCommit
@@ -179,7 +180,7 @@ func validateWirePayload(recordType RecordType, size uint64) error {
 		if size == 0 || size > multisensorMaximumItemBytes {
 			return fmt.Errorf("%w: ITEM payload size %d is invalid", ErrLimit, size)
 		}
-	case RecordSession, RecordEnd, RecordCommit, RecordAbort, RecordEOF:
+	case RecordSession, RecordRadarStart, RecordEnd, RecordCommit, RecordAbort, RecordEOF:
 		if size != 0 {
 			return fmt.Errorf("%w: record type %d cannot carry a raw payload", ErrProtocol, recordType)
 		}

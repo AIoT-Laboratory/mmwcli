@@ -46,7 +46,7 @@ func TestCommittedStreamMatchesDeterministicGoldenAndInterleavesSources(t *testi
 	}
 	wantTypes := []RecordType{
 		RecordSession, RecordRadarConfig,
-		RecordItem, RecordItem, RecordItem, RecordItem,
+		RecordItem, RecordRadarStart, RecordItem, RecordItem, RecordItem,
 		RecordEnd, RecordEnd, RecordCommit, RecordEOF,
 	}
 	if len(records) != len(wantTypes) {
@@ -63,13 +63,14 @@ func TestCommittedStreamMatchesDeterministicGoldenAndInterleavesSources(t *testi
 		index  uint64
 		data   string
 	}{
-		{"radar-0", 0, "R000"},
 		{"camera-0", 0, "JPEG-A"},
+		{"radar-0", 0, "R000"},
 		{"radar-0", 1, "R1"},
 		{"camera-0", 1, "JPEG-B"},
 	}
+	itemRecords := []Record{records[2], records[4], records[5], records[6]}
 	for itemIndex, wantItem := range wantItems {
-		record := records[2+itemIndex]
+		record := itemRecords[itemIndex]
 		var metadata itemRecordV1
 		if err := decodeExactMetadata(
 			record.Metadata,
@@ -83,10 +84,22 @@ func TestCommittedStreamMatchesDeterministicGoldenAndInterleavesSources(t *testi
 			t.Fatalf("ITEM %d = %+v payload %q", itemIndex, metadata, record.Payload)
 		}
 	}
+	var radarStart radarStartRecordV1
+	if err := decodeExactMetadata(
+		records[3].Metadata,
+		&radarStart,
+		"schema", "source_id", "host_lower_ns", "host_upper_ns",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if radarStart.Schema != RadarStartSchemaV1 || radarStart.SourceID != "radar-0" ||
+		radarStart.HostLowerNS != 1_000_000_000 || radarStart.HostUpperNS != 1_000_000_100 {
+		t.Fatalf("RADAR_START = %+v", radarStart)
+	}
 
 	var cameraEnd endRecordV1
 	if err := decodeExactMetadata(
-		records[6].Metadata,
+		records[7].Metadata,
 		&cameraEnd,
 		"schema", "source_id", "outcome", "item_count", "payload_bytes", "payload_sha256",
 	); err != nil {
@@ -99,7 +112,7 @@ func TestCommittedStreamMatchesDeterministicGoldenAndInterleavesSources(t *testi
 	// Camera ITEMs remain visible as provisional records, but its failed END
 	// tells a committed-stream consumer to discard both of them.
 	kept := 0
-	for _, record := range records[2:6] {
+	for _, record := range itemRecords {
 		var item itemRecordV1
 		if err := json.Unmarshal(record.Metadata, &item); err != nil {
 			t.Fatal(err)
@@ -141,7 +154,7 @@ func TestDecoderRejectsCorruptionSequenceAndPerSourceOrder(t *testing.T) {
 			name:  "radar item gap despite camera interleave",
 			match: "item_index",
 			mutate: func(t *testing.T, stream []byte) {
-				span := recordSpans(t, stream)[4]
+				span := recordSpans(t, stream)[5]
 				metadata := stream[span.metadataStart:span.payloadStart]
 				field := []byte(`"item_index":1`)
 				position := bytes.Index(metadata, field)
@@ -149,6 +162,21 @@ func TestDecoderRejectsCorruptionSequenceAndPerSourceOrder(t *testing.T) {
 					t.Fatalf("item_index field not found in %s", metadata)
 				}
 				metadata[position+len(field)-1] = '2'
+				recomputeRecordDigest(t, stream, span)
+			},
+		},
+		{
+			name:  "reversed radar start bounds",
+			match: "bounds are reversed",
+			mutate: func(t *testing.T, stream []byte) {
+				span := recordSpans(t, stream)[3]
+				metadata := stream[span.metadataStart:span.payloadStart]
+				field := []byte(`"host_lower_ns":1000000000`)
+				position := bytes.Index(metadata, field)
+				if position < 0 {
+					t.Fatalf("host_lower_ns field not found in %s", metadata)
+				}
+				copy(metadata[position:position+len(field)], []byte(`"host_lower_ns":1000000200`))
 				recomputeRecordDigest(t, stream, span)
 			},
 		},
@@ -165,10 +193,181 @@ func TestDecoderRejectsCorruptionSequenceAndPerSourceOrder(t *testing.T) {
 	}
 }
 
+func TestRadarStartAllowsCameraFirstAndRejectsInvalidState(t *testing.T) {
+	var output bytes.Buffer
+	encoder, err := NewEncoder(&output, testSession())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.WriteItem(Item{
+		SourceID: "camera-0", ItemIndex: 0, Tick: 10, DurationTicks: 2,
+		SyncEventID: NoSyncEventID, Payload: []byte("camera-first"),
+	}); err != nil {
+		t.Fatalf("camera ITEM before RADAR_START: %v", err)
+	}
+	start := RadarStart{SourceID: "radar-0", HostLowerNS: 100, HostUpperNS: 200}
+	if err := encoder.WriteRadarStart(start); err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.WriteItem(Item{
+		SourceID: "radar-0", ItemIndex: 0, Tick: 100, DurationTicks: 10,
+		SyncEventID: NoSyncEventID, Payload: []byte("radar"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.WriteRadarStart(start); err == nil || !strings.Contains(err.Error(), "already") {
+		t.Fatalf("duplicate RADAR_START error = %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		apply func(*Encoder) error
+		match string
+	}{
+		{
+			name: "camera source",
+			apply: func(encoder *Encoder) error {
+				return encoder.WriteRadarStart(RadarStart{SourceID: "camera-0"})
+			},
+			match: "not a declared radar",
+		},
+		{
+			name: "reversed bounds",
+			apply: func(encoder *Encoder) error {
+				return encoder.WriteRadarStart(RadarStart{
+					SourceID: "radar-0", HostLowerNS: 2, HostUpperNS: 1,
+				})
+			},
+			match: "must not exceed",
+		},
+		{
+			name: "radar item before start",
+			apply: func(encoder *Encoder) error {
+				return encoder.WriteItem(Item{
+					SourceID: "radar-0", ItemIndex: 0, Tick: 100, DurationTicks: 10,
+					SyncEventID: NoSyncEventID, Payload: []byte("radar"),
+				})
+			},
+			match: "requires a preceding RADAR_START",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			encoder, err := NewEncoder(&output, testSession())
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := output.Len()
+			if err := test.apply(encoder); err == nil || !strings.Contains(err.Error(), test.match) {
+				t.Fatalf("error = %v, want %q", err, test.match)
+			}
+			if output.Len() != before {
+				t.Fatal("invalid RADAR_START state changed stdout")
+			}
+		})
+	}
+}
+
+func TestDecoderRejectsRadarStartSourceOrderUniquenessAndExactMetadata(t *testing.T) {
+	sessionMetadata, err := encodeMetadata(sessionRecordV1{
+		Schema: SchemaV1, SessionID: testSession().SessionID,
+		SynchronizationGrade: testSession().SynchronizationGrade, Sources: testSession().Sources,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startMetadata, err := encodeMetadata(radarStartRecordV1{
+		Schema: RadarStartSchemaV1, SourceID: "radar-0", HostLowerNS: 100, HostUpperNS: 200,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cameraStartMetadata, err := encodeMetadata(radarStartRecordV1{
+		Schema: RadarStartSchemaV1, SourceID: "camera-0", HostLowerNS: 100, HostUpperNS: 200,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	itemMetadata, err := encodeMetadata(itemRecordV1{
+		Schema: ItemSchemaV1, SourceID: "radar-0", ItemIndex: 0, Provisional: true,
+		Tick: 100, DurationTicks: 10, SyncEventID: NoSyncEventID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		records []Record
+		match   string
+	}{
+		{
+			name: "radar item before start",
+			records: []Record{
+				{Type: RecordItem, Metadata: itemMetadata, Payload: []byte("radar")},
+			},
+			match: "preceding RADAR_START",
+		},
+		{
+			name: "camera source",
+			records: []Record{
+				{Type: RecordRadarStart, Metadata: cameraStartMetadata},
+			},
+			match: "source contract",
+		},
+		{
+			name: "duplicate",
+			records: []Record{
+				{Type: RecordRadarStart, Metadata: startMetadata},
+				{Type: RecordRadarStart, Metadata: startMetadata},
+			},
+			match: "unique",
+		},
+		{
+			name: "after radar item",
+			records: []Record{
+				{Type: RecordRadarStart, Metadata: startMetadata},
+				{Type: RecordItem, Metadata: itemMetadata, Payload: []byte("radar")},
+				{Type: RecordRadarStart, Metadata: startMetadata},
+			},
+			match: "unique",
+		},
+		{
+			name: "extra metadata",
+			records: []Record{
+				{
+					Type:     RecordRadarStart,
+					Metadata: []byte(`{"schema":"mmwcli.multisensor_stream_radar_start.v1","source_id":"radar-0","host_lower_ns":100,"host_upper_ns":200,"extra":true}`),
+				},
+			},
+			match: "exact key set",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			records := append([]Record{{Type: RecordSession, Metadata: sessionMetadata}}, test.records...)
+			for index, record := range records {
+				record.RecordSeq = uint64(index)
+				if err := writeRecord(&output, record); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := firstDecodeError(t, output.Bytes()); !errors.Is(err, ErrProtocol) ||
+				!strings.Contains(err.Error(), test.match) {
+				t.Fatalf("decode error = %v, want %q", err, test.match)
+			}
+		})
+	}
+}
+
 func TestEncoderPoisonsStateViolationsAndShortWrites(t *testing.T) {
 	var output bytes.Buffer
 	encoder, err := NewEncoder(&output, testSession())
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.WriteRadarStart(RadarStart{SourceID: "radar-0"}); err != nil {
 		t.Fatal(err)
 	}
 	before := output.Len()
@@ -183,9 +382,12 @@ func TestEncoderPoisonsStateViolationsAndShortWrites(t *testing.T) {
 		t.Fatalf("poisoned Abort error = %v", err)
 	}
 
-	short := &shortCallWriter{shortCall: 3}
+	short := &shortCallWriter{shortCall: 5}
 	encoder, err = NewEncoder(short, testSession())
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.WriteRadarStart(RadarStart{SourceID: "radar-0"}); err != nil {
 		t.Fatal(err)
 	}
 	err = encoder.WriteItem(Item{
@@ -237,7 +439,7 @@ func TestCommitForbidsAppendAndDecoderRejectsTrailingRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := writeRecord(&output, Record{
-		Type: RecordItem, RecordSeq: 10, Metadata: lateMetadata, Payload: []byte("late"),
+		Type: RecordItem, RecordSeq: 11, Metadata: lateMetadata, Payload: []byte("late"),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +447,7 @@ func TestCommitForbidsAppendAndDecoderRejectsTrailingRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for index := 0; index < 10; index++ {
+	for index := 0; index < 11; index++ {
 		if _, err := decoder.Read(); err != nil {
 			t.Fatalf("record %d: %v", index, err)
 		}
@@ -378,9 +580,19 @@ func writeCommittedStream(t *testing.T, output *bytes.Buffer) *Encoder {
 	if err := encoder.WriteRadarConfig("radar-0", "ti.mmwave_cli.cfg.v1", []byte("sensorStop\n")); err != nil {
 		t.Fatal(err)
 	}
+	if err := encoder.WriteItem(Item{
+		SourceID: "camera-0", ItemIndex: 0, Tick: 10, DurationTicks: 2,
+		SyncEventID: 7, Payload: []byte("JPEG-A"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.WriteRadarStart(RadarStart{
+		SourceID: "radar-0", HostLowerNS: 1_000_000_000, HostUpperNS: 1_000_000_100,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	items := []Item{
 		{SourceID: "radar-0", ItemIndex: 0, Tick: 100, DurationTicks: 10, SyncEventID: 7, Payload: []byte("R000")},
-		{SourceID: "camera-0", ItemIndex: 0, Tick: 10, DurationTicks: 2, SyncEventID: 7, Payload: []byte("JPEG-A")},
 		{SourceID: "radar-0", ItemIndex: 1, Tick: 110, DurationTicks: 10, SyncEventID: NoSyncEventID, Payload: []byte("R1")},
 		{SourceID: "camera-0", ItemIndex: 1, Tick: 20, DurationTicks: 2, SyncEventID: NoSyncEventID, Payload: []byte("JPEG-B")},
 	}

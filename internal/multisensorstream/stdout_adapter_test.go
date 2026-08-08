@@ -76,6 +76,7 @@ func TestStdoutAdapterCancellationInterruptsBlockedOSPipeWrite(t *testing.T) {
 	if record, err := readRecord(reader); err != nil || record.Type != RecordSession {
 		t.Fatalf("initial SESSION = %+v, %v", record, err)
 	}
+	writeAdapterRadarStart(t, adapter)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	writeResult := make(chan error, 1)
@@ -107,6 +108,7 @@ func TestStdoutAdapterCancellationInterruptsBlockedOSPipeWrite(t *testing.T) {
 
 func TestStdoutAdapterSerializesCameraAndRadarGoroutines(t *testing.T) {
 	adapter, readResult := newPipeAdapter(t, adapterTestSession())
+	writeAdapterRadarStart(t, adapter)
 	radarSink, err := NewRadarSink(adapter, "radar-0", 10*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
@@ -217,6 +219,7 @@ func TestRadarSinkRejectsFramePeriodOverflow(t *testing.T) {
 
 func TestStdoutAdapterPoisonClosesWithoutTerminalAppend(t *testing.T) {
 	adapter, readResult := newPipeAdapter(t, adapterTestSession())
+	writeAdapterRadarStart(t, adapter)
 	err := adapter.WriteItem(context.Background(), Item{
 		SourceID: "radar-0", ItemIndex: 1, Payload: []byte("out-of-order"),
 	})
@@ -224,9 +227,18 @@ func TestStdoutAdapterPoisonClosesWithoutTerminalAppend(t *testing.T) {
 		t.Fatalf("poison error = %v", err)
 	}
 	result := awaitAdapterRead(t, readResult)
-	if !errors.Is(result.err, ErrProtocol) || len(result.records) != 1 ||
-		result.records[0].Type != RecordSession {
+	if !errors.Is(result.err, ErrProtocol) || len(result.records) != 2 ||
+		result.records[0].Type != RecordSession || result.records[1].Type != RecordRadarStart {
 		t.Fatalf("poisoned stream result = %v records %v", result.err, adapterRecordTypes(result.records))
+	}
+}
+
+func writeAdapterRadarStart(t *testing.T, adapter *StdoutAdapter) {
+	t.Helper()
+	if err := adapter.encoder.WriteRadarStart(RadarStart{
+		SourceID: "radar-0", HostLowerNS: 1_000_000_000, HostUpperNS: 1_000_000_100,
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

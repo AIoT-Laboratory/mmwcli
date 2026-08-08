@@ -15,6 +15,7 @@ import (
 const (
 	SchemaV1            = "mmwcli.multisensor_stream.v1"
 	RadarConfigSchemaV1 = "mmwcli.multisensor_stream_radar_config.v1"
+	RadarStartSchemaV1  = "mmwcli.multisensor_stream_radar_start.v1"
 	ItemSchemaV1        = "mmwcli.multisensor_stream_item.v1"
 	EndSchemaV1         = "mmwcli.multisensor_stream_end.v1"
 	TerminalSchemaV1    = "mmwcli.multisensor_stream_terminal.v1"
@@ -67,6 +68,14 @@ type Item struct {
 	Payload       []byte
 }
 
+type RadarStart struct {
+	SourceID string
+	// HostLowerNS..HostUpperNS conservatively bounds source tick zero on the
+	// host-monotonic nanosecond timeline.
+	HostLowerNS uint64
+	HostUpperNS uint64
+}
+
 type SessionArtifact struct {
 	SizeBytes uint64
 	SHA256    [32]byte
@@ -96,6 +105,13 @@ type radarConfigRecordV1 struct {
 	Format    string `json:"format"`
 	SizeBytes uint64 `json:"size_bytes"`
 	SHA256    string `json:"sha256"`
+}
+
+type radarStartRecordV1 struct {
+	Schema      string `json:"schema"`
+	SourceID    string `json:"source_id"`
+	HostLowerNS uint64 `json:"host_lower_ns"`
+	HostUpperNS uint64 `json:"host_upper_ns"`
 }
 
 type itemRecordV1 struct {

@@ -91,6 +91,8 @@ func (decoder *Decoder) accept(record Record) error {
 		return decoder.acceptSession(record)
 	case RecordRadarConfig:
 		return decoder.acceptRadarConfig(record)
+	case RecordRadarStart:
+		return decoder.acceptRadarStart(record)
 	case RecordItem:
 		return decoder.acceptItem(record)
 	case RecordEnd:
@@ -163,6 +165,32 @@ func (decoder *Decoder) acceptRadarConfig(record Record) error {
 	return nil
 }
 
+func (decoder *Decoder) acceptRadarStart(record Record) error {
+	if decoder.phase != decoderActive || decoder.endingStarted {
+		return fmt.Errorf("%w: RADAR_START is invalid outside the active item phase", ErrProtocol)
+	}
+	var wire radarStartRecordV1
+	if err := decodeExactMetadata(
+		record.Metadata,
+		&wire,
+		"schema", "source_id", "host_lower_ns", "host_upper_ns",
+	); err != nil {
+		return fmt.Errorf("%w: invalid RADAR_START metadata: %v", ErrProtocol, err)
+	}
+	source, exists := decoder.sources[wire.SourceID]
+	if wire.Schema != RadarStartSchemaV1 || !exists || source.contract.Kind != SourceRadar {
+		return fmt.Errorf("%w: RADAR_START source contract is invalid", ErrProtocol)
+	}
+	if source.radarStarted || source.nextItem != 0 || source.ended {
+		return fmt.Errorf("%w: RADAR_START must be unique and precede its radar ITEM/END", ErrProtocol)
+	}
+	if wire.HostLowerNS > wire.HostUpperNS {
+		return fmt.Errorf("%w: RADAR_START host bounds are reversed", ErrProtocol)
+	}
+	source.radarStarted = true
+	return nil
+}
+
 func (decoder *Decoder) acceptItem(record Record) error {
 	if decoder.phase != decoderActive {
 		return fmt.Errorf("%w: ITEM is invalid outside the active phase", ErrProtocol)
@@ -181,6 +209,9 @@ func (decoder *Decoder) acceptItem(record Record) error {
 	source, exists := decoder.sources[wire.SourceID]
 	if wire.Schema != ItemSchemaV1 || !wire.Provisional || !exists || source.ended {
 		return fmt.Errorf("%w: ITEM source or state is invalid", ErrProtocol)
+	}
+	if source.contract.Kind == SourceRadar && !source.radarStarted {
+		return fmt.Errorf("%w: radar ITEM requires a preceding RADAR_START", ErrProtocol)
 	}
 	if wire.ItemIndex != source.nextItem {
 		return fmt.Errorf(
@@ -317,6 +348,10 @@ func (decoder *Decoder) validateCommitOutcomes() error {
 				source.contract.SourceID,
 				source.outcome,
 			)
+		}
+		if source.contract.Kind == SourceRadar && source.outcome == OutcomeComplete &&
+			source.nextItem != 0 && !source.radarStarted {
+			return fmt.Errorf("complete nonempty radar source %q requires RADAR_START", source.contract.SourceID)
 		}
 	}
 	return nil

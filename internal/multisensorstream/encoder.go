@@ -23,6 +23,7 @@ type sourceProgress struct {
 	nextItem     uint64
 	payloadBytes uint64
 	payloadHash  hash.Hash
+	radarStarted bool
 	ended        bool
 	outcome      SourceOutcome
 }
@@ -110,6 +111,39 @@ func (encoder *Encoder) WriteRadarConfig(sourceID, format string, payload []byte
 	return nil
 }
 
+// WriteRadarStart emits the one conservative host-monotonic bound for a
+// declared radar's tick-zero origin. It must precede that radar's first ITEM.
+func (encoder *Encoder) WriteRadarStart(start RadarStart) error {
+	if err := encoder.requireActive(); err != nil {
+		return err
+	}
+	source, exists := encoder.sources[start.SourceID]
+	if !exists || source.contract.Kind != SourceRadar {
+		return encoder.poison(fmt.Errorf("RADAR_START source %q is not a declared radar", start.SourceID))
+	}
+	if source.radarStarted {
+		return encoder.poison(fmt.Errorf("radar source %q already emitted RADAR_START", start.SourceID))
+	}
+	if source.nextItem != 0 || source.ended || encoder.endingStarted {
+		return encoder.poison(fmt.Errorf("RADAR_START for %q must precede its first ITEM and every END", start.SourceID))
+	}
+	if start.HostLowerNS > start.HostUpperNS {
+		return encoder.poison(errors.New("RADAR_START host_lower_ns must not exceed host_upper_ns"))
+	}
+	metadata, err := encodeMetadata(radarStartRecordV1{
+		Schema: RadarStartSchemaV1, SourceID: start.SourceID,
+		HostLowerNS: start.HostLowerNS, HostUpperNS: start.HostUpperNS,
+	})
+	if err != nil {
+		return encoder.poison(err)
+	}
+	if err := encoder.emit(RecordRadarStart, metadata, nil); err != nil {
+		return encoder.poison(err)
+	}
+	source.radarStarted = true
+	return nil
+}
+
 // WriteItem emits one provisional raw item. Item indices are independently
 // zero-based and strictly increasing for each source.
 func (encoder *Encoder) WriteItem(item Item) error {
@@ -122,6 +156,9 @@ func (encoder *Encoder) WriteItem(item Item) error {
 	}
 	if source.ended {
 		return encoder.poison(fmt.Errorf("ITEM follows END for source %q", item.SourceID))
+	}
+	if source.contract.Kind == SourceRadar && !source.radarStarted {
+		return encoder.poison(fmt.Errorf("radar source %q ITEM requires a preceding RADAR_START", item.SourceID))
 	}
 	if encoder.endingStarted {
 		return encoder.poison(errors.New("ITEM cannot follow the first source END"))
@@ -285,6 +322,10 @@ func (encoder *Encoder) validateCommitOutcomes() error {
 				source.contract.SourceID,
 				source.outcome,
 			)
+		}
+		if source.contract.Kind == SourceRadar && source.outcome == OutcomeComplete &&
+			source.nextItem != 0 && !source.radarStarted {
+			return fmt.Errorf("complete nonempty radar source %q requires RADAR_START", source.contract.SourceID)
 		}
 	}
 	return nil
