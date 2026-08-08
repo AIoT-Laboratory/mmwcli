@@ -11,6 +11,7 @@ cmd/mmwcli
   -> internal/session
      -> internal/dca
      -> internal/capturefile
+     -> internal/capturestream
 ```
 
 Go 1.26+ and the standard library define the core build. Default builds use `CGO_ENABLED=0`. The `ftd2xx` tag loads the installed DLL from pure Go on Windows; Linux is the only CGo variant and links the user-installed official FTDI library. Each native-library architecture requires separate hardware validation.
@@ -90,9 +91,20 @@ Payload bytes are written unchanged. mmwcli does not reorder samples, parse ADC 
 
 Network defaults and laboratory timing checks belong in the [hardware smoke test](hardware-smoke-test.md).
 
-## Future stream boundary
+## Capture stream boundary
 
-A future trusted real-time path will keep exclusive hardware ownership in `mmwcli` and expose a versioned stream contract for `mmwcore` consumers. No live stream contract or transport is implemented today; current integration ends at raw files or capture-session directories.
+`internal/capturestream` implements the finite [capture-stream v1](capture-stream-v1.md) wire encoder
+bound to an exact CFG-derived capture plan, a bounded `WriterAt` Mirror, and an OS-stdout encoder
+whose close interrupts blocked writes.
+`internal/session` can write through that Mirror and seals it before publishing the capture-session
+directory. mmwcore implements the matching decoder over a caller-owned `BinaryIO`; it does not own
+the process, pipe, or hardware. The decoder is exposed as `mmwcore.io.CaptureStreamReader`.
+
+The mmwcli application and public CLI do not yet construct this producer pipeline. No public command
+or flag emits capture-stream v1, so current command integration still ends at raw files or published
+capture-session directories. Application wiring must reserve stdout for binary records, keep
+diagnostics on stderr, share cancellation with capture cleanup, and emit COMMIT or ABORT followed by
+EOF. These missing application concerns do not move hardware ownership out of mmwcli.
 
 Multi-sensor coordination and clock uncertainty remain a separate, unimplemented aggregate contract; see the [multi-sensor synchronization design](multisensor-sync.md). It does not extend capture-stream v1 or move device/process ownership into mmwcore.
 

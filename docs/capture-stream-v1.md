@@ -4,14 +4,18 @@
 ADC frames. It keeps radar and DCA1000 ownership in mmwcli and gives consumers an integrity-checked
 byte contract.
 
-The repository currently implements only the record encoder. No command, pipe, socket, or mmwcore
-stream integration is available yet.
+The Go implementation includes the CFG-plan-bound record encoder, bounded `WriterAt` frame mirror,
+`StdoutEncoder`, and the optional capture-session mirror/seal hook. mmwcore implements the matching
+`mmwcore.io.CaptureStreamReader` decoder over a caller-owned `BinaryIO`. The mmwcli application does
+not yet construct or connect these pieces, so no public command or flag produces this stream.
 
 ## Trust boundary
 
-The intended first transport is a child process with binary data on a dedicated inherited stdout
-pipe, diagnostics on stderr, and cancellation on a separate control path. This works on Windows and
-Linux without a platform-specific named-pipe API.
+The intended application transport is a child process with binary data on a dedicated inherited
+stdout pipe, diagnostics on stderr, and cancellation on a separate control path. The implemented
+`StdoutEncoder` owns and closes one OS stdout handle, including to interrupt a blocked write, on
+Windows and Linux. The application has not yet reserved stdout or routed its diagnostics and
+capture lifecycle around this adapter.
 
 Possession of the child-process pipe provides provenance to the process that launched mmwcli. The
 wire format does not authenticate either peer. The producer, version, and stream ID fields are
@@ -68,17 +72,27 @@ not be skipped, duplicated, replaced, or resumed.
 ## Session header
 
 SESSION is strict UTF-8 JSON with schema **mmwcli.capture_stream.v1** and a maximum encoded size of
-64 KiB. It contains:
+64 KiB. Its exact top-level key set is `schema`, `stream_id`, `producer`, `mode`, `hardware`,
+`capture`, `adc`, `radar_config`, and `artifact`. It contains:
 
 - a nonzero 16-byte random stream ID encoded as exactly 32 lowercase hex digits;
 - producer name mmwcli and a version of 1..128 valid UTF-8 bytes, with no surrounding whitespace
   or control characters;
 - capture mode studio-cli or debug-capture;
+- hardware keys `vendor`, `family`, `model`, `revision`, and `identity_source`, with the current
+  closed tuple `ti`, `xwr68xx`, empty model, empty revision, and `route_declaration`;
 - finite frame count, frame bytes, and their checked expected-byte product;
 - explicit zero origins for record sequence, frame index, and logical ADC byte offset;
-- ADC contract int16, little-endian, and group2_i_then_q;
-- the exact radar configuration format, size, and SHA-256;
+- ADC keys `dtype`, `byte_order`, `lane_count`, and `layout`, with the current closed tuple `int16`,
+  `little`, `2`, and `group2_i_then_q`;
+- radar-configuration keys `format`, `size_bytes`, and `sha256`, with format
+  `ti_mmwave_legacy_cli.v1`, exact byte size, and SHA-256;
 - required paired artifact schema **mmwcli.capture_session.v1**.
+
+The hardware, ADC, and configuration-format fields are derived from the closed raw-capture
+descriptor in the exact CFG-bound plan. They are not independently supplied stream labels. Encoder
+construction revalidates the carried configuration snapshot against that complete plan before it
+writes SESSION.
 
 The frame size is positive, int16-aligned, and no greater than 64 MiB. The total expected byte count
 must fit signed 64-bit file accounting.
@@ -129,29 +143,37 @@ A terminal record becomes final only when it is followed by EOF. A producer must
 data stream promptly after COMMIT or ABORT. Consumers apply a bounded EOF wait; trailing bytes,
 records after a terminal, or a stalled open stream abort the stream result.
 
-## WriterAt and backpressure requirements
+## WriterAt and backpressure guarantees
 
 DCA1000 payloads arrive with 48-bit byte offsets and may be out of order. The existing receiver
-normalizes accepted payloads to logical capture offset zero and writes them through io.WriterAt.
-A future stream bridge must:
+normalizes accepted payloads to logical capture offset zero and writes them through `io.WriterAt`.
+The implemented Mirror binds to the exact transactional output used by the capture session. It:
 
-- split writes that cross logical frame boundaries;
-- track exact byte coverage and emit only complete frames in increasing index order;
-- independently bound in-flight frame count, buffered bytes, and the encoder queue;
-- reject overlaps, gaps, out-of-range offsets, missing prefixes, or a reorder-window overflow;
-- write the transactional capture artifact before mirroring a fragment to the provisional stream.
+- splits writes that cross logical frame boundaries;
+- tracks exact byte coverage and emits only complete frames in increasing index order;
+- independently bounds in-flight frame count, buffered bytes, and the encoder queue;
+- rejects overlaps, gaps, out-of-range offsets, missing prefixes, and reorder-window overflow;
+- writes each fragment to the transactional capture artifact before adding it to provisional stream
+  coverage.
 
-It must not expose DCA UDP packets, infer frame phase from packet arrival, fill missing data, drop
-frames, use an unbounded queue, or silently spill stream state to another file.
+It does not expose DCA UDP packets, infer frame phase from packet arrival, fill missing data, drop
+frames, use an unbounded queue, or silently spill stream state to another file. The optional
+`session.Run` hook requires the Mirror to be bound to that session's output, aborts it on capture
+failure, and seals every frame through a bounded context before output publication.
 
 A slow or disconnected consumer is a capture failure, not permission to lose records. Queue
-exhaustion or write failure cancels the capture and enters the existing bounded hardware cleanup.
-StartRecord is not retried. Cleanup must not wait indefinitely for a blocked stream writer.
+exhaustion or write failure invokes the Mirror's capture-cancellation callback. Once the application
+wires the shared capture context, that failure enters the existing bounded hardware cleanup;
+StartRecord is not retried. Mirror sealing requires a deadline, and `StdoutEncoder` can close its
+owned handle independently to interrupt a blocked stream writer.
 
 Cancellation belongs to the acquisition control plane, not this producer-to-consumer record stream.
-A future transport must map consumer cancellation into the capture context and attempt ABORT after
-bounded cleanup. Closing a data pipe or killing a process does not turn provisional frames into a
-commit.
+`StdoutEncoder` already maps cancellation of an encoder operation to closure of its owned stdout
+handle, which interrupts an active pipe write, and its terminal operations close the handle after
+COMMIT or ABORT. It does not own the capture context or hardware cleanup. The missing application
+integration must still map consumer or pipe failure into the shared capture context, perform bounded
+cleanup, and then attempt the appropriate terminal result. Closing a data pipe or killing a process
+does not turn provisional frames into a commit.
 
 ## Exclusions
 
