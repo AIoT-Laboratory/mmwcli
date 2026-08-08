@@ -101,7 +101,7 @@ func OpenController(ctx context.Context, options ControllerOptions) (*Controller
 	return openControllerWithBackend(ctx, options, controllerBackend{
 		prepareSOP2: prepareSOP2Target,
 		openEnhanced: func(ctx context.Context, port string) (controllerEnhancedConnection, error) {
-			return openEnhancedCOMConnection(ctx, port)
+			return openEnhancedCOMConnectionForFamily(ctx, port, options.Plan.family)
 		},
 		openD2XX: func(ctx context.Context, selectors D2XXSelectors) (controllerTransport, error) {
 			return OpenD2XXTransport(ctx, selectors)
@@ -114,7 +114,7 @@ func OpenController(ctx context.Context, options ControllerOptions) (*Controller
 			if err != nil {
 				return nil, mmWaveLinkDeviceDiagnostics{}, err
 			}
-			diagnostics, err := bootstrapMMWaveLink(ctx, client)
+			diagnostics, err := bootstrapMMWaveLinkForFamily(ctx, client, options.Plan.family)
 			return client, diagnostics, err
 		},
 	})
@@ -214,13 +214,28 @@ func preflightControllerOptions(options ControllerOptions) error {
 	if strings.IndexByte(options.EnhancedPort, 0) >= 0 {
 		return errors.New("debug-capture Enhanced COM port contains NUL")
 	}
+	planFamily, err := debugFamilyContractForID(options.Plan.family)
+	if err != nil {
+		return fmt.Errorf("invalid debug-capture plan family: %w", err)
+	}
+	assetFamily, err := debugFamilyContractForID(options.Assets.family)
+	if err != nil {
+		return fmt.Errorf("invalid debug-capture firmware family: %w", err)
+	}
+	if planFamily.id != assetFamily.id {
+		return fmt.Errorf(
+			"debug-capture plan family %d does not match firmware family %d",
+			planFamily.id,
+			assetFamily.id,
+		)
+	}
 	if _, err := preflightFirmwareSubmission(options.Assets); err != nil {
 		return err
 	}
 	if err := options.Selectors.validate(); err != nil {
 		return err
 	}
-	rebuilt, err := BuildPlan(options.Plan.source)
+	rebuilt, err := buildPlanForFamily(planFamily.id, options.Plan.source)
 	if err != nil {
 		return fmt.Errorf("invalid debug-capture mmWaveLink plan: %w", err)
 	}
@@ -238,8 +253,13 @@ func (controller *Controller) VerifyPlatformContext(ctx context.Context) (string
 	if err := controller.readyLocked(ctx); err != nil {
 		return "", err
 	}
+	family, err := debugFamilyContractForID(controller.plan.family)
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf(
-		"xWR68xx debug-capture MSS %s RF %s",
+		"%s debug-capture MSS %s RF %s",
+		family.platform,
 		formatMMWaveLinkFirmwareVersion(controller.diagnostics.MSS),
 		formatMMWaveLinkFirmwareVersion(controller.diagnostics.RF),
 	), nil

@@ -43,11 +43,6 @@ type mmWaveLinkFirmwareRelease struct {
 	Debug uint8
 }
 
-var (
-	expectedMSSFirmwareRelease = mmWaveLinkFirmwareRelease{Major: 2, Minor: 0, Build: 0, Debug: 3}
-	expectedRFFirmwareRelease  = mmWaveLinkFirmwareRelease{Major: 6, Minor: 2, Build: 1, Debug: 5}
-)
-
 func (version mmWaveLinkFirmwareVersion) release() mmWaveLinkFirmwareRelease {
 	return mmWaveLinkFirmwareRelease{
 		Major: version.FirmwareMajor,
@@ -70,6 +65,29 @@ type mmWaveLinkDeviceDiagnostics struct {
 func bootstrapMMWaveLink(
 	ctx context.Context,
 	client *mmWaveLinkClient,
+) (mmWaveLinkDeviceDiagnostics, error) {
+	return bootstrapMMWaveLinkForFamily(ctx, client, debugFamilyIWR6843ES2)
+}
+
+func bootstrapMMWaveLinkForFamily(
+	ctx context.Context,
+	client *mmWaveLinkClient,
+	familyID debugFamilyID,
+) (mmWaveLinkDeviceDiagnostics, error) {
+	family, err := debugFamilyContractForID(familyID)
+	if err != nil {
+		return mmWaveLinkDeviceDiagnostics{}, err
+	}
+	if family.bootPolicy != debugBootXWR68xxRFEval {
+		return mmWaveLinkDeviceDiagnostics{}, fmt.Errorf("unsupported debug-capture boot policy %d", family.bootPolicy)
+	}
+	return bootstrapMMWaveLinkForContract(ctx, client, family)
+}
+
+func bootstrapMMWaveLinkForContract(
+	ctx context.Context,
+	client *mmWaveLinkClient,
+	family debugFamilyContract,
 ) (mmWaveLinkDeviceDiagnostics, error) {
 	var diagnostics mmWaveLinkDeviceDiagnostics
 	if client == nil {
@@ -94,7 +112,7 @@ func bootstrapMMWaveLink(
 		"MSS",
 		rhcpDirectionHostToMSS,
 		mmWaveLinkDeviceStatusGetMessageID,
-		expectedMSSFirmwareRelease,
+		family.runtime.mss,
 	)
 	if err != nil {
 		return diagnostics, err
@@ -139,7 +157,7 @@ func bootstrapMMWaveLink(
 		"RF",
 		rhcpDirectionHostToBSS,
 		mmWaveLinkRFStatusGetMessageID,
-		expectedRFFirmwareRelease,
+		family.runtime.rf,
 	)
 	if err != nil {
 		return diagnostics, err

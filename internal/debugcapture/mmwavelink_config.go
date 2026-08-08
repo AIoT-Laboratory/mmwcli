@@ -52,6 +52,7 @@ const (
 type Plan struct {
 	source     radar.CapturePlan
 	operations []mmWaveLinkPlanOperation
+	family     debugFamilyID
 }
 
 type mmWaveLinkPlanOperation struct {
@@ -117,6 +118,17 @@ type mmWaveLinkFrameConfiguration struct {
 // BuildPlan performs the complete CFG-to-wire preflight without opening an
 // output file or touching radar/DCA hardware.
 func BuildPlan(source radar.CapturePlan) (Plan, error) {
+	return buildPlanForFamily(debugFamilyIWR6843ES2, source)
+}
+
+func buildPlanForFamily(familyID debugFamilyID, source radar.CapturePlan) (Plan, error) {
+	family, err := debugFamilyContractForID(familyID)
+	if err != nil {
+		return Plan{}, err
+	}
+	if family.rfPolicy != debugRFEncodingIWR6843ES2 {
+		return Plan{}, fmt.Errorf("unsupported debug-capture RF encoding policy %d", family.rfPolicy)
+	}
 	snapshot := cloneRadarCapturePlan(source)
 	if snapshot.Dialect != radar.StudioCLI {
 		return Plan{}, errors.New("debug capture requires the studio-cli configuration contract")
@@ -128,13 +140,18 @@ func BuildPlan(source radar.CapturePlan) (Plan, error) {
 		return Plan{}, err
 	}
 
-	configuration, err := parseMMWaveLinkConfiguration(snapshot.ConfigurationCommands)
+	configuration, err := parseMMWaveLinkConfiguration(snapshot.ConfigurationCommands, family)
+	if err != nil {
+		return Plan{}, err
+	}
+	operations, err := buildMMWaveLinkOperations(configuration, family)
 	if err != nil {
 		return Plan{}, err
 	}
 	return Plan{
 		source:     snapshot,
-		operations: buildMMWaveLinkOperations(configuration),
+		operations: operations,
+		family:     family.id,
 	}, nil
 }
 
@@ -215,7 +232,10 @@ func (expected mmWaveLinkPlanEvent) validate(message mmWaveLinkMessage) error {
 	return nil
 }
 
-func parseMMWaveLinkConfiguration(commands []string) (mmWaveLinkConfiguration, error) {
+func parseMMWaveLinkConfiguration(
+	commands []string,
+	family debugFamilyContract,
+) (mmWaveLinkConfiguration, error) {
 	var result mmWaveLinkConfiguration
 	counts := make(map[string]int)
 	for _, command := range commands {
@@ -237,7 +257,7 @@ func parseMMWaveLinkConfiguration(commands []string) (mmWaveLinkConfiguration, e
 			}
 		case "channelCfg":
 			counts[name]++
-			rx, tx, err := parseMMWaveLinkChannel(fields, command)
+			rx, tx, err := parseMMWaveLinkChannel(fields, command, family)
 			if err != nil {
 				return result, err
 			}
@@ -264,7 +284,7 @@ func parseMMWaveLinkConfiguration(commands []string) (mmWaveLinkConfiguration, e
 			}
 			result.profile = profile
 		case "chirpCfg":
-			chirp, err := parseMMWaveLinkChirp(fields, command)
+			chirp, err := parseMMWaveLinkChirp(fields, command, family)
 			if err != nil {
 				return result, err
 			}
@@ -278,8 +298,9 @@ func parseMMWaveLinkConfiguration(commands []string) (mmWaveLinkConfiguration, e
 			result.frame = frame
 		case "lowPower":
 			counts[name]++
-			if !fieldsEqual(fields, "lowPower", "0", "0") {
-				return result, fmt.Errorf("debug capture requires exact lowPower 0 0: %s", command)
+			lowPowerMode := strconv.FormatUint(uint64(family.lowPowerADCMode), 10)
+			if !fieldsEqual(fields, "lowPower", "0", lowPowerMode) {
+				return result, fmt.Errorf("debug capture requires exact lowPower 0 %s: %s", lowPowerMode, command)
 			}
 		case "lvdsStreamCfg":
 			counts[name]++
@@ -315,13 +336,16 @@ func parseMMWaveLinkConfiguration(commands []string) (mmWaveLinkConfiguration, e
 			result.profile.sampleRate,
 		)
 	}
-	if err := validateMMWaveLinkRelationships(result); err != nil {
+	if err := validateMMWaveLinkRelationships(result, family); err != nil {
 		return result, err
 	}
 	return result, nil
 }
 
-func validateMMWaveLinkRelationships(configuration mmWaveLinkConfiguration) error {
+func validateMMWaveLinkRelationships(
+	configuration mmWaveLinkConfiguration,
+	family debugFamilyContract,
+) error {
 	covered := make([]bool, 512)
 	for _, chirp := range configuration.chirps {
 		if chirp.profileID != 0 {
@@ -339,7 +363,7 @@ func validateMMWaveLinkRelationships(configuration mmWaveLinkConfiguration) erro
 				configuration.txMask,
 			)
 		}
-		if bits.OnesCount16(chirp.txMask) > 2 {
+		if bits.OnesCount16(chirp.txMask) > int(family.maxChirpTransmitters) {
 			return fmt.Errorf("chirpCfg range %d..%d enables more than two transmitters", chirp.start, chirp.end)
 		}
 		for index := chirp.start; index <= chirp.end; index++ {
@@ -369,7 +393,11 @@ func fieldsEqual(fields []string, expected ...string) bool {
 	return true
 }
 
-func parseMMWaveLinkChannel(fields []string, command string) (uint16, uint16, error) {
+func parseMMWaveLinkChannel(
+	fields []string,
+	command string,
+	family debugFamilyContract,
+) (uint16, uint16, error) {
 	if len(fields) != 4 {
 		return 0, 0, fmt.Errorf("channelCfg must contain RX mask, TX mask, and cascading mode: %s", command)
 	}
@@ -377,9 +405,14 @@ func parseMMWaveLinkChannel(fields []string, command string) (uint16, uint16, er
 	if err != nil || rx == 0 {
 		return 0, 0, invalidOrRange(err, "channelCfg RX mask", "1..15", command)
 	}
-	tx, err := parseUnsigned(fields[2], 0x07, "channelCfg TX mask")
+	tx, err := parseUnsigned(fields[2], uint64(family.txMask), "channelCfg TX mask")
 	if err != nil || tx == 0 {
-		return 0, 0, invalidOrRange(err, "channelCfg TX mask", "1..7", command)
+		return 0, 0, invalidOrRange(
+			err,
+			"channelCfg TX mask",
+			fmt.Sprintf("1..%d", family.txMask),
+			command,
+		)
 	}
 	cascade, err := parseUnsigned(fields[3], 0, "channelCfg cascading mode")
 	if err != nil || cascade != 0 {
@@ -542,7 +575,11 @@ func parseStudioFloatTimeSigned(value string, minimum, maximum int64, name strin
 	return int64(truncated), nil
 }
 
-func parseMMWaveLinkChirp(fields []string, command string) (mmWaveLinkChirpConfiguration, error) {
+func parseMMWaveLinkChirp(
+	fields []string,
+	command string,
+	family debugFamilyContract,
+) (mmWaveLinkChirpConfiguration, error) {
 	var result mmWaveLinkChirpConfiguration
 	if len(fields) != 9 {
 		return result, fmt.Errorf("chirpCfg must contain eight arguments: %s", command)
@@ -596,7 +633,7 @@ func parseMMWaveLinkChirp(fields []string, command string) (mmWaveLinkChirpConfi
 	if err != nil {
 		return result, err
 	}
-	tx, err := parseUnsigned(fields[8], 7, "chirpCfg TX mask")
+	tx, err := parseUnsigned(fields[8], uint64(family.txMask), "chirpCfg TX mask")
 	if err != nil {
 		return result, err
 	}
@@ -766,7 +803,14 @@ func invalidOrRange(parseError error, name, expected, command string) error {
 	return fmt.Errorf("%s must be %s: %s", name, expected, command)
 }
 
-func buildMMWaveLinkOperations(configuration mmWaveLinkConfiguration) []mmWaveLinkPlanOperation {
+func buildMMWaveLinkOperations(
+	configuration mmWaveLinkConfiguration,
+	family debugFamilyContract,
+) ([]mmWaveLinkPlanOperation, error) {
+	laneEnable, err := family.capturePolicy.laneEnablePayload()
+	if err != nil {
+		return nil, err
+	}
 	operations := make([]mmWaveLinkPlanOperation, 0, 14+len(configuration.chirps))
 	appendOperation := func(direction rhcpDirection, messageID, subblockID uint16, data []byte) {
 		operations = append(operations, mmWaveLinkPlanOperation{command: mmWaveLinkCommand{
@@ -779,7 +823,9 @@ func buildMMWaveLinkOperations(configuration mmWaveLinkConfiguration) []mmWaveLi
 	appendOperation(rhcpDirectionHostToBSS, mmWaveLinkRFStaticConfigMessageID, mmWaveLinkRFChannelSubblockID, encodeChannel(configuration))
 	appendOperation(rhcpDirectionHostToBSS, mmWaveLinkRFStaticConfigMessageID, mmWaveLinkRFADCSubblockID, encodeADC(configuration))
 	appendOperation(rhcpDirectionHostToMSS, mmWaveLinkDeviceConfigMessageID, mmWaveLinkDeviceDataFormatSubblockID, encodeDataFormat(configuration))
-	appendOperation(rhcpDirectionHostToBSS, mmWaveLinkRFStaticConfigMessageID, mmWaveLinkRFLowPowerSubblockID, make([]byte, 4))
+	lowPower := make([]byte, 4)
+	binary.LittleEndian.PutUint16(lowPower[2:4], family.lowPowerADCMode)
+	appendOperation(rhcpDirectionHostToBSS, mmWaveLinkRFStaticConfigMessageID, mmWaveLinkRFLowPowerSubblockID, lowPower)
 
 	appendOperation(rhcpDirectionHostToBSS, mmWaveLinkRFInitMessageID, mmWaveLinkRFInitSubblockID, nil)
 	operations[len(operations)-1].await = &mmWaveLinkPlanEvent{
@@ -793,7 +839,7 @@ func buildMMWaveLinkOperations(configuration mmWaveLinkConfiguration) []mmWaveLi
 	appendOperation(rhcpDirectionHostToMSS, mmWaveLinkDeviceConfigMessageID, mmWaveLinkDeviceDataPathSubblockID, []byte{1, 1, 0, 0, 0, 0, 0, 0})
 	appendOperation(rhcpDirectionHostToMSS, mmWaveLinkDeviceConfigMessageID, mmWaveLinkDeviceClockSubblockID, []byte{1, 1, 0, 0})
 	appendOperation(rhcpDirectionHostToBSS, mmWaveLinkRFStaticConfigMessageID, mmWaveLinkRFHSIClockSubblockID, []byte{9, 0, 0, 0})
-	appendOperation(rhcpDirectionHostToMSS, mmWaveLinkDeviceConfigMessageID, mmWaveLinkDeviceLaneEnableSubblockID, []byte{3, 0, 0, 0})
+	appendOperation(rhcpDirectionHostToMSS, mmWaveLinkDeviceConfigMessageID, mmWaveLinkDeviceLaneEnableSubblockID, laneEnable)
 	appendOperation(rhcpDirectionHostToMSS, mmWaveLinkDeviceConfigMessageID, mmWaveLinkDeviceLVDSSubblockID, []byte{0, 0, 1, 0})
 
 	appendOperation(rhcpDirectionHostToBSS, mmWaveLinkRFDynamicConfigMessageID, mmWaveLinkRFProfileSubblockID, encodeProfile(configuration.profile))
@@ -803,7 +849,7 @@ func buildMMWaveLinkOperations(configuration mmWaveLinkConfiguration) []mmWaveLi
 	appendOperation(rhcpDirectionHostToBSS, mmWaveLinkRFMiscConfigMessageID, mmWaveLinkRFTestSourceEnableID, make([]byte, 4))
 	appendOperation(rhcpDirectionHostToBSS, mmWaveLinkRFDynamicConfigMessageID, mmWaveLinkRFFrameSubblockID, encodeFrame(configuration.frame, configuration.profile.samples))
 	appendOperation(rhcpDirectionHostToMSS, mmWaveLinkDeviceApplyMessageID, mmWaveLinkDeviceFrameApplySubblockID, encodeFrameApply(configuration.frame, configuration.profile.samples))
-	return operations
+	return operations, nil
 }
 
 func encodeChannel(configuration mmWaveLinkConfiguration) []byte {

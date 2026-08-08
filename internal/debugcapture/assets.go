@@ -39,6 +39,8 @@ type File struct {
 type Assets struct {
 	BSS File
 	MSS File
+
+	family debugFamilyID
 }
 
 type fileContract struct {
@@ -61,10 +63,23 @@ type candidate struct {
 }
 
 func CheckAssets(bssPath, mssPath string) (Assets, error) {
-	return checkAssets(bssPath, mssPath, contracts{
-		bss: fileContract{role: "BSS", name: BSSName, size: BSSSize, sha256: BSSSHA256, target: rprcTargetBSS},
-		mss: fileContract{role: "MSS", name: MSSName, size: MSSSize, sha256: MSSSHA256, target: rprcTargetMSS},
-	})
+	return checkAssetsForFamily(debugFamilyIWR6843ES2, bssPath, mssPath)
+}
+
+func checkAssetsForFamily(familyID debugFamilyID, bssPath, mssPath string) (Assets, error) {
+	family, err := debugFamilyContractForID(familyID)
+	if err != nil {
+		return Assets{}, err
+	}
+	if family.imagePolicy != debugFirmwareImageIWR6843RPRC {
+		return Assets{}, fmt.Errorf("unsupported debug-capture firmware image policy %d", family.imagePolicy)
+	}
+	assets, err := checkAssets(bssPath, mssPath, family.assets)
+	if err != nil {
+		return Assets{}, err
+	}
+	assets.family = familyID
+	return assets, nil
 }
 
 func checkAssets(bssPath, mssPath string, expected contracts) (Assets, error) {
@@ -90,7 +105,7 @@ func checkAssets(bssPath, mssPath string, expected contracts) (Assets, error) {
 	if err != nil {
 		return Assets{}, err
 	}
-	return Assets{BSS: bssFile, MSS: mssFile}, nil
+	return Assets{BSS: bssFile, MSS: mssFile, family: debugFamilyIWR6843ES2}, nil
 }
 
 func inspectCandidate(path, role string) (candidate, error) {

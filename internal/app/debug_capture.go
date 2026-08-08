@@ -135,8 +135,8 @@ func runDebugCaptureCaptureWithDependencies(
 	if err != nil {
 		return err
 	}
-	if err := requireRawCaptureFPGAConfig(dcaOptions.fpga); err != nil {
-		return err
+	if err := debugcapture.ValidateRawCaptureFPGAConfig(dcaOptions.fpga); err != nil {
+		return usageError{message: err.Error()}
 	}
 
 	plan, finalizeSession, err := loadCaptureOutputPlan(

@@ -28,7 +28,6 @@ const (
 	xwr68xxEFUSERow10Address   = uint32(0xffffe214)
 	xwr68xxPartNumberShift     = 18
 	xwr68xxPartNumberMask      = uint32(0xff)
-	iwr68xxES2PartNumber       = uint8(0xe2)
 )
 
 type enhancedCOMBackend struct {
@@ -41,13 +40,22 @@ type enhancedCOMConnection struct {
 	probeValue uint32
 	partNumber uint8
 	verified   bool
+	family     debugFamilyID
 }
 
 // openEnhancedCOMConnection opens only the explicitly named port. It performs
 // Studio's fixed 921600/115200 negotiation, but never scans ports or guesses
 // any other rate.
 func openEnhancedCOMConnection(ctx context.Context, portName string) (*enhancedCOMConnection, error) {
-	return openEnhancedCOMConnectionWithBackend(ctx, portName, enhancedCOMBackend{
+	return openEnhancedCOMConnectionForFamily(ctx, portName, debugFamilyIWR6843ES2)
+}
+
+func openEnhancedCOMConnectionForFamily(
+	ctx context.Context,
+	portName string,
+	familyID debugFamilyID,
+) (*enhancedCOMConnection, error) {
+	return openEnhancedCOMConnectionForFamilyWithBackend(ctx, portName, familyID, enhancedCOMBackend{
 		open: func(name string, baud int, timeout time.Duration) (enhancedCOMTransport, error) {
 			return serialport.Open(name, baud, timeout)
 		},
@@ -58,6 +66,20 @@ func openEnhancedCOMConnection(ctx context.Context, portName string) (*enhancedC
 func openEnhancedCOMConnectionWithBackend(
 	ctx context.Context,
 	portName string,
+	backend enhancedCOMBackend,
+) (*enhancedCOMConnection, error) {
+	return openEnhancedCOMConnectionForFamilyWithBackend(
+		ctx,
+		portName,
+		debugFamilyIWR6843ES2,
+		backend,
+	)
+}
+
+func openEnhancedCOMConnectionForFamilyWithBackend(
+	ctx context.Context,
+	portName string,
+	familyID debugFamilyID,
 	backend enhancedCOMBackend,
 ) (*enhancedCOMConnection, error) {
 	if ctx == nil {
@@ -72,6 +94,13 @@ func openEnhancedCOMConnectionWithBackend(
 	if backend.wait == nil {
 		return nil, errors.New("Enhanced COM wait function is nil")
 	}
+	family, err := debugFamilyContractForID(familyID)
+	if err != nil {
+		return nil, err
+	}
+	if family.bootPolicy != debugBootXWR68xxRFEval {
+		return nil, fmt.Errorf("unsupported debug-capture boot policy %d", family.bootPolicy)
+	}
 
 	client, probeValue, safeToNegotiate, err := openInitializedEnhancedCOMClient(ctx, portName, enhancedCOMBaud, backend)
 	if err != nil {
@@ -79,7 +108,7 @@ func openEnhancedCOMConnectionWithBackend(
 			return nil, err
 		}
 		requestedBaudErr := err
-		client, probeValue, err = negotiateEnhancedCOMBaud(ctx, portName, backend)
+		client, probeValue, err = negotiateEnhancedCOMBaud(ctx, portName, backend, family)
 		if err != nil {
 			return nil, errors.Join(
 				fmt.Errorf("probe Enhanced COM port %q at %d baud: %w", portName, enhancedCOMBaud, requestedBaudErr),
@@ -88,7 +117,7 @@ func openEnhancedCOMConnectionWithBackend(
 		}
 	}
 
-	partNumber, err := gateXWR6843Part(ctx, client)
+	partNumber, err := gateDebugFamilyPart(ctx, client, family)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("gate xWR6843 part identity on %q: %w", portName, err), client.close())
 	}
@@ -97,6 +126,7 @@ func openEnhancedCOMConnectionWithBackend(
 		probeValue: probeValue,
 		partNumber: partNumber,
 		verified:   true,
+		family:     family.id,
 	}, nil
 }
 
@@ -142,6 +172,7 @@ func negotiateEnhancedCOMBaud(
 	ctx context.Context,
 	portName string,
 	backend enhancedCOMBackend,
+	family debugFamilyContract,
 ) (*enhancedCOMClient, uint32, error) {
 	if err := backend.wait(ctx, enhancedCOMNegotiationOpenWait); err != nil {
 		return nil, 0, err
@@ -160,7 +191,7 @@ func negotiateEnhancedCOMBaud(
 	if _, err := coldBootClient.probe(ctx); err != nil {
 		return fail(fmt.Errorf("probe Enhanced COM port %q at cold-boot baud %d: %w", portName, enhancedCOMColdBootBaud, err))
 	}
-	if _, err := gateXWR6843Part(ctx, coldBootClient); err != nil {
+	if _, err := gateDebugFamilyPart(ctx, coldBootClient, family); err != nil {
 		return fail(fmt.Errorf("gate xWR6843 part identity at cold-boot baud %d: %w", enhancedCOMColdBootBaud, err))
 	}
 	if err := backend.wait(ctx, enhancedCOMBaudRegisterWait); err != nil {
@@ -195,24 +226,30 @@ func negotiateEnhancedCOMBaud(
 	return client, probeValue, nil
 }
 
-func gateXWR6843Part(ctx context.Context, client *enhancedCOMClient) (uint8, error) {
+func gateDebugFamilyPart(
+	ctx context.Context,
+	client *enhancedCOMClient,
+	family debugFamilyContract,
+) (uint8, error) {
 	efuseRow10, err := client.readRegister(ctx, xwr68xxEFUSERow10Address)
 	if err != nil {
 		return 0, fmt.Errorf("read xWR68xx part identity: %w", err)
 	}
 	partNumber := uint8((efuseRow10 >> xwr68xxPartNumberShift) & xwr68xxPartNumberMask)
-	if !supportedXWR6843Part(partNumber) {
+	if partNumber != family.partNumber {
 		return 0, fmt.Errorf(
-			"unsupported part number 0x%02X; only validated IWR6843 ES2 part number 0x%02X is supported",
+			"unsupported part number 0x%02X; only validated %s part number 0x%02X is supported",
 			partNumber,
-			iwr68xxES2PartNumber,
+			family.identity,
+			family.partNumber,
 		)
 	}
 	return partNumber, nil
 }
 
 func supportedXWR6843Part(partNumber uint8) bool {
-	return partNumber == iwr68xxES2PartNumber
+	family, err := debugFamilyContractForID(debugFamilyIWR6843ES2)
+	return err == nil && partNumber == family.partNumber
 }
 
 func (connection *enhancedCOMConnection) close() error {
@@ -233,9 +270,25 @@ func (connection *enhancedCOMConnection) submitFirmware(
 	if connection == nil || connection.client == nil {
 		return firmwareSubmissionReceipt{}, errors.New("Enhanced COM connection is nil")
 	}
-	if !connection.verified || !supportedXWR6843Part(connection.partNumber) {
+	family, err := debugFamilyContractForID(connection.family)
+	if err != nil {
+		return firmwareSubmissionReceipt{}, errors.Join(err, connection.close())
+	}
+	if family.bootPolicy != debugBootXWR68xxRFEval {
+		return firmwareSubmissionReceipt{}, errors.Join(
+			fmt.Errorf("unsupported debug-capture boot policy %d", family.bootPolicy),
+			connection.close(),
+		)
+	}
+	if !connection.verified || connection.partNumber != family.partNumber {
 		return firmwareSubmissionReceipt{}, errors.Join(
 			errors.New("Enhanced COM connection has not passed the xWR6843 SOP2 monitor and part identity gate"),
+			connection.close(),
+		)
+	}
+	if assets.family != connection.family {
+		return firmwareSubmissionReceipt{}, errors.Join(
+			fmt.Errorf("debug-capture firmware family %d does not match Enhanced COM family %d", assets.family, connection.family),
 			connection.close(),
 		)
 	}
