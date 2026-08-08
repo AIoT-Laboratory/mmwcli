@@ -60,6 +60,10 @@ func (adapter *StdoutAdapter) WriteRadarConfig(
 	})
 }
 
+func (adapter *StdoutAdapter) WriteRadarStart(ctx context.Context, start RadarStart) error {
+	return adapter.operation(ctx, func() error { return adapter.encoder.WriteRadarStart(start) })
+}
+
 func (adapter *StdoutAdapter) WriteItem(ctx context.Context, item Item) error {
 	return adapter.operation(ctx, func() error { return adapter.encoder.WriteItem(item) })
 }

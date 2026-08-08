@@ -49,8 +49,10 @@ type activeMultisensorCapture struct {
 }
 
 type activeMultisensorStream struct {
-	adapter *multisensorstream.StdoutAdapter
-	mirror  *capturestream.Mirror
+	adapter      *multisensorstream.StdoutAdapter
+	mirror       *capturestream.Mirror
+	radarSink    *multisensorstream.RadarSink
+	startContext context.Context
 }
 
 func createCaptureDestination(
@@ -185,7 +187,9 @@ func startMultisensorStream(
 	if err != nil {
 		return nil, abort(err)
 	}
-	return &activeMultisensorStream{adapter: adapter, mirror: mirror}, nil
+	return &activeMultisensorStream{
+		adapter: adapter, mirror: mirror, radarSink: radarSink, startContext: ctx,
+	}, nil
 }
 
 func (capture *activeMultisensorCapture) Arm(ctx context.Context) error {
@@ -213,20 +217,45 @@ func (capture *activeMultisensorCapture) Finish(ctx context.Context, complete bo
 
 func (capture *activeMultisensorCapture) RadarFrameStartObserved(lower, upper time.Time) {
 	capture.mu.Lock()
-	defer capture.mu.Unlock()
+	var failure error
 	if capture.frameStartObserved || capture.frameStartErr != nil {
-		capture.frameStartErr = errors.New("multisensor radar frame-start observation was repeated")
-		return
+		failure = errors.New("multisensor radar frame-start observation was repeated")
+	} else if lower.Before(capture.hostOrigin) || upper.Before(lower) {
+		failure = errors.New("multisensor radar frame-start observation is outside the session clock")
+	} else {
+		capture.frameStart = multisensor.FrameStartBracket{
+			LowerNS: uint64(lower.Sub(capture.hostOrigin)),
+			UpperNS: uint64(upper.Sub(capture.hostOrigin)),
+		}
+		capture.frameStartObserved = true
 	}
-	if lower.Before(capture.hostOrigin) || upper.Before(lower) {
-		capture.frameStartErr = errors.New("multisensor radar frame-start observation is outside the session clock")
-		return
+	if failure != nil {
+		capture.frameStartErr = errors.Join(capture.frameStartErr, failure)
 	}
-	capture.frameStart = multisensor.FrameStartBracket{
-		LowerNS: uint64(lower.Sub(capture.hostOrigin)),
-		UpperNS: uint64(upper.Sub(capture.hostOrigin)),
+	frameStart := capture.frameStart
+	stream := capture.stream
+	capture.mu.Unlock()
+
+	if failure == nil && stream != nil {
+		failure = stream.adapter.WriteRadarStart(stream.startContext, multisensorstream.RadarStart{
+			SourceID: aggregateRadarSourceID, HostLowerNS: frameStart.LowerNS, HostUpperNS: frameStart.UpperNS,
+		})
+		if failure == nil {
+			failure = stream.radarSink.ReleaseRadarStart()
+		}
+		if failure != nil {
+			failure = fmt.Errorf("publish multisensor RADAR_START: %w", failure)
+			capture.mu.Lock()
+			capture.frameStartErr = errors.Join(capture.frameStartErr, failure)
+			capture.mu.Unlock()
+		}
 	}
-	capture.frameStartObserved = true
+	if failure != nil {
+		if stream != nil {
+			_ = stream.radarSink.FailRadarStart(failure)
+		}
+		capture.recordRequiredFailure(failure)
+	}
 }
 
 func (capture *activeMultisensorCapture) recordRequiredFailure(err error) {
@@ -356,6 +385,7 @@ func (capture *activeMultisensorCapture) abortStream(
 	if capture == nil || capture.stream == nil {
 		return cause
 	}
+	_ = capture.stream.radarSink.FailRadarStart(cause)
 	capture.stream.mirror.Abort()
 	terminalCtx, cancel := context.WithTimeout(context.Background(), captureStreamTerminalTimeout)
 	defer cancel()

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"mmwcli/internal/capturestream"
@@ -16,6 +17,11 @@ type RadarSink struct {
 	adapter     *StdoutAdapter
 	sourceID    string
 	periodTicks uint64
+
+	startOnce  sync.Once
+	startReady chan struct{}
+	startMu    sync.Mutex
+	startErr   error
 }
 
 func NewRadarSink(
@@ -50,7 +56,56 @@ func NewRadarSink(
 	if maximumIndex := source.contract.Limits.MaxItems - 1; maximumIndex > math.MaxUint64/periodTicks {
 		return nil, errors.New("multisensor radar FramePeriod overflows the declared item range")
 	}
-	return &RadarSink{adapter: adapter, sourceID: sourceID, periodTicks: periodTicks}, nil
+	return &RadarSink{
+		adapter: adapter, sourceID: sourceID, periodTicks: periodTicks,
+		startReady: make(chan struct{}),
+	}, nil
+}
+
+// ReleaseRadarStart allows frame zero to be emitted only after this sink's
+// RADAR_START record has been written successfully.
+func (sink *RadarSink) ReleaseRadarStart() error {
+	if sink == nil || sink.adapter == nil || sink.startReady == nil {
+		return errors.New("multisensor radar sink is nil")
+	}
+	sink.adapter.encoderMu.Lock()
+	source := sink.adapter.encoder.sources[sink.sourceID]
+	started := source != nil && source.radarStarted
+	sink.adapter.encoderMu.Unlock()
+	if !started {
+		return errors.New("multisensor radar sink requires an emitted RADAR_START")
+	}
+	if !sink.resolveRadarStart(nil) {
+		return errors.New("multisensor radar sink start is already resolved")
+	}
+	return nil
+}
+
+// FailRadarStart releases a blocked frame with the terminal start-evidence
+// failure. The first resolution wins.
+func (sink *RadarSink) FailRadarStart(err error) error {
+	if sink == nil || sink.startReady == nil {
+		return errors.New("multisensor radar sink is nil")
+	}
+	if err == nil {
+		return errors.New("multisensor radar sink start failure is nil")
+	}
+	if !sink.resolveRadarStart(err) {
+		return errors.New("multisensor radar sink start is already resolved")
+	}
+	return nil
+}
+
+func (sink *RadarSink) resolveRadarStart(err error) bool {
+	resolved := false
+	sink.startOnce.Do(func() {
+		sink.startMu.Lock()
+		sink.startErr = err
+		sink.startMu.Unlock()
+		close(sink.startReady)
+		resolved = true
+	})
+	return resolved
 }
 
 // WriteFrame implements capturestream.FrameSink without retaining or mutating
@@ -60,8 +115,22 @@ func (sink *RadarSink) WriteFrame(
 	index uint64,
 	payload []byte,
 ) error {
-	if sink == nil || sink.adapter == nil || sink.periodTicks == 0 {
+	if sink == nil || sink.adapter == nil || sink.periodTicks == 0 || sink.startReady == nil {
 		return errors.New("multisensor radar sink is nil")
+	}
+	if ctx == nil {
+		return errors.New("multisensor radar sink context is nil")
+	}
+	select {
+	case <-sink.startReady:
+		sink.startMu.Lock()
+		startErr := sink.startErr
+		sink.startMu.Unlock()
+		if startErr != nil {
+			return startErr
+		}
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 	if index > math.MaxUint64/sink.periodTicks {
 		return errors.New("multisensor radar frame tick overflows uint64")

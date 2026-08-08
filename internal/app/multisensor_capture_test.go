@@ -70,6 +70,19 @@ func TestActiveMultisensorStreamPublishesRadarAndCameraItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	external := plan.Sources[0]
+	coordinator := &fakeAggregateCoordinator{result: aggregateTestResult(sessionID, []multisensor.Source{{
+		SourceID: external.SourceID, Kind: external.Kind, Required: false,
+		Outcome: multisensor.OutcomeFailed, Producer: external.Producer, Limits: external.Limits,
+		Payload: external.Payload, Clock: external.Clock,
+		ClockObservations: []multisensor.ClockObservation{}, AffineSegments: []multisensor.AffineSegment{},
+		Artifacts: []multisensor.Artifact{}, ApplicationMetadata: multisensor.ApplicationMetadata{},
+	}})}
+	origin := time.Now()
+	capture := &activeMultisensorCapture{
+		directory: directory, radarDirectory: radarDirectory, coordinator: coordinator,
+		sessionID: sessionID, prepared: prepared, hostOrigin: origin, stream: stream,
+	}
 
 	cameraPayload := []byte{0, 1, 0xff, 2}
 	if err := stream.adapter.WriteItem(context.Background(), multisensorstream.Item{
@@ -85,6 +98,7 @@ func TestActiveMultisensorStreamPublishesRadarAndCameraItems(t *testing.T) {
 	if written, err := stream.mirror.WriteAt(radarPayload, 0); err != nil || written != len(radarPayload) {
 		t.Fatalf("write radar mirror = %d, %v", written, err)
 	}
+	capture.RadarFrameStartObserved(origin.Add(time.Millisecond), origin.Add(2*time.Millisecond))
 	sealCtx, cancelSeal := context.WithTimeout(context.Background(), time.Second)
 	if err := stream.mirror.Seal(sealCtx); err != nil {
 		cancelSeal()
@@ -98,20 +112,6 @@ func TestActiveMultisensorStreamPublishesRadarAndCameraItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	external := plan.Sources[0]
-	coordinator := &fakeAggregateCoordinator{result: aggregateTestResult(sessionID, []multisensor.Source{{
-		SourceID: external.SourceID, Kind: external.Kind, Required: false,
-		Outcome: multisensor.OutcomeFailed, Producer: external.Producer, Limits: external.Limits,
-		Payload: external.Payload, Clock: external.Clock,
-		ClockObservations: []multisensor.ClockObservation{}, AffineSegments: []multisensor.AffineSegment{},
-		Artifacts: []multisensor.Artifact{}, ApplicationMetadata: multisensor.ApplicationMetadata{},
-	}})}
-	origin := time.Now()
-	capture := &activeMultisensorCapture{
-		directory: directory, radarDirectory: radarDirectory, coordinator: coordinator,
-		sessionID: sessionID, prepared: prepared, hostOrigin: origin, stream: stream,
-	}
-	capture.RadarFrameStartObserved(origin.Add(time.Millisecond), origin.Add(2*time.Millisecond))
 	if err := capture.Finish(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestActiveMultisensorStreamPublishesRadarAndCameraItems(t *testing.T) {
 	}
 	wantTypes := []multisensorstream.RecordType{
 		multisensorstream.RecordSession, multisensorstream.RecordRadarConfig,
-		multisensorstream.RecordItem, multisensorstream.RecordItem,
+		multisensorstream.RecordItem, multisensorstream.RecordRadarStart, multisensorstream.RecordItem,
 		multisensorstream.RecordEnd, multisensorstream.RecordEnd,
 		multisensorstream.RecordCommit, multisensorstream.RecordEOF,
 	}
@@ -136,14 +136,36 @@ func TestActiveMultisensorStreamPublishesRadarAndCameraItems(t *testing.T) {
 			t.Fatalf("aggregate record %d type = %d, want %d", index, records[index].Type, want)
 		}
 	}
-	if string(records[2].Payload) != string(cameraPayload) || string(records[3].Payload) != string(radarPayload) {
+	if string(records[2].Payload) != string(cameraPayload) || string(records[4].Payload) != string(radarPayload) {
 		t.Fatal("aggregate ITEM payload differs from camera or radar authority")
+	}
+	var radarItem struct {
+		SourceID      string `json:"source_id"`
+		ItemIndex     uint64 `json:"item_index"`
+		Tick          uint64 `json:"tick"`
+		DurationTicks uint64 `json:"duration_ticks"`
+	}
+	if err := json.Unmarshal(records[4].Metadata, &radarItem); err != nil ||
+		radarItem.SourceID != aggregateRadarSourceID || radarItem.ItemIndex != 0 ||
+		radarItem.Tick != 0 || radarItem.DurationTicks != uint64(prepared.plan.FramePeriod) {
+		t.Fatalf("radar ITEM time = %+v, %v", radarItem, err)
+	}
+	var radarStart struct {
+		SourceID    string `json:"source_id"`
+		HostLowerNS uint64 `json:"host_lower_ns"`
+		HostUpperNS uint64 `json:"host_upper_ns"`
+	}
+	if err := json.Unmarshal(records[3].Metadata, &radarStart); err != nil ||
+		radarStart.SourceID != aggregateRadarSourceID ||
+		radarStart.HostLowerNS != uint64(time.Millisecond) ||
+		radarStart.HostUpperNS != uint64(2*time.Millisecond) {
+		t.Fatalf("RADAR_START = %+v, %v", radarStart, err)
 	}
 	var cameraEnd struct {
 		SourceID string                    `json:"source_id"`
 		Outcome  multisensor.SourceOutcome `json:"outcome"`
 	}
-	if err := json.Unmarshal(records[5].Metadata, &cameraEnd); err != nil ||
+	if err := json.Unmarshal(records[6].Metadata, &cameraEnd); err != nil ||
 		cameraEnd.SourceID != "camera-0" || cameraEnd.Outcome != multisensor.OutcomeFailed {
 		t.Fatalf("camera END = %+v, %v", cameraEnd, err)
 	}
@@ -172,6 +194,10 @@ func TestActiveMultisensorStreamRequiredFailureEmitsAbortAndEOF(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	blockedRadar := make([]byte, int(prepared.plan.ExpectedBytes))
+	if written, err := stream.mirror.WriteAt(blockedRadar, 0); err != nil || written != len(blockedRadar) {
+		t.Fatalf("write blocked radar mirror = %d, %v", written, err)
 	}
 	coordinator := &fakeAggregateCoordinator{}
 	capture := &activeMultisensorCapture{

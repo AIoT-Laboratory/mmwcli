@@ -108,9 +108,12 @@ func TestStdoutAdapterCancellationInterruptsBlockedOSPipeWrite(t *testing.T) {
 
 func TestStdoutAdapterSerializesCameraAndRadarGoroutines(t *testing.T) {
 	adapter, readResult := newPipeAdapter(t, adapterTestSession())
-	writeAdapterRadarStart(t, adapter)
 	radarSink, err := NewRadarSink(adapter, "radar-0", 10*time.Millisecond)
 	if err != nil {
+		t.Fatal(err)
+	}
+	writeAdapterRadarStart(t, adapter)
+	if err := radarSink.ReleaseRadarStart(); err != nil {
 		t.Fatal(err)
 	}
 	start := make(chan struct{})
@@ -200,6 +203,36 @@ func TestStdoutAdapterSerializesCameraAndRadarGoroutines(t *testing.T) {
 	}
 }
 
+func TestRadarSinkWaitsForRadarStartAndCancellationDoesNotLeak(t *testing.T) {
+	session := adapterTestSession()
+	session.Sources = session.Sources[:1]
+	adapter, readResult := newPipeAdapter(t, session)
+	radarSink, err := NewRadarSink(adapter, "radar-0", time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	writeResult := make(chan error, 1)
+	go func() {
+		writeResult <- radarSink.WriteFrame(ctx, 0, []byte("radar"))
+	}()
+	select {
+	case err := <-writeResult:
+		t.Fatalf("radar frame did not wait for RADAR_START: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	if err := awaitAdapterError(t, writeResult); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled radar start wait = %v", err)
+	}
+	if err := adapter.Abort(context.Background(), AbortCancelled); err != nil {
+		t.Fatal(err)
+	}
+	if result := awaitAdapterRead(t, readResult); result.err != nil {
+		t.Fatal(result.err)
+	}
+}
+
 func TestRadarSinkRejectsFramePeriodOverflow(t *testing.T) {
 	session := adapterTestSession()
 	session.Sources = session.Sources[:1]
@@ -235,7 +268,7 @@ func TestStdoutAdapterPoisonClosesWithoutTerminalAppend(t *testing.T) {
 
 func writeAdapterRadarStart(t *testing.T, adapter *StdoutAdapter) {
 	t.Helper()
-	if err := adapter.encoder.WriteRadarStart(RadarStart{
+	if err := adapter.WriteRadarStart(context.Background(), RadarStart{
 		SourceID: "radar-0", HostLowerNS: 1_000_000_000, HostUpperNS: 1_000_000_100,
 	}); err != nil {
 		t.Fatal(err)
