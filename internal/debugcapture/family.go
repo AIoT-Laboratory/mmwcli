@@ -84,8 +84,8 @@ var iwr6843ES2DebugFamily = debugFamilyContract{
 	identity: "IWR6843 ES2",
 	platform: "xWR68xx",
 	assets: contracts{
-		bss: fileContract{role: "BSS", name: BSSName, size: BSSSize, sha256: BSSSHA256, target: rprcTargetBSS},
-		mss: fileContract{role: "MSS", name: MSSName, size: MSSSize, sha256: MSSSHA256, target: rprcTargetMSS},
+		bss: fileContract{role: "BSS", name: xwr68xxBSSName, size: xwr68xxBSSSize, sha256: xwr68xxBSSSHA256, target: rprcTargetBSS},
+		mss: fileContract{role: "MSS", name: xwr68xxMSSName, size: xwr68xxMSSSize, sha256: xwr68xxMSSSHA256, target: rprcTargetMSS},
 	},
 	imagePolicy:          debugFirmwareImageIWR6843RPRC,
 	partNumbers:          [9]uint8{iwr68xxES2PartNumber},
@@ -256,16 +256,6 @@ func (family debugFamilyContract) unsupportedPartError(partNumber uint8) error {
 		partNumber,
 		strings.Join(parts, ", "),
 	)
-}
-
-// ValidateRawCaptureFPGAConfig applies the DCA contract of the only public
-// debug-cli family. It preserves the existing two-lane xWR68xx validation.
-func ValidateRawCaptureFPGAConfig(config dca.FPGAConfig) error {
-	device, err := radar.ParseDeviceFamily(iwr6843ES2DebugFamily.name)
-	if err != nil {
-		return err
-	}
-	return ValidateRawCaptureFPGAConfigForFamily(device, config)
 }
 
 // ValidateRawCaptureFPGAConfigForFamily applies the exact DCA/LVDS contract

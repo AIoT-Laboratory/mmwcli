@@ -554,7 +554,7 @@ func mustDebugControllerPlan(t *testing.T) Plan {
 	t.Helper()
 	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, goldenDebugCaptureSource(t))
 	if err != nil {
-		t.Fatalf("BuildPlan: %v", err)
+		t.Fatalf("buildPlanForFamily: %v", err)
 	}
 	return plan
 }
@@ -575,7 +575,7 @@ func mustInfiniteDebugControllerPlan(t *testing.T) Plan {
 	}
 	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, rebuilt)
 	if err != nil {
-		t.Fatalf("BuildPlan infinite: %v", err)
+		t.Fatalf("buildPlanForFamily infinite: %v", err)
 	}
 	return plan
 }

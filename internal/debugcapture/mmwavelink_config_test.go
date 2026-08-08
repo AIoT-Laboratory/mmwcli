@@ -14,7 +14,7 @@ func TestBuildPlanGoldenStudioCLIConfiguration(t *testing.T) {
 	source := goldenDebugCaptureSource(t)
 	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, source)
 	if err != nil {
-		t.Fatalf("BuildPlan: %v", err)
+		t.Fatalf("buildPlanForFamily: %v", err)
 	}
 	operations := plan.operationsCopy()
 	if len(operations) != 16 {
@@ -167,7 +167,7 @@ func TestBuildPlanRejectsInvalidWireConfiguration(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := buildPlanForFamily(debugFamilyIWR6843ES2, test.mutate(cloneRadarCapturePlan(source)))
 			if err == nil {
-				t.Fatal("BuildPlan accepted invalid configuration")
+				t.Fatal("buildPlanForFamily accepted invalid configuration")
 			}
 			if !strings.Contains(err.Error(), test.match) {
 				t.Fatalf("error = %q, want substring %q", err, test.match)
@@ -203,7 +203,7 @@ func TestPlanCopiesOperationsAndSource(t *testing.T) {
 	original := cloneRadarCapturePlan(source)
 	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, source)
 	if err != nil {
-		t.Fatalf("BuildPlan: %v", err)
+		t.Fatalf("buildPlanForFamily: %v", err)
 	}
 	if !plan.matchesCapturePlan(original) {
 		t.Fatal("plan does not match its original capture plan")
@@ -233,7 +233,7 @@ func TestPlanCopiesOperationsAndSource(t *testing.T) {
 func TestRFInitEventValidation(t *testing.T) {
 	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, goldenDebugCaptureSource(t))
 	if err != nil {
-		t.Fatalf("BuildPlan: %v", err)
+		t.Fatalf("buildPlanForFamily: %v", err)
 	}
 	expected := plan.operationsCopy()[4].await
 	data := make([]byte, 20)

@@ -62,13 +62,6 @@ type mmWaveLinkDeviceDiagnostics struct {
 	RFPowerupStatus uint32
 }
 
-func bootstrapMMWaveLink(
-	ctx context.Context,
-	client *mmWaveLinkClient,
-) (mmWaveLinkDeviceDiagnostics, error) {
-	return bootstrapMMWaveLinkForFamily(ctx, client, debugFamilyIWR6843ES2)
-}
-
 func bootstrapMMWaveLinkForFamily(
 	ctx context.Context,
 	client *mmWaveLinkClient,

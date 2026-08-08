@@ -43,14 +43,10 @@ type enhancedCOMConnection struct {
 	family     debugFamilyID
 }
 
-// openEnhancedCOMConnection opens only the explicitly named port. The
+// openEnhancedCOMConnectionForFamily opens only the explicitly named port. The
 // validated xWR68xx route may perform Studio's fixed 921600/115200
 // negotiation; source-validated xWR16xx/xWR18xx routes require an already
 // responsive 921600 monitor and never touch the xWR68xx baud registers.
-func openEnhancedCOMConnection(ctx context.Context, portName string) (*enhancedCOMConnection, error) {
-	return openEnhancedCOMConnectionForFamily(ctx, portName, debugFamilyIWR6843ES2)
-}
-
 func openEnhancedCOMConnectionForFamily(
 	ctx context.Context,
 	portName string,
@@ -62,19 +58,6 @@ func openEnhancedCOMConnectionForFamily(
 		},
 		wait: waitContext,
 	})
-}
-
-func openEnhancedCOMConnectionWithBackend(
-	ctx context.Context,
-	portName string,
-	backend enhancedCOMBackend,
-) (*enhancedCOMConnection, error) {
-	return openEnhancedCOMConnectionForFamilyWithBackend(
-		ctx,
-		portName,
-		debugFamilyIWR6843ES2,
-		backend,
-	)
 }
 
 func openEnhancedCOMConnectionForFamilyWithBackend(

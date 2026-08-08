@@ -14,13 +14,13 @@ import (
 )
 
 const (
-	BSSName   = "xwr68xx_radarss.bin"
-	BSSSize   = int64(240072)
-	BSSSHA256 = "E2C69405394E35BA376EFE1A52305EE74DBD19F8BAB72BD5A9078878853CD77F"
+	xwr68xxBSSName   = "xwr68xx_radarss.bin"
+	xwr68xxBSSSize   = int64(240072)
+	xwr68xxBSSSHA256 = "E2C69405394E35BA376EFE1A52305EE74DBD19F8BAB72BD5A9078878853CD77F"
 
-	MSSName   = "xwr68xx_masterss.bin"
-	MSSSize   = int64(92992)
-	MSSSHA256 = "316911D4A8DBA1762714A3A107071BD0CF06A135FAE29BFBBC92B037592DE060"
+	xwr68xxMSSName   = "xwr68xx_masterss.bin"
+	xwr68xxMSSSize   = int64(92992)
+	xwr68xxMSSSHA256 = "316911D4A8DBA1762714A3A107071BD0CF06A135FAE29BFBBC92B037592DE060"
 
 	xwr16xxBSSName   = "xwr16xx_radarss.bin"
 	xwr16xxBSSSize   = int64(35728)
@@ -76,10 +76,6 @@ type candidate struct {
 	path string
 	info os.FileInfo
 	file *os.File
-}
-
-func CheckAssets(bssPath, mssPath string) (Assets, error) {
-	return checkAssetsForFamily(debugFamilyIWR6843ES2, bssPath, mssPath)
 }
 
 // CheckAssetsForFamily pins both user-supplied RF-evaluation images to the

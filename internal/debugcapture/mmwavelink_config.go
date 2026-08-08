@@ -169,12 +169,6 @@ type mmWaveLinkFrameConfiguration struct {
 	period     uint32
 }
 
-// BuildPlan performs the complete CFG-to-wire preflight without opening an
-// output file or touching radar/DCA hardware.
-func BuildPlan(source radar.CapturePlan) (Plan, error) {
-	return buildPlanForFamily(debugFamilyIWR6843ES2, source)
-}
-
 // BuildPlanForFamily performs the complete CFG-to-wire preflight for one
 // explicit closed family without opening a hardware transport.
 func BuildPlanForFamily(device radar.DeviceFamily, source radar.CapturePlan) (Plan, error) {
