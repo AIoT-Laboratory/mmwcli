@@ -325,6 +325,15 @@ func (c *Client) ApplyContext(ctx context.Context, plan CapturePlan) error {
 	if plan.Dialect != c.dialect {
 		return fmt.Errorf("capture plan dialect %q does not match client dialect %q", plan.Dialect.Name(), c.dialect.Name())
 	}
+	planFamily := plan.DeviceFamily()
+	if !planFamily.valid() || planFamily != c.dialect.family {
+		return fmt.Errorf(
+			"capture plan family %q does not match %s transport family %q",
+			planFamily.Name(),
+			c.dialect.Name(),
+			c.dialect.family.Name(),
+		)
+	}
 	if plan.Mode != FullConfiguration {
 		return errors.New("reuse plan must not resend radar configuration")
 	}

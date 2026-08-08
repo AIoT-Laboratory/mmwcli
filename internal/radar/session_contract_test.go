@@ -25,14 +25,12 @@ func TestBuildCaptureSessionV1PlanAcceptsRepositoryConfigs(t *testing.T) {
 	}
 }
 
-func TestBuildCaptureSessionV1PlanSupportsReuseWithoutFlush(t *testing.T) {
-	commands := validCommands()[1:]
-	plan, err := BuildCaptureSessionV1Plan(renderSessionConfig(commands), ReuseConfiguration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plan.Mode != ReuseConfiguration || plan.StartCommand != "sensorStart 0" {
-		t.Fatalf("reuse plan = %+v", plan)
+func TestBuildCaptureSessionV1PlanRejectsReuse(t *testing.T) {
+	if _, err := BuildCaptureSessionV1Plan(
+		renderSessionConfig(validCommands()[1:]),
+		ReuseConfiguration,
+	); err == nil || !strings.Contains(err.Error(), "full radar configuration") {
+		t.Fatalf("reuse error = %v", err)
 	}
 }
 

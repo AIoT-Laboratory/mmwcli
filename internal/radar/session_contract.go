@@ -29,6 +29,25 @@ var captureSessionV1CommandNames = map[string]struct{}{
 // that the exact CFG snapshot is representable by the capture-session v1
 // contract consumed by mmwcore.
 func BuildCaptureSessionV1Plan(snapshot []byte, mode ConfigurationMode) (CapturePlan, error) {
+	if mode != FullConfiguration {
+		return CapturePlan{}, errors.New("capture session v1 requires a full radar configuration")
+	}
+	return buildCaptureSessionV1Plan(xwr68xxFamily, snapshot)
+}
+
+// BuildCaptureSessionV1PlanForFamily builds the sole full-configuration
+// capture-session v1 plan for an explicitly selected closed family.
+func BuildCaptureSessionV1PlanForFamily(
+	family DeviceFamily,
+	snapshot []byte,
+) (CapturePlan, error) {
+	if !family.valid() {
+		return CapturePlan{}, errors.New("invalid radar device family")
+	}
+	return buildCaptureSessionV1Plan(family, snapshot)
+}
+
+func buildCaptureSessionV1Plan(family DeviceFamily, snapshot []byte) (CapturePlan, error) {
 	if !utf8.Valid(snapshot) {
 		return CapturePlan{}, errors.New("capture session v1 CFG must be valid UTF-8")
 	}
@@ -36,7 +55,7 @@ func BuildCaptureSessionV1Plan(snapshot []byte, mode ConfigurationMode) (Capture
 	if err != nil {
 		return CapturePlan{}, err
 	}
-	plan, err := BuildCapturePlan(StudioCLI, commands, mode)
+	plan, err := buildCapturePlan(StudioCLI, family, commands, FullConfiguration)
 	if err != nil {
 		return CapturePlan{}, err
 	}
@@ -44,14 +63,14 @@ func BuildCaptureSessionV1Plan(snapshot []byte, mode ConfigurationMode) (Capture
 	if err != nil {
 		return CapturePlan{}, err
 	}
-	contractPlan, err := BuildCapturePlan(StudioCLI, contractCommands, mode)
+	contractPlan, err := buildCapturePlan(StudioCLI, family, contractCommands, FullConfiguration)
 	if err != nil {
 		return CapturePlan{}, fmt.Errorf("capture session v1 CFG is not representable: %w", err)
 	}
 	if !sameCaptureGeometry(plan, contractPlan) {
 		return CapturePlan{}, errors.New("capture session v1 CFG snapshot does not match the radar capture plan")
 	}
-	if err := validateCaptureSessionV1Subset(contractCommands, contractPlan); err != nil {
+	if err := validateCaptureSessionV1Subset(family, contractCommands, contractPlan); err != nil {
 		return CapturePlan{}, fmt.Errorf("capture session v1 CFG is not representable: %w", err)
 	}
 	return plan, nil
@@ -62,7 +81,14 @@ func BuildCaptureSessionV1Plan(snapshot []byte, mode ConfigurationMode) (Capture
 // stream. It rejects semantic differences even when they preserve byte
 // geometry.
 func ValidateCaptureSessionV1Plan(snapshot []byte, actual CapturePlan) error {
-	expected, err := BuildCaptureSessionV1Plan(snapshot, actual.Mode)
+	if actual.Mode != FullConfiguration {
+		return errors.New("capture session v1 requires a full radar configuration")
+	}
+	family := actual.DeviceFamily()
+	if !family.valid() {
+		return errors.New("capture session v1 plan has an invalid radar device family")
+	}
+	expected, err := buildCaptureSessionV1Plan(family, snapshot)
 	if err != nil {
 		return err
 	}
@@ -134,7 +160,11 @@ func sameCaptureGeometry(left, right CapturePlan) bool {
 		left.FramePeriod == right.FramePeriod
 }
 
-func validateCaptureSessionV1Subset(commands []string, plan CapturePlan) error {
+func validateCaptureSessionV1Subset(
+	family DeviceFamily,
+	commands []string,
+	plan CapturePlan,
+) error {
 	if plan.InfiniteFrames || plan.NumberOfFrames == 0 || plan.ExpectedBytes <= 0 {
 		return errors.New("mmwcli session publication currently requires a finite frame count")
 	}
@@ -169,7 +199,7 @@ func validateCaptureSessionV1Subset(commands []string, plan CapturePlan) error {
 		return errors.New("group2_i_then_q capture session requires an even profileCfg numAdcSamples")
 	}
 
-	frame, err := parseFrame(commands)
+	frame, err := parseFrameForFamily(family, commands)
 	if err != nil {
 		return err
 	}
@@ -192,15 +222,15 @@ func validateCaptureSessionV1Subset(commands []string, plan CapturePlan) error {
 	if frameTriggerDelay != 0 {
 		return errors.New("capture session v1 requires zero frameCfg trigger delay")
 	}
-	profiles, err := parseProfileSamples(StudioCLI, commands)
+	profiles, err := parseProfileSamples(family, commands)
 	if err != nil {
 		return err
 	}
-	_, enabledTransmitters, err := parseChannelConfiguration(commands)
+	_, enabledTransmitters, err := parseChannelConfigurationForFamily(family, commands)
 	if err != nil {
 		return err
 	}
-	ranges, err := parseChirpProfileRanges(commands, profiles, enabledTransmitters)
+	ranges, err := parseChirpProfileRangesForFamily(family, commands, profiles, enabledTransmitters)
 	if err != nil {
 		return err
 	}

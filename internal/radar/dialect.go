@@ -206,7 +206,13 @@ func (d Dialect) ValidateConfiguration(commands []string, full bool) error {
 	if !d.valid() {
 		return errors.New("invalid radar CLI dialect")
 	}
+	return validateConfigurationForFamily(d.family, commands, full)
+}
 
+func validateConfigurationForFamily(family DeviceFamily, commands []string, full bool) error {
+	if !family.valid() {
+		return errors.New("invalid radar device family")
+	}
 	flushes := 0
 	for index, command := range commands {
 		fields := strings.Fields(command)
@@ -218,15 +224,15 @@ func (d Dialect) ValidateConfiguration(commands []string, full bool) error {
 		canonical, allowed := studioRawCommands[key]
 		if !allowed {
 			if _, monitor := studioMonitorCommands[key]; monitor {
-				return fmt.Errorf("raw-only studio_cli does not consume UART monitor reports; rejected command: %s", command)
+				return fmt.Errorf("raw-only capture does not consume UART monitor reports; rejected command: %s", command)
 			}
 			if _, outOfScope := studioOutOfScopeCommands[key]; outOfScope {
-				return fmt.Errorf("raw-only studio_cli does not support reset, advanced/continuous, or test/loopback command: %s", command)
+				return fmt.Errorf("raw-only capture does not support reset, advanced/continuous, or test/loopback command: %s", command)
 			}
-			return fmt.Errorf("command is not in the audited xWR68xx studio_cli raw-only allowlist: %s", command)
+			return fmt.Errorf("command is not in the audited %s raw-only allowlist: %s", family.versionPlatforms[0], command)
 		}
 		if name != canonical {
-			return fmt.Errorf("xWR68xx CLI command names are case-sensitive; use %s: %s", canonical, command)
+			return fmt.Errorf("%s capture command names are case-sensitive; use %s: %s", family.versionPlatforms[0], canonical, command)
 		}
 
 		if name == "flushCfg" {
@@ -235,15 +241,15 @@ func (d Dialect) ValidateConfiguration(commands []string, full bool) error {
 			}
 			flushes++
 			if index != 0 {
-				return errors.New("flushCfg must be the first command in a full studio_cli configuration")
+				return errors.New("flushCfg must be the first command in a full capture configuration")
 			}
 		}
 	}
 	if flushes > 1 {
-		return errors.New("studio_cli configuration may contain at most one flushCfg")
+		return errors.New("capture configuration may contain at most one flushCfg")
 	}
 	if full && flushes != 1 {
-		return errors.New("full studio_cli configuration must begin with exactly one flushCfg; use reuse mode for a second capture")
+		return errors.New("full capture configuration must begin with exactly one flushCfg; use reuse mode for a second capture")
 	}
 	return nil
 }

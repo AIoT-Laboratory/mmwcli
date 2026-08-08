@@ -59,6 +59,13 @@ type CapturePlan struct {
 	FramePeriod         time.Duration
 }
 
+// DeviceFamily returns the closed hardware descriptor carried by the plan's
+// raw-capture contract. A fabricated or invalid contract returns the zero,
+// invalid descriptor.
+func (plan CapturePlan) DeviceFamily() DeviceFamily {
+	return plan.RawCapture.deviceFamily()
+}
+
 // ParseConfig reads TI-style command files without touching hardware. Blank
 // lines and lines beginning with %, #, or // are ignored. A whitespace-prefixed
 // // suffix is treated as an inline comment.
@@ -108,6 +115,27 @@ func BuildCapturePlan(dialect Dialect, commands []string, mode ConfigurationMode
 	if !dialect.valid() {
 		return CapturePlan{}, errors.New("invalid radar CLI dialect")
 	}
+	return buildCapturePlan(dialect, dialect.family, commands, mode)
+}
+
+// BuildCapturePlanForFamily builds the one strict, full-configuration raw
+// capture plan for an explicitly selected closed family. The StudioCLI
+// dialect remains the legacy CFG grammar; the returned raw-capture contract
+// carries the selected hardware family and the Studio transport independently
+// rejects any family other than xWR68xx.
+func BuildCapturePlanForFamily(family DeviceFamily, commands []string) (CapturePlan, error) {
+	if !family.valid() {
+		return CapturePlan{}, errors.New("invalid radar device family")
+	}
+	return buildCapturePlan(StudioCLI, family, commands, FullConfiguration)
+}
+
+func buildCapturePlan(
+	dialect Dialect,
+	family DeviceFamily,
+	commands []string,
+	mode ConfigurationMode,
+) (CapturePlan, error) {
 	if mode != FullConfiguration && mode != ReuseConfiguration {
 		return CapturePlan{}, fmt.Errorf("invalid configuration mode %d", mode)
 	}
@@ -116,7 +144,7 @@ func BuildCapturePlan(dialect Dialect, commands []string, mode ConfigurationMode
 	if err := rejectCaptureLifecycleCommands(copyOfCommands); err != nil {
 		return CapturePlan{}, err
 	}
-	if err := dialect.ValidateConfiguration(copyOfCommands, mode == FullConfiguration); err != nil {
+	if err := validateConfigurationForFamily(family, copyOfCommands, mode == FullConfiguration); err != nil {
 		return CapturePlan{}, err
 	}
 
@@ -140,20 +168,20 @@ func BuildCapturePlan(dialect Dialect, commands []string, mode ConfigurationMode
 	if err != nil {
 		return CapturePlan{}, err
 	}
-	if err := validateADCBuf(dialect, configuration); err != nil {
+	if err := validateADCBuf(family, configuration); err != nil {
 		return CapturePlan{}, err
 	}
 	if err := validateHardwareLVDS(configuration); err != nil {
 		return CapturePlan{}, err
 	}
-	frame, err := parseFrameForFamily(dialect.family, configuration)
+	frame, err := parseFrameForFamily(family, configuration)
 	if err != nil {
 		return CapturePlan{}, err
 	}
 	if _, err := frameSpan(frame.frames, frame.period); err != nil {
 		return CapturePlan{}, err
 	}
-	bytesPerFrame, expectedBytes, err := deriveExpectedBytes(dialect, configuration, frame)
+	bytesPerFrame, expectedBytes, err := deriveExpectedBytes(family, configuration, frame)
 	if err != nil {
 		return CapturePlan{}, err
 	}
@@ -167,7 +195,7 @@ func BuildCapturePlan(dialect Dialect, commands []string, mode ConfigurationMode
 	}
 	return CapturePlan{
 		Dialect:               dialect,
-		RawCapture:            dialect.family.RawCaptureContract(),
+		RawCapture:            family.RawCaptureContract(),
 		Mode:                  mode,
 		ConfigurationCommands: append([]string(nil), configuration...),
 		DeclaredStartCommand:  declaredStart,
@@ -322,7 +350,7 @@ func validateADC(commands []string) (int, error) {
 	return 3, nil
 }
 
-func validateADCBuf(dialect Dialect, commands []string) error {
+func validateADCBuf(family DeviceFamily, commands []string) error {
 	count := 0
 	for _, command := range commands {
 		if !isCommand(command, "adcbufCfg") {
@@ -347,10 +375,10 @@ func validateADCBuf(dialect Dialect, commands []string) error {
 			return fmt.Errorf("capture requires complex ADCBuf format (adcFmt=0): %s", command)
 		}
 		if values[4] != 1 {
-			return fmt.Errorf("%s CLI requires adcbufCfg chirpThreshold=1: %s", dialect.family.versionPlatforms[0], command)
+			return fmt.Errorf("%s capture requires adcbufCfg chirpThreshold=1: %s", family.versionPlatforms[0], command)
 		}
 		if values[0] != -1 || values[2] != 1 || values[3] != 1 {
-			return fmt.Errorf("TI xWR68xx studio_cli firmware requires adcbufCfg -1 0 1 1 1: %s", command)
+			return fmt.Errorf("TI %s legacy capture requires adcbufCfg -1 0 1 1 1: %s", family.versionPlatforms[0], command)
 		}
 		count++
 	}
@@ -487,12 +515,12 @@ func parseFrameForFamily(family DeviceFamily, commands []string) (frameConfigura
 	return result, nil
 }
 
-func deriveExpectedBytes(dialect Dialect, commands []string, frame frameConfiguration) (int64, int64, error) {
-	receivers, enabledTransmitters, err := parseChannelConfigurationForFamily(dialect.family, commands)
+func deriveExpectedBytes(family DeviceFamily, commands []string, frame frameConfiguration) (int64, int64, error) {
+	receivers, enabledTransmitters, err := parseChannelConfigurationForFamily(family, commands)
 	if err != nil {
 		return 0, 0, err
 	}
-	profiles, err := parseProfileSamples(dialect, commands)
+	profiles, err := parseProfileSamples(family, commands)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -503,29 +531,29 @@ func deriveExpectedBytes(dialect Dialect, commands []string, frame frameConfigur
 	// The supported text CLI firmware uses a 32-entry table while validating
 	// the unique chirps in a legacy frame.
 	if uniqueChirps > 32 {
-		return 0, 0, fmt.Errorf("%s text CLI supports at most 32 unique frame chirps, got %d", dialect.family.versionPlatforms[0], uniqueChirps)
+		return 0, 0, fmt.Errorf("%s strict legacy capture supports at most 32 unique frame chirps, got %d", family.versionPlatforms[0], uniqueChirps)
 	}
 	// The studio_cli source audited from Radar Toolbox 4.00.00.05 hard-codes
 	// profile index 0 in mmw_rfparser.c. Reject configurations the firmware
 	// cannot represent instead of deriving a byte count for another profile.
 	if len(profiles) != 1 {
-		return 0, 0, errors.New("TI xWR68xx studio_cli firmware requires exactly one profileCfg for profile ID 0")
+		return 0, 0, fmt.Errorf("TI %s strict legacy capture requires exactly one profileCfg for profile ID 0", family.versionPlatforms[0])
 	}
 	if _, found := profiles[0]; !found {
-		return 0, 0, errors.New("TI xWR68xx studio_cli firmware requires its only profileCfg to use profile ID 0")
+		return 0, 0, fmt.Errorf("TI %s strict legacy capture requires its only profileCfg to use profile ID 0", family.versionPlatforms[0])
 	}
-	ranges, err := parseChirpProfileRangesForFamily(dialect.family, commands, profiles, enabledTransmitters)
+	ranges, err := parseChirpProfileRangesForFamily(family, commands, profiles, enabledTransmitters)
 	if err != nil {
 		return 0, 0, err
 	}
 	if len(ranges) > 5 {
-		return 0, 0, fmt.Errorf("TI xWR68xx studio_cli firmware stores at most five chirpCfg ranges, got %d", len(ranges))
+		return 0, 0, fmt.Errorf("TI %s strict legacy capture supports at most five chirpCfg ranges, got %d", family.versionPlatforms[0], len(ranges))
 	}
-	samplesPerLoop, samplesPerChirp, err := mappedSamplesPerLoop(dialect.family, frame, profiles, ranges)
+	samplesPerLoop, samplesPerChirp, err := mappedSamplesPerLoop(family, frame, profiles, ranges)
 	if err != nil {
 		return 0, 0, err
 	}
-	if err := validateRawBufferSizes(dialect.family, samplesPerChirp, receivers); err != nil {
+	if err := validateRawBufferSizes(family, samplesPerChirp, receivers); err != nil {
 		return 0, 0, err
 	}
 
@@ -622,7 +650,7 @@ func parseChannelConfigurationForFamily(family DeviceFamily, commands []string) 
 	return uint64(bits.OnesCount64(mask)), transmitters, nil
 }
 
-func parseProfileSamples(dialect Dialect, commands []string) (map[uint64]uint64, error) {
+func parseProfileSamples(family DeviceFamily, commands []string) (map[uint64]uint64, error) {
 	profiles := make(map[uint64]uint64)
 	for _, command := range commands {
 		if !isCommand(command, "profileCfg") {
@@ -640,7 +668,7 @@ func parseProfileSamples(dialect Dialect, commands []string) (map[uint64]uint64,
 			return nil, err
 		}
 		if profileID >= 4 {
-			return nil, fmt.Errorf("%s profileCfg profile ID must be in 0..3: %s", dialect.family.versionPlatforms[0], command)
+			return nil, fmt.Errorf("%s profileCfg profile ID must be in 0..3: %s", family.versionPlatforms[0], command)
 		}
 		if strings.ContainsAny(fields[2], "xXpP_") {
 			return nil, fmt.Errorf("profileCfg start frequency must use decimal floating-point syntax: %s", command)
@@ -652,13 +680,13 @@ func parseProfileSamples(dialect Dialect, commands []string) (map[uint64]uint64,
 		if math.IsInf(startFrequency*1e9, 0) {
 			return nil, fmt.Errorf("scaled profileCfg start frequency overflows finite Hz representation: %s", command)
 		}
-		if startFrequency < dialect.family.minimumStartFrequencyGHz ||
-			startFrequency > dialect.family.maximumStartFrequencyGHz {
+		if startFrequency < family.minimumStartFrequencyGHz ||
+			startFrequency > family.maximumStartFrequencyGHz {
 			return nil, fmt.Errorf(
 				"%s profileCfg start frequency is outside %.0f..%.0f GHz: %s",
-				dialect.family.versionPlatforms[0],
-				dialect.family.minimumStartFrequencyGHz,
-				dialect.family.maximumStartFrequencyGHz,
+				family.versionPlatforms[0],
+				family.minimumStartFrequencyGHz,
+				family.maximumStartFrequencyGHz,
 				command,
 			)
 		}
@@ -667,7 +695,7 @@ func parseProfileSamples(dialect Dialect, commands []string) (map[uint64]uint64,
 			return nil, fmt.Errorf("invalid profileCfg frequency slope in %q", command)
 		}
 		if frequencySlope < 0 {
-			return nil, fmt.Errorf("TI xWR68xx studio_cli firmware does not support negative profileCfg frequency slope: %s", command)
+			return nil, fmt.Errorf("TI %s strict legacy capture does not support negative profileCfg frequency slope: %s", family.versionPlatforms[0], command)
 		}
 		samples, err := parseUnsignedArgument(command, fields, 10, 16, "profileCfg numAdcSamples")
 		if err != nil {

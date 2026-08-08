@@ -36,15 +36,45 @@ type RawCaptureContract struct {
 	layout         string
 }
 
-var xwr68xxRawCapture = RawCaptureContract{
-	vendor:         "ti",
-	family:         "xwr68xx",
-	identitySource: "route_declaration",
-	configFormat:   "ti_mmwave_legacy_cli.v1",
-	dataType:       "int16",
-	byteOrder:      "little",
-	laneCount:      2,
-	layout:         "group2_i_then_q",
+func legacyRawCaptureContract(family string) RawCaptureContract {
+	return RawCaptureContract{
+		vendor:         "ti",
+		family:         family,
+		identitySource: "route_declaration",
+		configFormat:   "ti_mmwave_legacy_cli.v1",
+		dataType:       "int16",
+		byteOrder:      "little",
+		laneCount:      2,
+		layout:         "group2_i_then_q",
+	}
+}
+
+var xwr16xxRawCapture = legacyRawCaptureContract("xwr16xx")
+var xwr18xxRawCapture = legacyRawCaptureContract("xwr18xx")
+var xwr68xxRawCapture = legacyRawCaptureContract("xwr68xx")
+
+var xwr16xxFamily = DeviceFamily{
+	canonicalName:            "xwr16xx",
+	versionPlatforms:         [2]string{"xWR16xx"},
+	receiverMask:             0x0f,
+	transmitterMask:          0x03,
+	minimumStartFrequencyGHz: 76,
+	maximumStartFrequencyGHz: 81,
+	adcBufBytes:              32 * 1024,
+	lvdsLaneCount:            xwr16xxRawCapture.laneCount,
+	rawCapture:               xwr16xxRawCapture,
+}
+
+var xwr18xxFamily = DeviceFamily{
+	canonicalName:            "xwr18xx",
+	versionPlatforms:         [2]string{"xWR18xx"},
+	receiverMask:             0x0f,
+	transmitterMask:          0x07,
+	minimumStartFrequencyGHz: 76,
+	maximumStartFrequencyGHz: 81,
+	adcBufBytes:              32 * 1024,
+	lvdsLaneCount:            xwr18xxRawCapture.laneCount,
+	rawCapture:               xwr18xxRawCapture,
 }
 
 var xwr68xxFamily = DeviceFamily{
@@ -62,6 +92,28 @@ var xwr68xxFamily = DeviceFamily{
 // Name returns the canonical family name.
 func (f DeviceFamily) Name() string { return f.canonicalName }
 
+// Valid reports whether the descriptor is one of the closed capture
+// families implemented by this package.
+func (f DeviceFamily) Valid() bool { return f.valid() }
+
+// ParseDeviceFamily resolves one exact canonical family name. It deliberately
+// provides no empty default, case folding, model aliases, or fallback.
+func ParseDeviceFamily(name string) (DeviceFamily, error) {
+	switch name {
+	case xwr16xxFamily.canonicalName:
+		return xwr16xxFamily, nil
+	case xwr18xxFamily.canonicalName:
+		return xwr18xxFamily, nil
+	case xwr68xxFamily.canonicalName:
+		return xwr68xxFamily, nil
+	default:
+		return DeviceFamily{}, fmt.Errorf(
+			"unsupported radar family %q; expected exact xwr16xx, xwr18xx, or xwr68xx",
+			name,
+		)
+	}
+}
+
 // RawCaptureContract returns the closed raw-capture descriptor for the
 // family. An invalid family returns the zero, invalid contract.
 func (f DeviceFamily) RawCaptureContract() RawCaptureContract {
@@ -74,7 +126,12 @@ func (f DeviceFamily) RawCaptureContract() RawCaptureContract {
 // Valid reports whether the contract is one of the closed audited
 // descriptors produced by a DeviceFamily.
 func (contract RawCaptureContract) Valid() bool {
-	return contract == xwr68xxRawCapture
+	switch contract {
+	case xwr16xxRawCapture, xwr18xxRawCapture, xwr68xxRawCapture:
+		return true
+	default:
+		return false
+	}
 }
 
 func (contract RawCaptureContract) Vendor() string         { return contract.vendor }
@@ -89,7 +146,25 @@ func (contract RawCaptureContract) LaneCount() uint8       { return contract.lan
 func (contract RawCaptureContract) Layout() string         { return contract.layout }
 
 func (f DeviceFamily) valid() bool {
-	return f == xwr68xxFamily
+	switch f {
+	case xwr16xxFamily, xwr18xxFamily, xwr68xxFamily:
+		return true
+	default:
+		return false
+	}
+}
+
+func (contract RawCaptureContract) deviceFamily() DeviceFamily {
+	switch contract {
+	case xwr16xxRawCapture:
+		return xwr16xxFamily
+	case xwr18xxRawCapture:
+		return xwr18xxFamily
+	case xwr68xxRawCapture:
+		return xwr68xxFamily
+	default:
+		return DeviceFamily{}
+	}
 }
 
 func (f DeviceFamily) acceptsPlatform(platform string) bool {
