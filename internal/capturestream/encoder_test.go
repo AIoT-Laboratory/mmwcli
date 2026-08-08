@@ -146,6 +146,30 @@ func TestEncoderWritesGoldenFiniteCommitStream(t *testing.T) {
 	}
 }
 
+func TestEncoderAcceptsDebugCLIMode(t *testing.T) {
+	session := testSession()
+	session.Mode = CaptureModeDebugCLI
+	plan, config := testCapturePlan(t, 1)
+	var stream bytes.Buffer
+	if _, err := NewEncoder(&stream, session, plan, config); err != nil {
+		t.Fatal(err)
+	}
+	records, err := decodeTestRecords(stream.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("initial record count = %d, want 2", len(records))
+	}
+	var header sessionRecordV1
+	if err := json.Unmarshal(records[0].payload, &header); err != nil {
+		t.Fatal(err)
+	}
+	if header.Mode != string(CaptureModeDebugCLI) {
+		t.Fatalf("session mode = %q, want %q", header.Mode, CaptureModeDebugCLI)
+	}
+}
+
 func TestEncoderWritesAbortForProvisionalFrames(t *testing.T) {
 	session := testSession()
 	plan, config := testCapturePlan(t, 2)
@@ -293,6 +317,12 @@ func TestNewEncoderValidatesCompleteContractBeforeWriting(t *testing.T) {
 			name: "unknown mode",
 			mutate: func(session *Session, _ *radar.CapturePlan, _ *[]byte) {
 				session.Mode = "custom"
+			},
+		},
+		{
+			name: "removed debug-capture mode",
+			mutate: func(session *Session, _ *radar.CapturePlan, _ *[]byte) {
+				session.Mode = "debug-capture"
 			},
 		},
 		{

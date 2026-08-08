@@ -28,8 +28,8 @@ const (
 type CaptureMode string
 
 const (
-	CaptureModeStudioCLI    CaptureMode = "studio-cli"
-	CaptureModeDebugCapture CaptureMode = "debug-capture"
+	CaptureModeStudioCLI CaptureMode = "studio-cli"
+	CaptureModeDebugCLI  CaptureMode = "debug-cli"
 )
 
 // Session is immutable producer metadata. NewEncoder combines it with an exact
@@ -227,7 +227,7 @@ func validateSession(
 	if err := validateProducerVersion(session.ProducerVersion); err != nil {
 		return captureShape{}, err
 	}
-	if session.Mode != CaptureModeStudioCLI && session.Mode != CaptureModeDebugCapture {
+	if session.Mode != CaptureModeStudioCLI && session.Mode != CaptureModeDebugCLI {
 		return captureShape{}, fmt.Errorf("unsupported capture stream mode %q", session.Mode)
 	}
 	if !plan.RawCapture.Valid() {

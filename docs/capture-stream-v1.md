@@ -78,7 +78,7 @@ SESSION is strict UTF-8 JSON with schema **mmwcli.capture_stream.v1** and a maxi
 - a nonzero 16-byte random stream ID encoded as exactly 32 lowercase hex digits;
 - producer name mmwcli and a version of 1..128 valid UTF-8 bytes, with no surrounding whitespace
   or control characters;
-- capture mode studio-cli or debug-capture;
+- capture mode studio-cli or debug-cli;
 - hardware keys `vendor`, `family`, `model`, `revision`, and `identity_source`, with the current
   closed tuple `ti`, `xwr68xx`, empty model, empty revision, and `route_declaration`;
 - finite frame count, frame bytes, and their checked expected-byte product;
