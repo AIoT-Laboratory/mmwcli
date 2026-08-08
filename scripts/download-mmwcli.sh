@@ -136,7 +136,7 @@ actual=$(printf '%s' "$actual" | tr 'A-F' 'a-f')
 
 mkdir -p "$install_dir" || fail "could not create install directory $install_dir"
 [ -d "$install_dir" ] || fail "install path is not a directory: $install_dir"
-stage="$install_dir/.mmwcli.install.$$"
+stage=$(mktemp "$install_dir/.mmwcli.install.XXXXXX") || fail "could not create a staging file in $install_dir"
 cp "$binary_path" "$stage" || fail "could not stage mmwcli in $install_dir"
 chmod 0755 "$stage" || fail "could not make the installed binary executable"
 mv -f "$stage" "$install_dir/mmwcli" || fail "could not install mmwcli into $install_dir"
