@@ -264,7 +264,7 @@ func validSourcePlan() multisensorcapture.SourcePlan {
 	return multisensorcapture.SourcePlan{
 		SourceID: testSourceID, Kind: multisensor.SourceCamera, Required: true,
 		Argv: []string{"mmwcli", "sensor-producer", "fixed-frames"}, QueueSize: 4,
-		Producer: multisensor.Producer{Name: "mmwcli-fixed-frames", Version: "1"},
+		Producer: multisensor.Producer{Name: ProducerName, Version: ProducerVersion},
 		Limits:   multisensor.SourceLimits{MaxItems: 8, MaxItemBytes: 4, MaxPayloadBytes: 32},
 		Payload:  multisensor.PayloadContract{Filename: "frames.bin", Format: "camera.raw.fixed.v1"},
 		Clock: multisensor.Clock{

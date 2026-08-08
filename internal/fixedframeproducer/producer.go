@@ -21,6 +21,12 @@ import (
 	"mmwcli/internal/sensorproducer"
 )
 
+const (
+	ProducerName      = "mmwcli-fixed-frames"
+	ProducerVersion   = "1"
+	MaximumFrameBytes = uint64(sensorproducer.MaxPayloadBytes)
+)
+
 type producer struct {
 	plan       multisensorcapture.SourcePlan
 	frameBytes int
@@ -109,7 +115,7 @@ func validateConfiguration(
 	}
 	maximumInt := uint64(^uint(0) >> 1)
 	if frameBytes == 0 || frameBytes > maximumInt ||
-		frameBytes > uint64(sensorproducer.MaxPayloadBytes) ||
+		frameBytes > MaximumFrameBytes ||
 		frameBytes > plan.Limits.MaxItemBytes || frameBytes > plan.Limits.MaxPayloadBytes {
 		return errors.New("frame_bytes is outside the producer or source limits")
 	}

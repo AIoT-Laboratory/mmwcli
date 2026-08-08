@@ -272,6 +272,7 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "  mmwcli debug-cli check --family FAMILY --bss-fw FILE --mss-fw FILE")
 	fmt.Fprintln(writer, "  mmwcli debug-cli native-check")
 	fmt.Fprintln(writer, "  mmwcli debug-cli capture CFG OUTDIR --family FAMILY --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
+	fmt.Fprintln(writer, "  mmwcli multisensor init PLAN [options] -- CAMERA_COMMAND [ARG...]")
 	fmt.Fprintln(writer, "  mmwcli multisensor check PLAN")
 	fmt.Fprintln(writer, "  mmwcli sensor-producer fixed-frames --plan PLAN --source SOURCE --frame-bytes N -- CAMERA_COMMAND [ARG...]")
 	fmt.Fprintln(writer, "  mmwcli repl --port PORT [options]")

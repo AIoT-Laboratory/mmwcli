@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"mmwcli/internal/fixedframeproducer"
 	"mmwcli/internal/multisensor"
 	"mmwcli/internal/multisensorcapture"
 )
@@ -33,6 +34,122 @@ func TestMultisensorCheckPrintsStrictPlanOffline(t *testing.T) {
 	}
 }
 
+func TestMultisensorInitCreatesRunnableFixedFramePlan(t *testing.T) {
+	planPath := filepath.Join(t.TempDir(), "camera-plan.json")
+	arguments := []string{
+		"multisensor", "init", planPath,
+		"--format", "camera.rgb8.v1", "--frame-bytes", "4", "--max-items", "3",
+		"--", "ffmpeg", "-f", "rawvideo", "-",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run(arguments, &stdout, &stderr); code != 0 {
+		t.Fatalf("Run code = %d, stderr = %q", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	plan, err := multisensorcapture.LoadPlan(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Sources) != 1 {
+		t.Fatalf("sources = %d", len(plan.Sources))
+	}
+	source := plan.Sources[0]
+	if source.SourceID != "camera-0" || source.Kind != multisensor.SourceCamera || !source.Required ||
+		source.QueueSize != 0 || source.Producer.Name != fixedframeproducer.ProducerName ||
+		source.Producer.Version != fixedframeproducer.ProducerVersion ||
+		source.Limits != (multisensor.SourceLimits{MaxItems: 3, MaxItemBytes: 4, MaxPayloadBytes: 12}) ||
+		source.Payload != (multisensor.PayloadContract{Filename: "frames.bin", Format: "camera.rgb8.v1"}) ||
+		source.Clock.ClockID != multisensor.DeliveryObservedClockID("camera-0") ||
+		source.Clock.TickHz != 1_000_000_000 || source.Clock.WrapTicks != 0 ||
+		source.Clock.TimestampSemantics != multisensor.TimestampDeliveryObserved ||
+		source.SyncEventSemantics != multisensorcapture.SyncEventSemanticsNone {
+		t.Fatalf("source = %+v", source)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantArgv := []string{
+		executable, "sensor-producer", "fixed-frames", "--plan", planPath,
+		"--source", "camera-0", "--frame-bytes", "4", "--",
+		"ffmpeg", "-f", "rawvideo", "-",
+	}
+	if strings.Join(source.Argv, "\x00") != strings.Join(wantArgv, "\x00") {
+		t.Fatalf("argv = %#v, want %#v", source.Argv, wantArgv)
+	}
+	for _, expected := range []string{
+		"created multisensor plan: " + planPath,
+		"mmwcli multisensor check " + planPath,
+		"mmwcli studio-cli capture CFG OUTDIR --port PORT --multisensor-plan " + planPath,
+		"mmwcli debug-cli capture CFG OUTDIR --family FAMILY",
+		"--multisensor-plan " + planPath,
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), expected)
+		}
+	}
+}
+
+func TestMultisensorInitSupportsOptionalSourceAndNeverOverwrites(t *testing.T) {
+	planPath := filepath.Join(t.TempDir(), "optional-plan.json")
+	arguments := []string{
+		"multisensor", "init", planPath,
+		"--source-id", "camera-left", "--format", "camera.gray8.v1",
+		"--frame-bytes", "8", "--max-items", "2", "--required=false",
+		"--payload", "left.bin", "--", "vendor-camera", "--raw",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run(arguments, &stdout, &stderr); code != 0 {
+		t.Fatalf("Run code = %d, stderr = %q", code, stderr.String())
+	}
+	plan, err := multisensorcapture.LoadPlan(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := plan.Sources[0]
+	if source.Required || source.SourceID != "camera-left" || source.Payload.Filename != "left.bin" ||
+		source.Limits.MaxPayloadBytes != 16 {
+		t.Fatalf("source = %+v", source)
+	}
+	original, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(arguments, &stdout, &stderr); code != 4 {
+		t.Fatalf("second Run code = %d, stderr = %q", code, stderr.String())
+	}
+	after, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatal("existing plan was changed")
+	}
+}
+
+func TestMultisensorInitRejectsMissingCommandAndOverflow(t *testing.T) {
+	tests := [][]string{
+		{"multisensor", "init", filepath.Join(t.TempDir(), "missing-command.json"),
+			"--format", "camera.raw.v1", "--frame-bytes", "4", "--max-items", "2"},
+		{"multisensor", "init", filepath.Join(t.TempDir(), "overflow.json"),
+			"--format", "camera.raw.v1", "--frame-bytes", "67108864",
+			"--max-items", "18446744073709551615", "--", "camera"},
+	}
+	for _, arguments := range tests {
+		var stdout, stderr bytes.Buffer
+		if code := Run(arguments, &stdout, &stderr); code != 2 {
+			t.Fatalf("Run(%v) code = %d, stderr = %q", arguments, code, stderr.String())
+		}
+		if stdout.Len() != 0 || !strings.Contains(stderr.String(), "argument error:") {
+			t.Fatalf("Run(%v) stdout=%q stderr=%q", arguments, stdout.String(), stderr.String())
+		}
+	}
+}
+
 func TestMultisensorCheckHelpAndRootRouting(t *testing.T) {
 	tests := []struct {
 		arguments []string
@@ -40,6 +157,7 @@ func TestMultisensorCheckHelpAndRootRouting(t *testing.T) {
 	}{
 		{arguments: []string{"help"}, want: "mmwcli multisensor check PLAN"},
 		{arguments: []string{"multisensor", "--help"}, want: "usage: mmwcli multisensor check PLAN"},
+		{arguments: []string{"multisensor", "init", "--help"}, want: "mmwcli multisensor init PLAN"},
 		{arguments: []string{"multisensor", "check", "--help"}, want: "usage: mmwcli multisensor check PLAN"},
 	}
 	for _, test := range tests {
