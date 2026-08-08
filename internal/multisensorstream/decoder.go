@@ -218,7 +218,7 @@ func (decoder *Decoder) acceptEnd(record Record) error {
 	if err := decodeExactMetadata(
 		record.Metadata,
 		&wire,
-		"schema", "source_id", "item_count", "payload_bytes", "payload_sha256",
+		"schema", "source_id", "outcome", "item_count", "payload_bytes", "payload_sha256",
 	); err != nil {
 		return fmt.Errorf("%w: invalid END metadata: %v", ErrProtocol, err)
 	}
@@ -226,19 +226,26 @@ func (decoder *Decoder) acceptEnd(record Record) error {
 	if wire.Schema != EndSchemaV1 || !exists || source.ended || !validDigest(wire.PayloadSHA256) {
 		return fmt.Errorf("%w: END source, state, or digest is invalid", ErrProtocol)
 	}
+	if err := validateSourceOutcome(wire.Outcome); err != nil {
+		return fmt.Errorf("%w: %v", ErrProtocol, err)
+	}
 	if wire.ItemCount != source.nextItem || wire.PayloadBytes != source.payloadBytes ||
 		wire.PayloadSHA256 != currentDigestString(source.payloadHash) {
 		return fmt.Errorf("%w: END does not match provisional source payload", ErrProtocol)
 	}
 	source.ended = true
+	source.outcome = wire.Outcome
 	decoder.recordsStarted = true
 	decoder.endingStarted = true
 	return nil
 }
 
 func (decoder *Decoder) acceptCommit(record Record) error {
-	if decoder.phase != decoderActive || !decoder.allSourcesEnded() {
-		return fmt.Errorf("%w: COMMIT requires END from every source", ErrProtocol)
+	if decoder.phase != decoderActive {
+		return fmt.Errorf("%w: COMMIT is invalid outside the active phase", ErrProtocol)
+	}
+	if err := decoder.validateCommitOutcomes(); err != nil {
+		return fmt.Errorf("%w: %v", ErrProtocol, err)
 	}
 	var wire commitRecordV1
 	if err := decodeExactMetadata(
@@ -299,13 +306,20 @@ func (decoder *Decoder) acceptEOF(record Record) error {
 	return nil
 }
 
-func (decoder *Decoder) allSourcesEnded() bool {
+func (decoder *Decoder) validateCommitOutcomes() error {
 	for _, source := range decoder.sources {
 		if !source.ended {
-			return false
+			return errors.New("COMMIT requires END from every source")
+		}
+		if source.contract.Required && source.outcome != OutcomeComplete {
+			return fmt.Errorf(
+				"required source %q has outcome %q; COMMIT requires complete",
+				source.contract.SourceID,
+				source.outcome,
+			)
 		}
 	}
-	return true
+	return nil
 }
 
 func (decoder *Decoder) poison(err error) error {

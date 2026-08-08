@@ -24,6 +24,7 @@ type sourceProgress struct {
 	payloadBytes uint64
 	payloadHash  hash.Hash
 	ended        bool
+	outcome      SourceOutcome
 }
 
 // Encoder writes one finite aggregate stream. It is a single-owner state
@@ -173,7 +174,7 @@ func (encoder *Encoder) WriteItem(item Item) error {
 
 // EndSource binds the source”s provisional item count, byte count, and
 // concatenated payload SHA-256.
-func (encoder *Encoder) EndSource(sourceID string) error {
+func (encoder *Encoder) EndSource(sourceID string, outcome SourceOutcome) error {
 	if err := encoder.requireActive(); err != nil {
 		return err
 	}
@@ -184,8 +185,11 @@ func (encoder *Encoder) EndSource(sourceID string) error {
 	if source.ended {
 		return encoder.poison(fmt.Errorf("source %q already emitted END", sourceID))
 	}
+	if err := validateSourceOutcome(outcome); err != nil {
+		return encoder.poison(err)
+	}
 	metadata, err := encodeMetadata(endRecordV1{
-		Schema: EndSchemaV1, SourceID: sourceID, ItemCount: source.nextItem,
+		Schema: EndSchemaV1, SourceID: sourceID, Outcome: outcome, ItemCount: source.nextItem,
 		PayloadBytes: source.payloadBytes, PayloadSHA256: currentDigestString(source.payloadHash),
 	})
 	if err != nil {
@@ -195,6 +199,7 @@ func (encoder *Encoder) EndSource(sourceID string) error {
 		return encoder.poison(err)
 	}
 	source.ended = true
+	source.outcome = outcome
 	encoder.recordsStarted = true
 	encoder.endingStarted = true
 	return nil
@@ -207,8 +212,8 @@ func (encoder *Encoder) Commit(artifact SessionArtifact) error {
 	if err := encoder.requireActive(); err != nil {
 		return err
 	}
-	if !encoder.allSourcesEnded() {
-		return encoder.poison(errors.New("all declared sources must emit END before COMMIT"))
+	if err := encoder.validateCommitOutcomes(); err != nil {
+		return encoder.poison(err)
 	}
 	if err := validateArtifact(artifact); err != nil {
 		return encoder.poison(err)
@@ -269,13 +274,20 @@ func (encoder *Encoder) emit(recordType RecordType, metadata, payload []byte) er
 	return nil
 }
 
-func (encoder *Encoder) allSourcesEnded() bool {
+func (encoder *Encoder) validateCommitOutcomes() error {
 	for _, source := range encoder.sources {
 		if !source.ended {
-			return false
+			return errors.New("all declared sources must emit END before COMMIT")
+		}
+		if source.contract.Required && source.outcome != OutcomeComplete {
+			return fmt.Errorf(
+				"required source %q has outcome %q; COMMIT requires complete",
+				source.contract.SourceID,
+				source.outcome,
+			)
 		}
 	}
-	return true
+	return nil
 }
 
 func (encoder *Encoder) requireActive() error {

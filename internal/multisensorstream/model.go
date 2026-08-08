@@ -24,6 +24,7 @@ const (
 type SourceKind = multisensor.SourceKind
 type TimestampSemantics = multisensor.TimestampSemantics
 type SynchronizationGrade = multisensor.SynchronizationGrade
+type SourceOutcome = multisensor.SourceOutcome
 type SourceLimits = multisensor.SourceLimits
 type PayloadContract = multisensor.PayloadContract
 type Clock = multisensor.Clock
@@ -34,6 +35,9 @@ const (
 	TimestampFrameStart            = multisensor.TimestampFrameStart
 	TimestampExposureMidpoint      = multisensor.TimestampExposureMidpoint
 	SynchronizationSoftwareBarrier = multisensor.SynchronizationSoftwareBarrier
+	OutcomeComplete                = multisensor.OutcomeComplete
+	OutcomeFailed                  = multisensor.OutcomeFailed
+	OutcomeOmitted                 = multisensor.OutcomeOmitted
 	NoSyncEventID                  = multisensor.NoSyncEventID
 )
 
@@ -105,11 +109,12 @@ type itemRecordV1 struct {
 }
 
 type endRecordV1 struct {
-	Schema        string `json:"schema"`
-	SourceID      string `json:"source_id"`
-	ItemCount     uint64 `json:"item_count"`
-	PayloadBytes  uint64 `json:"payload_bytes"`
-	PayloadSHA256 string `json:"payload_sha256"`
+	Schema        string        `json:"schema"`
+	SourceID      string        `json:"source_id"`
+	Outcome       SourceOutcome `json:"outcome"`
+	ItemCount     uint64        `json:"item_count"`
+	PayloadBytes  uint64        `json:"payload_bytes"`
+	PayloadSHA256 string        `json:"payload_sha256"`
 }
 
 type commitRecordV1 struct {
@@ -223,6 +228,15 @@ func validateAbortReason(reason AbortReason) error {
 		return nil
 	default:
 		return fmt.Errorf("unsupported multisensor stream abort reason %q", reason)
+	}
+}
+
+func validateSourceOutcome(outcome SourceOutcome) error {
+	switch outcome {
+	case OutcomeComplete, OutcomeFailed, OutcomeOmitted:
+		return nil
+	default:
+		return fmt.Errorf("unsupported multisensor stream source outcome %q", outcome)
 	}
 }
 

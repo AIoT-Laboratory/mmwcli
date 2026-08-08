@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -87,12 +88,28 @@ func TestCommittedStreamMatchesDeterministicGoldenAndInterleavesSources(t *testi
 	if err := decodeExactMetadata(
 		records[6].Metadata,
 		&cameraEnd,
-		"schema", "source_id", "item_count", "payload_bytes", "payload_sha256",
+		"schema", "source_id", "outcome", "item_count", "payload_bytes", "payload_sha256",
 	); err != nil {
 		t.Fatal(err)
 	}
-	if cameraEnd.SourceID != "camera-0" || cameraEnd.ItemCount != 2 || cameraEnd.PayloadBytes != 12 {
+	if cameraEnd.SourceID != "camera-0" || cameraEnd.Outcome != OutcomeFailed ||
+		cameraEnd.ItemCount != 2 || cameraEnd.PayloadBytes != 12 {
 		t.Fatalf("camera END = %+v", cameraEnd)
+	}
+	// Camera ITEMs remain visible as provisional records, but its failed END
+	// tells a committed-stream consumer to discard both of them.
+	kept := 0
+	for _, record := range records[2:6] {
+		var item itemRecordV1
+		if err := json.Unmarshal(record.Metadata, &item); err != nil {
+			t.Fatal(err)
+		}
+		if item.SourceID == "radar-0" {
+			kept++
+		}
+	}
+	if kept != 2 {
+		t.Fatalf("complete-source retained ITEMs = %d, want 2", kept)
 	}
 }
 
@@ -179,7 +196,7 @@ func TestEncoderPoisonsStateViolationsAndShortWrites(t *testing.T) {
 		t.Fatalf("short-write error = %v", err)
 	}
 	calls := short.calls
-	if err := encoder.EndSource("radar-0"); !errors.Is(err, ErrEncoderPoisoned) {
+	if err := encoder.EndSource("radar-0", OutcomeComplete); !errors.Is(err, ErrEncoderPoisoned) {
 		t.Fatalf("poisoned END error = %v", err)
 	}
 	if short.calls != calls {
@@ -191,7 +208,7 @@ func TestEncoderPoisonsStateViolationsAndShortWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := encoder.EndSource("radar-0"); err != nil {
+	if err := encoder.EndSource("radar-0", OutcomeComplete); err != nil {
 		t.Fatal(err)
 	}
 	err = encoder.WriteItem(Item{
@@ -235,6 +252,62 @@ func TestCommitForbidsAppendAndDecoderRejectsTrailingRecord(t *testing.T) {
 	}
 	if _, err := decoder.Read(); !errors.Is(err, ErrProtocol) || !strings.Contains(err.Error(), "ITEM") {
 		t.Fatalf("trailing ITEM error = %v", err)
+	}
+}
+
+func TestCommitRequiresEveryRequiredSourceToBeComplete(t *testing.T) {
+	session := testSession()
+	session.Sources[1].Required = true
+	var output bytes.Buffer
+	encoder, err := NewEncoder(&output, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.EndSource("camera-0", OutcomeFailed); err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.EndSource("radar-0", OutcomeComplete); err != nil {
+		t.Fatal(err)
+	}
+	artifactBytes := []byte(`{"schema":"mmwcli.multisensor_session.v1"}`)
+	artifact := SessionArtifact{
+		SizeBytes: uint64(len(artifactBytes)), SHA256: sha256.Sum256(artifactBytes),
+	}
+	if err := encoder.Commit(artifact); err == nil || !strings.Contains(err.Error(), "required source") {
+		t.Fatalf("required failed-source COMMIT error = %v", err)
+	}
+
+	output.Reset()
+	sessionMetadata, _ := encodeMetadata(sessionRecordV1{
+		Schema: SchemaV1, SessionID: session.SessionID,
+		SynchronizationGrade: session.SynchronizationGrade, Sources: session.Sources,
+	})
+	emptyDigest := sha256.Sum256(nil)
+	cameraEnd, _ := encodeMetadata(endRecordV1{
+		Schema: EndSchemaV1, SourceID: "camera-0", Outcome: OutcomeFailed,
+		PayloadSHA256: digestString(emptyDigest),
+	})
+	radarEnd, _ := encodeMetadata(endRecordV1{
+		Schema: EndSchemaV1, SourceID: "radar-0", Outcome: OutcomeComplete,
+		PayloadSHA256: digestString(emptyDigest),
+	})
+	commit, _ := encodeMetadata(commitRecordV1{
+		Schema: TerminalSchemaV1, SessionID: session.SessionID, Outcome: "commit",
+		SessionJSONBytes: artifact.SizeBytes, SessionJSONSHA256: digestString(artifact.SHA256),
+	})
+	for _, record := range []Record{
+		{Type: RecordSession, RecordSeq: 0, Metadata: sessionMetadata},
+		{Type: RecordEnd, RecordSeq: 1, Metadata: cameraEnd},
+		{Type: RecordEnd, RecordSeq: 2, Metadata: radarEnd},
+		{Type: RecordCommit, RecordSeq: 3, Metadata: commit},
+	} {
+		if err := writeRecord(&output, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := firstDecodeError(t, output.Bytes()); !errors.Is(err, ErrProtocol) ||
+		!strings.Contains(err.Error(), "required source") {
+		t.Fatalf("decoder required failed-source COMMIT error = %v", err)
 	}
 }
 
@@ -316,10 +389,10 @@ func writeCommittedStream(t *testing.T, output *bytes.Buffer) *Encoder {
 			t.Fatal(err)
 		}
 	}
-	if err := encoder.EndSource("camera-0"); err != nil {
+	if err := encoder.EndSource("camera-0", OutcomeFailed); err != nil {
 		t.Fatal(err)
 	}
-	if err := encoder.EndSource("radar-0"); err != nil {
+	if err := encoder.EndSource("radar-0", OutcomeComplete); err != nil {
 		t.Fatal(err)
 	}
 	sessionJSON := []byte(`{"schema":"mmwcli.multisensor_session.v1"}`)
@@ -342,7 +415,7 @@ func testSession() Session {
 				Limits:  SourceLimits{MaxItems: 2, MaxItemBytes: 16, MaxPayloadBytes: 32},
 			},
 			{
-				SourceID: "camera-0", Kind: SourceCamera, Required: true,
+				SourceID: "camera-0", Kind: SourceCamera, Required: false,
 				Payload: PayloadContract{Filename: "frames.bin", Format: "image.jpeg.v1"},
 				Clock:   Clock{ClockID: "camera-clock", TickHz: 1_000, TimestampSemantics: TimestampExposureMidpoint},
 				Limits:  SourceLimits{MaxItems: 2, MaxItemBytes: 16, MaxPayloadBytes: 32},
