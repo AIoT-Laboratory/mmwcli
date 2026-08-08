@@ -92,7 +92,7 @@ REPL is a `studio_cli` utility, not another firmware backend. It accepts only th
 - Low-level DCA commands are diagnostic/control operations only; ADC acquisition is available through `studio-cli capture` and `debug-capture capture`. `ping` is not a capture-readiness gate, and reset occurs only through an explicit command or option.
 - `sensorStop` stops the sensor only; it does not power off the radar or DCA1000.
 
-See the [architecture](docs/architecture.md), [hardware smoke test](docs/hardware-smoke-test.md), and [TI reference map](docs/ti-reference-map.md).
+See the [architecture](docs/architecture.md), [multi-sensor synchronization design](docs/multisensor-sync.md), [hardware smoke test](docs/hardware-smoke-test.md), and [TI reference map](docs/ti-reference-map.md).
 
 ## License
 

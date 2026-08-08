@@ -89,6 +89,8 @@ Network defaults and laboratory timing checks belong in the [hardware smoke test
 
 A future trusted real-time path will keep exclusive hardware ownership in `mmwcli` and expose a versioned stream contract for `mmwcore` consumers. No live stream contract or transport is implemented today; current integration ends at raw files or capture-session directories.
 
+Multi-sensor coordination and clock uncertainty remain a separate, unimplemented aggregate contract; see the [multi-sensor synchronization design](multisensor-sync.md). It does not extend capture-stream v1 or move device/process ownership into mmwcore.
+
 ## Transactional output
 
 Output exists only as `OUT.part` during capture. Existing final or partial output fails before hardware access. Publication never overwrites `OUT` and occurs only after reception, radar cleanup, DCA cleanup, status checks, synchronization, and close succeed.
