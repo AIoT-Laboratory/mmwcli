@@ -189,9 +189,6 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	if flags.NArg() != 0 {
 		return usageError{message: "unexpected capture arguments: " + strings.Join(flags.Args(), " ")}
 	}
-	if streamOutput && *multisensorPlanPath != "" {
-		return usageError{message: "--stream and --multisensor-plan are mutually exclusive"}
-	}
 	if *portName == "" {
 		return usageError{message: "--port is required; mmwcli never scans serial ports"}
 	}
@@ -277,7 +274,7 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	defer stopSignal()
 	// Reserve OUT.part and complete external READY before hardware access.
 	output, aggregate, err := createCaptureDestination(
-		ctx, outputPath, *multisensorPlanPath, prepared, stderr, stopSignal,
+		ctx, outputPath, *multisensorPlanPath, prepared, stderr, streamStdout, stopSignal,
 	)
 	if err != nil {
 		return err
@@ -292,7 +289,7 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 		defer func() { resultErr = aggregate.finish(ctx, resultErr) }()
 	}
 	var stream *activeCaptureStream
-	if streamOutput {
+	if streamOutput && aggregate == nil {
 		stream, err = startCaptureStream(
 			ctx,
 			streamStdout,
@@ -346,6 +343,8 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	sessionOptions.DrainTimeout = 3 * time.Second
 	if stream != nil {
 		sessionOptions.Mirror = stream.mirror
+	} else if aggregate != nil && aggregate.stream != nil {
+		sessionOptions.Mirror = aggregate.stream.mirror
 	}
 	if aggregate != nil {
 		sessionOptions.Participant = aggregate

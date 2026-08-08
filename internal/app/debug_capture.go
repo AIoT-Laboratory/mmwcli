@@ -123,9 +123,6 @@ func runDebugCaptureCaptureWithDependencies(
 	if flags.NArg() != 0 {
 		return usageError{message: "unexpected debug-cli capture arguments: " + strings.Join(flags.Args(), " ")}
 	}
-	if *streamOutput && *multisensorPlanPath != "" {
-		return usageError{message: "--stream and --multisensor-plan are mutually exclusive"}
-	}
 	device, err := parseDebugCaptureDeviceFamily(*familyName)
 	if err != nil {
 		return err
@@ -392,7 +389,7 @@ func runDebugCaptureHardware(
 	ctx, stopSignal := dependencies.context()
 	defer stopSignal()
 	output, aggregate, err := createCaptureDestination(
-		ctx, outputPath, multisensorPlanPath, prepared, producerStderr, stopSignal,
+		ctx, outputPath, multisensorPlanPath, prepared, producerStderr, streamStdout, stopSignal,
 	)
 	if err != nil {
 		return stats, err
@@ -404,7 +401,7 @@ func runDebugCaptureHardware(
 		defer func() { resultErr = aggregate.finish(ctx, resultErr) }()
 	}
 	var stream *activeCaptureStream
-	if streamStdout != nil {
+	if streamStdout != nil && aggregate == nil {
 		stream, err = startCaptureStream(
 			ctx,
 			streamStdout,
@@ -459,6 +456,8 @@ func runDebugCaptureHardware(
 	sessionOptions.DrainTimeout = 3 * time.Second
 	if stream != nil {
 		sessionOptions.Mirror = stream.mirror
+	} else if aggregate != nil && aggregate.stream != nil {
+		sessionOptions.Mirror = aggregate.stream.mirror
 	}
 	if aggregate != nil {
 		sessionOptions.Participant = aggregate
