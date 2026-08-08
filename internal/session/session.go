@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"mmwcli/internal/capturefile"
+	"mmwcli/internal/capturestream"
 	"mmwcli/internal/dca"
 	"mmwcli/internal/radar"
 )
@@ -78,6 +79,8 @@ type Options struct {
 	ControlDrainTimeout time.Duration
 	ControlQuietWindow  time.Duration
 	RadarCleanupTimeout time.Duration
+	Mirror              *capturestream.Mirror
+	MirrorSealTimeout   time.Duration
 	Log                 func(string)
 }
 
@@ -91,6 +94,7 @@ func DefaultOptions() Options {
 		ControlDrainTimeout: 500 * time.Millisecond,
 		ControlQuietWindow:  50 * time.Millisecond,
 		RadarCleanupTimeout: 3 * time.Second,
+		MirrorSealTimeout:   3 * time.Second,
 	}
 }
 
@@ -106,6 +110,13 @@ func Run(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	mirror := options.Mirror
+	mirrorManagedByLifecycle := false
+	defer func() {
+		if mirror != nil && !mirrorManagedByLifecycle {
+			mirror.Abort()
+		}
+	}()
 	if radarControl == nil || dcaControl == nil || newReceiver == nil || !capturefile.IsUsableOutput(output) {
 		return stats, errors.New("capture session dependencies are incomplete")
 	}
@@ -113,6 +124,9 @@ func Run(
 	defer func() {
 		if outputManagedByLifecycle {
 			return
+		}
+		if mirror != nil {
+			mirror.Abort()
 		}
 		if closeErr := output.Close(); closeErr != nil {
 			marked := &CleanupError{Err: closeErr}
@@ -130,6 +144,14 @@ func Run(
 	}
 	if options.ReceiverConfig.FirstPacketTimeout <= 0 || options.ReceiverConfig.IdleTimeout <= 0 {
 		return stats, errors.New("capture receiver first-packet and idle timeouts must be positive")
+	}
+	if mirror != nil {
+		if !mirror.BoundTo(output) {
+			return stats, errors.New("capture stream mirror is not bound to the session output")
+		}
+		if options.MirrorSealTimeout <= 0 {
+			return stats, errors.New("capture stream mirror seal timeout must be positive")
+		}
 	}
 	if plan.Mode != radar.FullConfiguration && plan.Mode != radar.ReuseConfiguration {
 		return stats, errors.New("radar capture plan has an invalid configuration mode")
@@ -233,6 +255,7 @@ func Run(
 	var radarStartIssuedAt time.Time
 
 	outputManagedByLifecycle = true
+	mirrorManagedByLifecycle = true
 	defer func() {
 		cleanupErr := cleanup(
 			radarControl,
@@ -276,6 +299,21 @@ func Run(
 		if resultErr == nil {
 			resultErr = validateResult(plan, stats, options.ReceiverConfig.IdleTimeout, radarStartIssuedAt)
 		}
+		if mirror != nil {
+			if mirrorErr := mirror.Err(); mirrorErr != nil {
+				resultErr = errors.Join(resultErr, mirrorErr)
+			}
+			if resultErr != nil {
+				mirror.Abort()
+			} else {
+				sealContext, cancelSeal := context.WithTimeout(
+					context.Background(),
+					options.MirrorSealTimeout,
+				)
+				resultErr = mirror.Seal(sealContext)
+				cancelSeal()
+			}
+		}
 		if resultErr == nil {
 			if err := output.Truncate(stats.OutputBytes); err != nil {
 				resultErr = err
@@ -284,6 +322,9 @@ func Run(
 			}
 		}
 		if resultErr != nil {
+			if mirror != nil {
+				mirror.Abort()
+			}
 			if closeErr := output.Close(); closeErr != nil {
 				resultErr = errors.Join(resultErr, &CleanupError{Err: closeErr})
 			}
@@ -344,7 +385,11 @@ func Run(
 	}
 	receiverContext, cancelReceiver := context.WithCancel(context.Background())
 	receiverCancel = cancelReceiver
-	if err := receiver.Start(receiverContext, output); err != nil {
+	receiverOutput := io.WriterAt(output)
+	if mirror != nil {
+		receiverOutput = mirror
+	}
+	if err := receiver.Start(receiverContext, receiverOutput); err != nil {
 		return stats, err
 	}
 	receiverStarted = true

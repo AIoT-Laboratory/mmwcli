@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"mmwcli/internal/capturefile"
+	"mmwcli/internal/capturestream"
 	"mmwcli/internal/dca"
 	"mmwcli/internal/radar"
 )
@@ -121,6 +122,7 @@ func (f *fakeDCA) DrainAsyncStatuses(context.Context, time.Duration) ([]dca.Resp
 type fakeReceiver struct {
 	events    *[]string
 	stats     dca.CaptureStats
+	payload   []byte
 	waitHook  func(context.Context) (dca.CaptureStats, error)
 	closeHook func()
 	closeErr  error
@@ -128,7 +130,11 @@ type fakeReceiver struct {
 
 func (f *fakeReceiver) Start(_ context.Context, output io.WriterAt) error {
 	*f.events = append(*f.events, "receiverStart")
-	_, err := output.WriteAt([]byte("adc"), 0)
+	payload := f.payload
+	if payload == nil {
+		payload = []byte("adc")
+	}
+	_, err := output.WriteAt(payload, 0)
 	return err
 }
 func (f *fakeReceiver) WaitForFirst(context.Context) error {
@@ -160,6 +166,16 @@ func (f *fakeReceiver) Close() error {
 	return f.closeErr
 }
 
+type sessionFrameSinkFunc func(context.Context, uint64, []byte) error
+
+func (function sessionFrameSinkFunc) WriteFrame(
+	ctx context.Context,
+	index uint64,
+	payload []byte,
+) error {
+	return function(ctx, index, payload)
+}
+
 func TestRunRejectsTypedNilOutputBeforeHardware(t *testing.T) {
 	events := []string{}
 	var output *capturefile.File
@@ -181,6 +197,479 @@ func TestRunRejectsTypedNilOutputBeforeHardware(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatalf("hardware events = %v, want none", events)
 	}
+}
+
+func TestMirrorBoundToExactCaptureOutput(t *testing.T) {
+	first, err := capturefile.Create(filepath.Join(t.TempDir(), "first.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+	second, err := capturefile.Create(filepath.Join(t.TempDir(), "second.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	mirror := newSessionTestMirror(
+		t,
+		first,
+		sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
+		func() {},
+	)
+	if !mirror.BoundTo(first) {
+		t.Fatal("Mirror did not recognize its authoritative output")
+	}
+	if mirror.BoundTo(second) || mirror.BoundTo(nil) {
+		t.Fatal("Mirror accepted a different or nil output")
+	}
+	var typedNil *capturefile.File
+	if mirror.BoundTo(typedNil) {
+		t.Fatal("Mirror accepted a typed-nil output")
+	}
+	var nilMirror *capturestream.Mirror
+	if nilMirror.BoundTo(first) {
+		t.Fatal("nil Mirror reported an output binding")
+	}
+}
+
+func TestRunRejectsInvalidMirrorPreflightBeforeHardware(t *testing.T) {
+	t.Run("incomplete dependencies", func(t *testing.T) {
+		output, err := capturefile.Create(filepath.Join(t.TempDir(), "dependencies.bin"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = output.Close() })
+		canceled := make(chan struct{})
+		mirror := newSessionTestMirror(
+			t,
+			output,
+			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
+			func() { close(canceled) },
+		)
+		options := DefaultOptions()
+		options.Mirror = mirror
+		_, err = Run(
+			context.Background(),
+			nil,
+			&fakeDCA{events: &[]string{}},
+			func(dca.ReceiverConfig) (DataReceiver, error) { return nil, nil },
+			mirrorSessionPlan(t),
+			output,
+			options,
+		)
+		if err == nil || !strings.Contains(err.Error(), "dependencies are incomplete") {
+			t.Fatalf("Run error = %v, want incomplete dependencies", err)
+		}
+		select {
+		case <-canceled:
+		case <-time.After(time.Second):
+			t.Fatal("early dependency failure did not abort Mirror")
+		}
+		if mirrorErr := mirror.Err(); !errors.Is(mirrorErr, capturestream.ErrMirrorAborted) {
+			t.Fatalf("Mirror error = %v, want aborted", mirrorErr)
+		}
+	})
+
+	t.Run("invalid command timeout", func(t *testing.T) {
+		finalPath := filepath.Join(t.TempDir(), "command-timeout.bin")
+		output, err := capturefile.Create(finalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		canceled := make(chan struct{})
+		mirror := newSessionTestMirror(
+			t,
+			output,
+			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
+			func() { close(canceled) },
+		)
+		events := []string{}
+		options := DefaultOptions()
+		options.Mirror = mirror
+		options.CommandTimeout = 0
+		_, err = Run(
+			context.Background(),
+			&fakeRadar{events: &events},
+			&fakeDCA{events: &events},
+			func(dca.ReceiverConfig) (DataReceiver, error) {
+				t.Fatal("receiver factory called after invalid timeout")
+				return nil, nil
+			},
+			mirrorSessionPlan(t),
+			output,
+			options,
+		)
+		if err == nil || !strings.Contains(err.Error(), "timeouts must be positive") {
+			t.Fatalf("Run error = %v, want timeout preflight failure", err)
+		}
+		if len(events) != 0 {
+			t.Fatalf("invalid timeout touched hardware: %v", events)
+		}
+		select {
+		case <-canceled:
+		case <-time.After(time.Second):
+			t.Fatal("invalid timeout did not abort Mirror")
+		}
+		if mirrorErr := mirror.Err(); !errors.Is(mirrorErr, capturestream.ErrMirrorAborted) {
+			t.Fatalf("Mirror error = %v, want aborted", mirrorErr)
+		}
+		assertPartRetained(t, finalPath)
+	})
+
+	t.Run("different output", func(t *testing.T) {
+		finalPath := filepath.Join(t.TempDir(), "session.bin")
+		output, err := capturefile.Create(finalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		other, err := capturefile.Create(filepath.Join(t.TempDir(), "other.bin"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = other.Close() })
+		mirror := newSessionTestMirror(
+			t,
+			other,
+			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
+			func() {},
+		)
+		events := []string{}
+		options := DefaultOptions()
+		options.Mirror = mirror
+		_, err = Run(
+			context.Background(),
+			&fakeRadar{events: &events},
+			&fakeDCA{events: &events},
+			func(dca.ReceiverConfig) (DataReceiver, error) {
+				t.Fatal("receiver factory called after Mirror binding failure")
+				return nil, nil
+			},
+			mirrorSessionPlan(t),
+			output,
+			options,
+		)
+		if err == nil || !strings.Contains(err.Error(), "not bound") {
+			t.Fatalf("Run error = %v, want Mirror binding failure", err)
+		}
+		if len(events) != 0 {
+			t.Fatalf("Mirror binding preflight touched hardware: %v", events)
+		}
+		if mirrorErr := mirror.Err(); !errors.Is(mirrorErr, capturestream.ErrMirrorAborted) {
+			t.Fatalf("Mirror error = %v, want aborted", mirrorErr)
+		}
+		assertPartRetained(t, finalPath)
+	})
+
+	t.Run("nonpositive seal timeout", func(t *testing.T) {
+		finalPath := filepath.Join(t.TempDir(), "timeout.bin")
+		output, err := capturefile.Create(finalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mirror := newSessionTestMirror(
+			t,
+			output,
+			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
+			func() {},
+		)
+		events := []string{}
+		options := DefaultOptions()
+		options.Mirror = mirror
+		options.MirrorSealTimeout = 0
+		_, err = Run(
+			context.Background(),
+			&fakeRadar{events: &events},
+			&fakeDCA{events: &events},
+			func(dca.ReceiverConfig) (DataReceiver, error) {
+				t.Fatal("receiver factory called after Mirror timeout failure")
+				return nil, nil
+			},
+			mirrorSessionPlan(t),
+			output,
+			options,
+		)
+		if err == nil || !strings.Contains(err.Error(), "seal timeout must be positive") {
+			t.Fatalf("Run error = %v, want Mirror timeout failure", err)
+		}
+		if len(events) != 0 {
+			t.Fatalf("Mirror timeout preflight touched hardware: %v", events)
+		}
+		if err := mirror.Err(); !errors.Is(err, capturestream.ErrMirrorAborted) {
+			t.Fatalf("Mirror error = %v, want aborted", err)
+		}
+		assertPartRetained(t, finalPath)
+	})
+}
+
+func TestRunSealsMirrorBeforePublishingExistingOutput(t *testing.T) {
+	plan := mirrorSessionPlan(t)
+	finalPath := filepath.Join(t.TempDir(), "mirrored.bin")
+	output, err := capturefile.Create(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionContext, cancelSession := context.WithCancel(context.Background())
+	defer cancelSession()
+	var mirrored []byte
+	mirror := newSessionTestMirror(
+		t,
+		output,
+		sessionFrameSinkFunc(func(ctx context.Context, index uint64, payload []byte) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if index != 0 {
+				return errors.New("unexpected provisional frame index")
+			}
+			if _, err := os.Stat(finalPath); !os.IsNotExist(err) {
+				return errors.New("final output existed before Mirror Seal")
+			}
+			staged, err := os.ReadFile(output.PartPath())
+			if err != nil {
+				return err
+			}
+			if string(staged) != "data" {
+				return errors.New("authoritative output was not written before provisional frame")
+			}
+			mirrored = append([]byte(nil), payload...)
+			return nil
+		}),
+		cancelSession,
+	)
+	events := []string{}
+	options := DefaultOptions()
+	options.Mirror = mirror
+	_, err = Run(
+		sessionContext,
+		&fakeRadar{events: &events},
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) {
+			return mirrorTestReceiver(&events, []byte("data"), plan.ExpectedBytes), nil
+		},
+		plan,
+		output,
+		options,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(mirrored) != "data" {
+		t.Fatalf("mirrored frame = %q, want %q", mirrored, "data")
+	}
+	committed, err := os.ReadFile(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(committed) != "data" {
+		t.Fatalf("committed bytes = %q, want %q", committed, "data")
+	}
+	if _, err := os.Stat(output.PartPath()); !os.IsNotExist(err) {
+		t.Fatalf("part output remains after commit: %v", err)
+	}
+}
+
+func TestRunReturnsMirrorSinkFailureWithoutCommit(t *testing.T) {
+	plan := mirrorSessionPlan(t)
+	finalPath := filepath.Join(t.TempDir(), "sink-failure.bin")
+	output, err := capturefile.Create(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("provisional sink failed")
+	sessionContext, cancelSession := context.WithCancel(context.Background())
+	defer cancelSession()
+	mirror := newSessionTestMirror(
+		t,
+		output,
+		sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return wantErr }),
+		cancelSession,
+	)
+	events := []string{}
+	options := DefaultOptions()
+	options.Mirror = mirror
+	_, err = Run(
+		sessionContext,
+		&fakeRadar{events: &events},
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) {
+			return mirrorTestReceiver(&events, []byte("data"), plan.ExpectedBytes), nil
+		},
+		plan,
+		output,
+		options,
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Run error = %v, want sink failure %v", err, wantErr)
+	}
+	if mirrorErr := mirror.Err(); !errors.Is(mirrorErr, wantErr) {
+		t.Fatalf("Mirror error = %v, want %v", mirrorErr, wantErr)
+	}
+	assertPartBytes(t, finalPath, "data")
+}
+
+func TestRunMirrorSealTimeoutPreventsCommit(t *testing.T) {
+	plan := mirrorSessionPlan(t)
+	finalPath := filepath.Join(t.TempDir(), "seal-timeout.bin")
+	output, err := capturefile.Create(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mirror := newSessionTestMirror(
+		t,
+		output,
+		sessionFrameSinkFunc(func(ctx context.Context, _ uint64, _ []byte) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}),
+		func() {},
+	)
+	events := []string{}
+	options := DefaultOptions()
+	options.Mirror = mirror
+	options.MirrorSealTimeout = 10 * time.Millisecond
+	_, err = Run(
+		context.Background(),
+		&fakeRadar{events: &events},
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) {
+			return mirrorTestReceiver(&events, []byte("data"), plan.ExpectedBytes), nil
+		},
+		plan,
+		output,
+		options,
+	)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run error = %v, want Mirror seal deadline", err)
+	}
+	assertPartBytes(t, finalPath, "data")
+}
+
+func TestRunAbortsMirrorOnSessionFailure(t *testing.T) {
+	t.Run("cleanup failure", func(t *testing.T) {
+		plan := mirrorSessionPlan(t)
+		finalPath := filepath.Join(t.TempDir(), "cleanup.bin")
+		output, err := capturefile.Create(finalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessionContext, cancelSession := context.WithCancel(context.Background())
+		defer cancelSession()
+		mirror := newSessionTestMirror(
+			t,
+			output,
+			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
+			cancelSession,
+		)
+		wantErr := errors.New("radar cleanup failed")
+		events := []string{}
+		radarControl := &fakeRadar{
+			events: &events,
+			stopHook: func(_ context.Context, call int) error {
+				if call == 2 {
+					return wantErr
+				}
+				return nil
+			},
+		}
+		options := DefaultOptions()
+		options.Mirror = mirror
+		_, err = Run(
+			sessionContext,
+			radarControl,
+			&fakeDCA{events: &events},
+			func(dca.ReceiverConfig) (DataReceiver, error) {
+				return mirrorTestReceiver(&events, []byte("data"), plan.ExpectedBytes), nil
+			},
+			plan,
+			output,
+			options,
+		)
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("Run error = %v, want cleanup failure %v", err, wantErr)
+		}
+		if mirrorErr := mirror.Err(); !errors.Is(mirrorErr, capturestream.ErrMirrorAborted) {
+			t.Fatalf("Mirror error = %v, want aborted", mirrorErr)
+		}
+		assertPartBytes(t, finalPath, "data")
+	})
+
+	t.Run("cancellation", func(t *testing.T) {
+		plan := mirrorSessionPlan(t)
+		finalPath := filepath.Join(t.TempDir(), "canceled.bin")
+		output, err := capturefile.Create(finalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessionContext, cancelSession := context.WithCancel(context.Background())
+		defer cancelSession()
+		mirror := newSessionTestMirror(
+			t,
+			output,
+			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
+			cancelSession,
+		)
+		events := []string{}
+		dcaControl := &fakeDCA{
+			events: &events,
+			startHook: func(context.Context) (dca.Response, error) {
+				cancelSession()
+				return dca.Response{Command: dca.CommandStartRecord}, nil
+			},
+		}
+		options := DefaultOptions()
+		options.Mirror = mirror
+		_, err = Run(
+			sessionContext,
+			&fakeRadar{events: &events},
+			dcaControl,
+			func(dca.ReceiverConfig) (DataReceiver, error) {
+				return mirrorTestReceiver(&events, []byte("data"), plan.ExpectedBytes), nil
+			},
+			plan,
+			output,
+			options,
+		)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want cancellation", err)
+		}
+		if mirrorErr := mirror.Err(); !errors.Is(mirrorErr, capturestream.ErrMirrorAborted) {
+			t.Fatalf("Mirror error = %v, want aborted", mirrorErr)
+		}
+		assertPartBytes(t, finalPath, "data")
+	})
+
+	t.Run("missing frame coverage", func(t *testing.T) {
+		plan := mirrorSessionPlan(t)
+		finalPath := filepath.Join(t.TempDir(), "missing.bin")
+		output, err := capturefile.Create(finalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mirror := newSessionTestMirror(
+			t,
+			output,
+			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
+			func() {},
+		)
+		events := []string{}
+		options := DefaultOptions()
+		options.Mirror = mirror
+		_, err = Run(
+			context.Background(),
+			&fakeRadar{events: &events},
+			&fakeDCA{events: &events},
+			func(dca.ReceiverConfig) (DataReceiver, error) {
+				return mirrorTestReceiver(&events, []byte("da"), plan.ExpectedBytes), nil
+			},
+			plan,
+			output,
+			options,
+		)
+		if !errors.Is(err, capturestream.ErrMirrorIntegrity) {
+			t.Fatalf("Run error = %v, want missing Mirror coverage", err)
+		}
+		assertPartBytes(t, finalPath, "da")
+	})
 }
 
 func TestReuseCaptureSendsNoConfigurationAndArmsBeforeStart(t *testing.T) {
@@ -270,6 +759,13 @@ func TestReuseCaptureSendsNoConfigurationAndArmsBeforeStart(t *testing.T) {
 	}
 	if cleanupDrainBudget < dca.RawModeTailFlushGuard-100*time.Millisecond {
 		t.Fatalf("cleanup drain budget = %s, want at least %s", cleanupDrainBudget, dca.RawModeTailFlushGuard)
+	}
+	raw, err := os.ReadFile(output.FinalPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "adc" {
+		t.Fatalf("raw capture bytes = %q, want %q", raw, "adc")
 	}
 }
 
@@ -1065,6 +1561,59 @@ func sessionTestPlan(t *testing.T) radar.CapturePlan {
 	plan.BytesPerFrame = 3
 	plan.ExpectedBytes = 3
 	return plan
+}
+
+func mirrorSessionPlan(t *testing.T) radar.CapturePlan {
+	t.Helper()
+	plan := sessionTestPlan(t)
+	plan.BytesPerFrame = 4
+	plan.ExpectedBytes = 4
+	plan.NumberOfFrames = 1
+	return plan
+}
+
+func newSessionTestMirror(
+	t *testing.T,
+	output capturefile.Output,
+	sink capturestream.FrameSink,
+	cancel context.CancelFunc,
+) *capturestream.Mirror {
+	t.Helper()
+	mirror, err := capturestream.NewMirror(
+		output,
+		sink,
+		cancel,
+		capturestream.MirrorConfig{FrameBytes: 4, FrameCount: 1, BufferBytes: 4},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mirror.Abort)
+	return mirror
+}
+
+func mirrorTestReceiver(events *[]string, payload []byte, outputBytes int64) *fakeReceiver {
+	return &fakeReceiver{
+		events:  events,
+		payload: payload,
+		stats: dca.CaptureStats{
+			PacketsReceived:      1,
+			PayloadBytesReceived: uint64(len(payload)),
+			OutputBytes:          outputBytes,
+		},
+	}
+}
+
+func assertPartBytes(t *testing.T, finalPath, want string) {
+	t.Helper()
+	assertPartRetained(t, finalPath)
+	got, err := os.ReadFile(finalPath + ".part")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Fatalf("part bytes = %q, want %q", got, want)
+	}
 }
 
 func containsEvent(events []string, wanted string) bool {

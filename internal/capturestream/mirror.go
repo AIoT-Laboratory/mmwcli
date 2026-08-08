@@ -172,6 +172,12 @@ func NewMirror(
 	return mirror, nil
 }
 
+// BoundTo reports whether Mirror writes authoritative bytes through the exact
+// capture output instance supplied by the caller.
+func (mirror *Mirror) BoundTo(output capturefile.Output) bool {
+	return mirror != nil && output != nil && mirror.output == output
+}
+
 func (mirror *Mirror) WriteAt(payload []byte, offset int64) (int, error) {
 	if mirror == nil {
 		return 0, errors.New("capture stream mirror is nil")
