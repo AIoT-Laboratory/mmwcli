@@ -109,7 +109,7 @@ func createCaptureDestination(
 		itemSink = capture.stream.adapter
 	}
 	coordinator, err := multisensorcapture.Start(ctx, plan, sessionID, directory, multisensorcapture.Options{
-		Stderr: producerStderr, ItemSink: itemSink,
+		HostOrigin: capture.hostOrigin, Stderr: producerStderr, ItemSink: itemSink,
 		OnRequiredFailure: func(err error) {
 			capture.recordRequiredFailure(err)
 		},

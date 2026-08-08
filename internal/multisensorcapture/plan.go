@@ -205,6 +205,10 @@ func validateProducerSessionMetadata(plan SourcePlan, metadata ProducerSessionMe
 	if metadata.SyncEventSemantics != SyncEventSemanticsNone {
 		return errors.New("software_barrier producer SESSION must declare sync_event_semantics=none")
 	}
+	if plan.Clock.TimestampSemantics == multisensor.TimestampDeliveryObserved &&
+		(len(metadata.ClockObservations) != 0 || len(metadata.AffineSegments) != 0) {
+		return errors.New("delivery_observed producer SESSION must not declare clock mappings")
+	}
 	_, _, err := emptyCompleteSource(plan, metadata)
 	if err != nil {
 		return err

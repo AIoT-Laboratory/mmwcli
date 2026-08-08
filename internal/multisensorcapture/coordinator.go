@@ -52,6 +52,7 @@ type ItemSink interface {
 
 type Options struct {
 	ReadyTimeout      time.Duration
+	HostOrigin        time.Time
 	Stderr            io.Writer
 	StartProducer     StartProducerFunc
 	ItemSink          ItemSink
@@ -126,8 +127,14 @@ func Start(
 		return nil, errors.New("multisensor capture directory is not open")
 	}
 	required := false
+	requiresHostOrigin := false
 	for _, source := range plan.Sources {
 		required = required || source.Required
+		requiresHostOrigin = requiresHostOrigin ||
+			source.Clock.TimestampSemantics == multisensor.TimestampDeliveryObserved
+	}
+	if requiresHostOrigin && options.HostOrigin.IsZero() {
+		return nil, errors.New("HostOrigin is required for delivery_observed camera sources")
 	}
 	if required && options.OnRequiredFailure == nil {
 		return nil, errors.New("OnRequiredFailure is required when the plan has required external sources")
@@ -157,7 +164,8 @@ func Start(
 			process, err = starter(ctx, append([]string(nil), sourcePlan.Argv...), sessionID, sourcePlan.SourceID,
 				sensorproducer.ProcessOptions{Stderr: options.Stderr, QueueSize: sourcePlan.QueueSize})
 			if err == nil {
-				slot.worker, err = newSourceWorker(ctx, sessionID, sourcePlan, sourcePath, process, options.ItemSink,
+				slot.worker, err = newSourceWorker(
+					ctx, sessionID, sourcePlan, sourcePath, process, options.HostOrigin, options.ItemSink,
 					func(failure error) { coordinator.requiredFailure(sourcePlan, failure) })
 			}
 		}

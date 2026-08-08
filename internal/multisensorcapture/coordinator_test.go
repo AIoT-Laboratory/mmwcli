@@ -110,6 +110,155 @@ func TestCoordinatorRecordsCompleteExternalSource(t *testing.T) {
 	}
 }
 
+func TestCoordinatorAssignsDeliveryObservedCameraTime(t *testing.T) {
+	payloads := [][]byte{{1, 2, 3}, {4, 5}}
+	limits := multisensor.SourceLimits{MaxItems: 4, MaxItemBytes: 16, MaxPayloadBytes: 64}
+	producer := newFakeProducer(deliveryObservedRecords(t, payloads, limits))
+	directory, err := multisensor.CreateDirectory(filepath.Join(t.TempDir(), "aggregate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourcePath, err := directory.SourcePath("camera-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &recordingItemSink{payloadPath: filepath.Join(sourcePath, "frames.bin")}
+	hostOrigin := time.Now().Add(-time.Second)
+	lowerTick := uint64(time.Since(hostOrigin))
+	coordinator, err := Start(context.Background(), deliveryObservedPlan(true, limits), testSessionID, directory, Options{
+		HostOrigin: hostOrigin, StartProducer: fakeStarter(producer), ItemSink: sink,
+		OnRequiredFailure: func(error) { t.Error("unexpected required-source failure callback") },
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := coordinator.Arm(context.Background()); err != nil {
+		t.Fatalf("Arm: %v", err)
+	}
+	if err := coordinator.Start(context.Background()); err != nil {
+		t.Fatalf("Start participant: %v", err)
+	}
+	if err := coordinator.Finish(context.Background(), true); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	upperTick := uint64(time.Since(hostOrigin))
+	sources, err := coordinator.Sources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := sources[0]
+	if source.Clock.ClockID != multisensor.DeliveryObservedClockID(source.SourceID) ||
+		source.Clock.TickHz != uint64(time.Second) || source.Clock.WrapTicks != 0 ||
+		source.Clock.TimestampSemantics != multisensor.TimestampDeliveryObserved {
+		t.Fatalf("delivery clock = %+v", source.Clock)
+	}
+	indexBytes, err := os.ReadFile(filepath.Join(sourcePath, multisensor.IndexFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := multisensor.DecodeSensorIndex(indexBytes, source.Limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(index.Entries) != len(payloads) {
+		t.Fatalf("index entries = %+v", index.Entries)
+	}
+	for entryIndex, entry := range index.Entries {
+		if entry.Tick < lowerTick || entry.Tick > upperTick || entry.WrapCount != 0 || entry.DurationTicks != 0 {
+			t.Fatalf("index entry %d has invalid delivery time: %+v, bounds=[%d,%d]", entryIndex, entry, lowerTick, upperTick)
+		}
+		if entryIndex > 0 && entry.Tick < index.Entries[entryIndex-1].Tick {
+			t.Fatalf("delivery ticks move backwards: %+v", index.Entries)
+		}
+	}
+	items, authoritativePayloads, sinkErr := sink.snapshot()
+	if sinkErr != nil {
+		t.Fatal(sinkErr)
+	}
+	if len(items) != len(index.Entries) || len(authoritativePayloads) != len(index.Entries) {
+		t.Fatalf("sink items=%d authority snapshots=%d", len(items), len(authoritativePayloads))
+	}
+	for itemIndex, item := range items {
+		entry := index.Entries[itemIndex]
+		if item.Tick != entry.Tick || item.WrapCount != 0 || item.DurationTicks != 0 ||
+			string(item.Payload) != string(payloads[itemIndex]) {
+			t.Fatalf("sink item %d = %+v, index = %+v", itemIndex, item, entry)
+		}
+	}
+	if len(source.ClockObservations) != 1 || len(source.AffineSegments) != 1 {
+		t.Fatalf("delivery mapping = observations %+v, segments %+v", source.ClockObservations, source.AffineSegments)
+	}
+	firstTick := index.Entries[0].Tick
+	lastTick := index.Entries[len(index.Entries)-1].Tick
+	observation := source.ClockObservations[0]
+	segment := source.AffineSegments[0]
+	if observation.ObservationID != "camera-0-delivery-anchor" || observation.Tick != firstTick ||
+		observation.HostBeforeNS != firstTick || observation.HostAfterNS != firstTick {
+		t.Fatalf("delivery observation = %+v", observation)
+	}
+	if segment.StartUnwrappedTick != firstTick || segment.EndUnwrappedTick != lastTick+1 ||
+		segment.SourceOriginTick != firstTick || segment.HostOriginNS != firstTick ||
+		segment.ScaleNum != 1 || segment.ScaleDen != 1 ||
+		len(segment.ObservationIDs) != 1 || segment.ObservationIDs[0] != observation.ObservationID {
+		t.Fatalf("delivery affine segment = %+v", segment)
+	}
+}
+
+func TestCoordinatorRejectsInvalidDeliveryObservedEvidence(t *testing.T) {
+	limits := multisensor.SourceLimits{MaxItems: 2, MaxItemBytes: 4, MaxPayloadBytes: 8}
+	t.Run("missing host origin", func(t *testing.T) {
+		directory, err := multisensor.CreateDirectory(filepath.Join(t.TempDir(), "aggregate"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Start(context.Background(), deliveryObservedPlan(false, limits), testSessionID, directory, Options{
+			StartProducer: fakeStarter(newFakeProducer(nil)),
+		})
+		if err == nil || !strings.Contains(err.Error(), "HostOrigin") {
+			t.Fatalf("Start error = %v, want HostOrigin requirement", err)
+		}
+	})
+
+	t.Run("producer session mapping", func(t *testing.T) {
+		records := deliveryObservedRecords(t, [][]byte{{1}}, limits)
+		var metadata ProducerSessionMetadata
+		if err := json.Unmarshal(records[0].Metadata, &metadata); err != nil {
+			t.Fatal(err)
+		}
+		metadata.ClockObservations = []multisensor.ClockObservation{{
+			ObservationID: "forged", Tick: 0, HostBeforeNS: 0, HostAfterNS: 0,
+		}}
+		records[0] = record(t, sensorproducer.FrameSession, 1, metadata, nil)
+		err := finishDeliveryObserved(t, records, limits)
+		if err == nil || !strings.Contains(err.Error(), "must not declare clock mappings") {
+			t.Fatalf("Finish error = %v, want producer mapping rejection", err)
+		}
+	})
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*ProducerItemMetadata)
+	}{
+		{name: "tick", mutate: func(item *ProducerItemMetadata) { item.Tick = 1 }},
+		{name: "wrap count", mutate: func(item *ProducerItemMetadata) { item.WrapCount = 1 }},
+		{name: "duration", mutate: func(item *ProducerItemMetadata) { item.DurationTicks = 1 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			records := deliveryObservedRecords(t, [][]byte{{1}}, limits)
+			var item ProducerItemMetadata
+			if err := json.Unmarshal(records[1].Metadata, &item); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&item)
+			records[1] = record(t, sensorproducer.FrameItem, records[1].Seq, item, records[1].Payload)
+			err := finishDeliveryObserved(t, records, limits)
+			if err == nil || !strings.Contains(err.Error(), "tick, wrap_count, and duration_ticks must be zero") {
+				t.Fatalf("Finish error = %v, want zero producer time fields", err)
+			}
+		})
+	}
+}
+
 func TestCoordinatorItemSinkFailureFollowsSourceRequirement(t *testing.T) {
 	for _, required := range []bool{true, false} {
 		t.Run(map[bool]string{true: "required", false: "optional"}[required], func(t *testing.T) {
@@ -367,6 +516,77 @@ func testRecords(
 		record(t, sensorproducer.FrameEOF, endSeq+1, ProducerEOFMetadata{Schema: ProducerEOFSchema}, nil),
 	)
 	return records
+}
+
+func deliveryObservedPlan(required bool, limits multisensor.SourceLimits) Plan {
+	plan := validPlan(required, limits)
+	plan.Sources[0].Clock = multisensor.Clock{
+		ClockID: multisensor.DeliveryObservedClockID(plan.Sources[0].SourceID),
+		TickHz:  uint64(time.Second), TimestampSemantics: multisensor.TimestampDeliveryObserved,
+	}
+	return plan
+}
+
+func deliveryObservedRecords(
+	t *testing.T,
+	payloads [][]byte,
+	limits multisensor.SourceLimits,
+) []sensorproducer.Record {
+	t.Helper()
+	records := testRecords(t, payloads, false, limits)
+	var session ProducerSessionMetadata
+	if err := json.Unmarshal(records[0].Metadata, &session); err != nil {
+		t.Fatal(err)
+	}
+	session.Clock = multisensor.Clock{
+		ClockID: multisensor.DeliveryObservedClockID("camera-0"), TickHz: uint64(time.Second),
+		TimestampSemantics: multisensor.TimestampDeliveryObserved,
+	}
+	session.ClockObservations = []multisensor.ClockObservation{}
+	session.AffineSegments = []multisensor.AffineSegment{}
+	records[0] = record(t, sensorproducer.FrameSession, records[0].Seq, session, nil)
+	for recordIndex := 1; recordIndex <= len(payloads); recordIndex++ {
+		var item ProducerItemMetadata
+		if err := json.Unmarshal(records[recordIndex].Metadata, &item); err != nil {
+			t.Fatal(err)
+		}
+		item.Tick = 0
+		item.WrapCount = 0
+		item.DurationTicks = 0
+		records[recordIndex] = record(
+			t, sensorproducer.FrameItem, records[recordIndex].Seq, item, records[recordIndex].Payload,
+		)
+	}
+	return records
+}
+
+func finishDeliveryObserved(
+	t *testing.T,
+	records []sensorproducer.Record,
+	limits multisensor.SourceLimits,
+) error {
+	t.Helper()
+	directory, err := multisensor.CreateDirectory(filepath.Join(t.TempDir(), "aggregate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := Start(
+		context.Background(), deliveryObservedPlan(true, limits), testSessionID, directory,
+		Options{
+			HostOrigin: time.Now().Add(-time.Second), StartProducer: fakeStarter(newFakeProducer(records)),
+			OnRequiredFailure: func(error) {},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Arm(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return coordinator.Finish(context.Background(), true)
 }
 
 func record(t *testing.T, kind sensorproducer.FrameType, seq uint64, metadata any, payload []byte) sensorproducer.Record {

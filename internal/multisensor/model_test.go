@@ -473,6 +473,52 @@ func TestSessionRequiredOutcomesArtifactsClocksAndMetadataAreStrict(t *testing.T
 	}
 }
 
+func TestDeliveryObservedCameraClockContract(t *testing.T) {
+	base, baseIndexes, _ := twoSourceFixture(t)
+	session := cloneSession(t, base)
+	indexes := cloneIndexes(baseIndexes)
+	camera := &session.Sources[1]
+	camera.Clock = Clock{
+		ClockID: DeliveryObservedClockID(camera.SourceID), TickHz: 1_000_000_000,
+		TimestampSemantics: TimestampDeliveryObserved,
+	}
+	camera.ClockObservations = []ClockObservation{{
+		ObservationID: "camera-0-delivery-anchor", Tick: 10,
+		HostBeforeNS: 10, HostAfterNS: 10,
+	}}
+	camera.AffineSegments = []AffineSegment{{
+		StartUnwrappedTick: 10, EndUnwrappedTick: 21, SourceOriginTick: 10,
+		HostOriginNS: 10, ScaleNum: 1, ScaleDen: 1,
+		ObservationIDs: []string{"camera-0-delivery-anchor"},
+	}}
+	index := indexes[camera.SourceID]
+	for entryIndex := range index.Entries {
+		index.Entries[entryIndex].DurationTicks = 0
+	}
+	indexes[camera.SourceID] = index
+	bindIndexArtifact(t, camera, index)
+	if err := session.ValidateWithIndexes(indexes); err != nil {
+		t.Fatalf("valid delivery_observed camera source: %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*Clock)
+	}{
+		{name: "clock id", mutate: func(clock *Clock) { clock.ClockID = "camera-delivery" }},
+		{name: "tick rate", mutate: func(clock *Clock) { clock.TickHz = 1_000_000 }},
+		{name: "wrapping", mutate: func(clock *Clock) { clock.WrapTicks = 1 << 32 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := cloneSession(t, session)
+			test.mutate(&mutated.Sources[1].Clock)
+			if err := mutated.Validate(); err == nil || !strings.Contains(err.Error(), "dedicated clock_id") {
+				t.Fatalf("Validate error = %v, want dedicated delivery_observed clock contract", err)
+			}
+		})
+	}
+}
+
 func TestSessionIndexCoverageAndArtifactDigestAreClosed(t *testing.T) {
 	base, baseIndexes, _ := twoSourceFixture(t)
 	tests := []struct {

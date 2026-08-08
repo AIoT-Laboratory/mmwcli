@@ -34,6 +34,7 @@ const (
 	SourceCamera                   = multisensor.SourceCamera
 	TimestampFrameStart            = multisensor.TimestampFrameStart
 	TimestampExposureMidpoint      = multisensor.TimestampExposureMidpoint
+	TimestampDeliveryObserved      = multisensor.TimestampDeliveryObserved
 	SynchronizationSoftwareBarrier = multisensor.SynchronizationSoftwareBarrier
 	OutcomeComplete                = multisensor.OutcomeComplete
 	OutcomeFailed                  = multisensor.OutcomeFailed
@@ -202,8 +203,17 @@ func validateSource(source Source) error {
 			return errors.New("radar clock must use frame_start semantics")
 		}
 	case SourceCamera:
-		if source.Clock.TimestampSemantics != TimestampExposureMidpoint {
-			return errors.New("camera clock must use exposure_midpoint semantics")
+		switch source.Clock.TimestampSemantics {
+		case TimestampExposureMidpoint:
+		case TimestampDeliveryObserved:
+			if source.Clock.ClockID != multisensor.DeliveryObservedClockID(source.SourceID) ||
+				source.Clock.TickHz != 1_000_000_000 || source.Clock.WrapTicks != 0 {
+				return errors.New(
+					"delivery_observed camera clock must use its dedicated clock_id, tick_hz=1000000000, and wrap_ticks=0",
+				)
+			}
+		default:
+			return errors.New("camera clock must use exposure_midpoint or delivery_observed semantics")
 		}
 	default:
 		return fmt.Errorf("unsupported source kind %q", source.Kind)

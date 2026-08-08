@@ -60,7 +60,12 @@ const (
 	TimestampHostMonotonic    TimestampSemantics = "host_monotonic"
 	TimestampFrameStart       TimestampSemantics = "frame_start"
 	TimestampExposureMidpoint TimestampSemantics = "exposure_midpoint"
+	TimestampDeliveryObserved TimestampSemantics = "delivery_observed"
 )
+
+// DeliveryObservedClockID returns the only clock_id accepted for one camera
+// whose timestamps are assigned by the aggregate recorder on full delivery.
+func DeliveryObservedClockID(sourceID string) string { return sourceID + "-delivery-observed" }
 
 type ArtifactRole string
 
@@ -430,7 +435,7 @@ func validateClock(clock Clock) error {
 		return errors.New("wrap_ticks must be zero or greater than one")
 	}
 	switch clock.TimestampSemantics {
-	case TimestampHostMonotonic, TimestampFrameStart, TimestampExposureMidpoint:
+	case TimestampHostMonotonic, TimestampFrameStart, TimestampExposureMidpoint, TimestampDeliveryObserved:
 		return nil
 	default:
 		return fmt.Errorf("unsupported timestamp_semantics %q", clock.TimestampSemantics)
@@ -447,8 +452,17 @@ func validateSource(source Source) error {
 			return errors.New("radar source clock must use frame_start semantics")
 		}
 	case SourceCamera:
-		if source.Clock.TimestampSemantics != TimestampExposureMidpoint {
-			return errors.New("camera source clock must use exposure_midpoint semantics")
+		switch source.Clock.TimestampSemantics {
+		case TimestampExposureMidpoint:
+		case TimestampDeliveryObserved:
+			if source.Clock.ClockID != DeliveryObservedClockID(source.SourceID) ||
+				source.Clock.TickHz != 1_000_000_000 || source.Clock.WrapTicks != 0 {
+				return errors.New(
+					"delivery_observed camera clock must use its dedicated clock_id, tick_hz=1000000000, and wrap_ticks=0",
+				)
+			}
+		default:
+			return errors.New("camera source clock must use exposure_midpoint or delivery_observed semantics")
 		}
 	default:
 		return fmt.Errorf("unsupported source kind %q", source.Kind)

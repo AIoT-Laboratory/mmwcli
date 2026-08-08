@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"mmwcli/internal/multisensor"
 	"mmwcli/internal/multisensorstream"
@@ -22,11 +23,12 @@ const maximumRecordedItems = (multisensor.MaximumDirectoryIndexBytes - uint64(mu
 	uint64(multisensor.SensorIndexEntryBytes)
 
 type sourceWorker struct {
-	plan      SourcePlan
-	sessionID string
-	sourceDir string
-	process   ProducerProcess
-	itemSink  ItemSink
+	plan       SourcePlan
+	sessionID  string
+	sourceDir  string
+	process    ProducerProcess
+	hostOrigin time.Time
+	itemSink   ItemSink
 
 	drainCancel context.CancelFunc
 	done        chan struct{}
@@ -44,6 +46,7 @@ func newSourceWorker(
 	plan SourcePlan,
 	sourceDir string,
 	process ProducerProcess,
+	hostOrigin time.Time,
 	itemSink ItemSink,
 	onFailure func(error),
 ) (*sourceWorker, error) {
@@ -55,7 +58,7 @@ func newSourceWorker(
 	drainCtx, cancel := context.WithCancel(ctx)
 	worker := &sourceWorker{
 		plan: plan, sessionID: sessionID, sourceDir: sourceDir, process: process,
-		itemSink: itemSink, drainCancel: cancel, done: make(chan struct{}),
+		hostOrigin: hostOrigin, itemSink: itemSink, drainCancel: cancel, done: make(chan struct{}),
 	}
 	go func() {
 		worker.drain(payload, drainCtx)
@@ -109,6 +112,7 @@ func (worker *sourceWorker) readStream(
 	eofFrame := false
 	for {
 		record, err := worker.process.Next(ctx)
+		receivedAt := time.Now()
 		if errors.Is(err, io.EOF) {
 			if !eofFrame {
 				return metadata, index, payloadHash, errors.New("producer transport EOF arrived before EOF frame")
@@ -185,6 +189,19 @@ func (worker *sourceWorker) readStream(
 					"software_barrier ITEM must use the no-sync-event sentinel",
 				)
 			}
+			if worker.plan.Clock.TimestampSemantics == multisensor.TimestampDeliveryObserved {
+				if item.Tick != 0 || item.WrapCount != 0 || item.DurationTicks != 0 {
+					return metadata, index, payloadHash, errors.New(
+						"delivery_observed producer ITEM tick, wrap_count, and duration_ticks must be zero",
+					)
+				}
+				if receivedAt.Before(worker.hostOrigin) {
+					return metadata, index, payloadHash, errors.New(
+						"delivery_observed ITEM arrived before the aggregate host origin",
+					)
+				}
+				item.Tick = uint64(receivedAt.Sub(worker.hostOrigin))
+			}
 			if _, err := multisensor.UnwrapTicks(worker.plan.Clock, item.Tick, item.WrapCount); err != nil {
 				return metadata, index, payloadHash, fmt.Errorf("producer ITEM clock: %w", err)
 			}
@@ -258,6 +275,9 @@ func (worker *sourceWorker) publishIndex(
 	if metadata == nil {
 		return multisensor.Source{}, errors.New("producer stream has no SESSION metadata")
 	}
+	if err := bindDeliveryObservedClock(worker.plan.SourceID, metadata, index); err != nil {
+		return multisensor.Source{}, err
+	}
 	encoded, err := multisensor.EncodeSensorIndex(index, metadata.Limits)
 	if err != nil {
 		return multisensor.Source{}, err
@@ -302,6 +322,33 @@ func (worker *sourceWorker) publishIndex(
 		return multisensor.Source{}, err
 	}
 	return source, nil
+}
+
+func bindDeliveryObservedClock(
+	sourceID string,
+	metadata *ProducerSessionMetadata,
+	index multisensor.SensorIndex,
+) error {
+	if metadata.Clock.TimestampSemantics != multisensor.TimestampDeliveryObserved || len(index.Entries) == 0 {
+		return nil
+	}
+	firstTick := index.Entries[0].Tick
+	lastTick := index.Entries[len(index.Entries)-1].Tick
+	endTick, ok := checkedAdd(lastTick, 1)
+	if !ok {
+		return errors.New("delivery_observed camera clock range overflows uint64")
+	}
+	observationID := sourceID + "-delivery-anchor"
+	metadata.ClockObservations = []multisensor.ClockObservation{{
+		ObservationID: observationID, Tick: firstTick,
+		HostBeforeNS: firstTick, HostAfterNS: firstTick,
+	}}
+	metadata.AffineSegments = []multisensor.AffineSegment{{
+		StartUnwrappedTick: firstTick, EndUnwrappedTick: endTick,
+		SourceOriginTick: firstTick, HostOriginNS: firstTick,
+		ScaleNum: 1, ScaleDen: 1, ObservationIDs: []string{observationID},
+	}}
+	return nil
 }
 
 func (worker *sourceWorker) collect(ctx context.Context) (multisensor.Source, error) {
