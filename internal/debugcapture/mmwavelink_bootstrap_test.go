@@ -9,7 +9,7 @@ import (
 )
 
 func TestBootstrapMMWaveLinkRequiresClient(t *testing.T) {
-	if _, err := bootstrapMMWaveLink(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "required") {
+	if _, err := bootstrapMMWaveLinkForFamily(context.Background(), nil, debugFamilyIWR6843ES2); err == nil || !strings.Contains(err.Error(), "required") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -19,7 +19,7 @@ func TestBootstrapMMWaveLinkUsesFixedOrderingAndGoldenCommands(t *testing.T) {
 	transport.queueFrames(validBootstrapFrames()...)
 	client := mustMMWaveLinkClient(t, transport)
 
-	diagnostics, err := bootstrapMMWaveLink(context.Background(), client)
+	diagnostics, err := bootstrapMMWaveLinkForFamily(context.Background(), client, debugFamilyIWR6843ES2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestBootstrapMMWaveLinkStopsAtEveryFailedGate(t *testing.T) {
 			transport := &fakeMMWaveLinkTransport{}
 			transport.queueFrames(frames...)
 			client := mustMMWaveLinkClient(t, transport)
-			_, err := bootstrapMMWaveLink(context.Background(), client)
+			_, err := bootstrapMMWaveLinkForFamily(context.Background(), client, debugFamilyIWR6843ES2)
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("bootstrap error = %v, want text %q", err, test.wantErr)
 			}

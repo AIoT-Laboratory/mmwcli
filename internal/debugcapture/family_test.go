@@ -51,12 +51,16 @@ func TestIWR6843ES2DebugFamilyContractIsClosed(t *testing.T) {
 }
 
 func TestIWR6843ES2DebugFamilyBindsRawCaptureLayout(t *testing.T) {
-	if err := ValidateRawCaptureFPGAConfig(dca.DefaultFPGAConfig()); err != nil {
-		t.Fatalf("ValidateRawCaptureFPGAConfig(default): %v", err)
+	device, err := ParseDeviceFamily("xwr68xx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateRawCaptureFPGAConfigForFamily(device, dca.DefaultFPGAConfig()); err != nil {
+		t.Fatalf("ValidateRawCaptureFPGAConfigForFamily(default): %v", err)
 	}
 	invalid := dca.DefaultFPGAConfig()
 	invalid.LVDSMode = 4
-	if err := ValidateRawCaptureFPGAConfig(invalid); err == nil ||
+	if err := ValidateRawCaptureFPGAConfigForFamily(device, invalid); err == nil ||
 		!strings.Contains(err.Error(), "xWR68xx raw capture") {
 		t.Fatalf("invalid DCA layout error = %v", err)
 	}

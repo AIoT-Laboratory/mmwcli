@@ -253,7 +253,7 @@ func TestOpenControllerMarksFailuresAfterFirmwareSubmission(t *testing.T) {
 
 func TestControllerAppliesImmutablePlanAndValidatesRFInit(t *testing.T) {
 	source := goldenDebugCaptureSource(t)
-	plan, err := BuildPlan(source)
+	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestControllerAppliesImmutablePlanAndValidatesRFInit(t *testing.T) {
 
 func TestControllerRejectsPlanMismatchWithoutIO(t *testing.T) {
 	source := goldenDebugCaptureSource(t)
-	plan, err := BuildPlan(source)
+	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestControllerRejectsPlanMismatchWithoutIO(t *testing.T) {
 
 func TestControllerRejectsFailedRFInitializationAndStopsPlan(t *testing.T) {
 	source := goldenDebugCaptureSource(t)
-	plan, err := BuildPlan(source)
+	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +552,7 @@ func validControllerOptions(t *testing.T) ControllerOptions {
 
 func mustDebugControllerPlan(t *testing.T) Plan {
 	t.Helper()
-	plan, err := BuildPlan(goldenDebugCaptureSource(t))
+	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, goldenDebugCaptureSource(t))
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
@@ -573,7 +573,7 @@ func mustInfiniteDebugControllerPlan(t *testing.T) Plan {
 	if err != nil {
 		t.Fatalf("build infinite capture plan: %v", err)
 	}
-	plan, err := BuildPlan(rebuilt)
+	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, rebuilt)
 	if err != nil {
 		t.Fatalf("BuildPlan infinite: %v", err)
 	}

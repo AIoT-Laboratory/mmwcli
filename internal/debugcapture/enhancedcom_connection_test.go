@@ -18,9 +18,10 @@ func TestOpenEnhancedCOMConnectionUsesTIDebugBaudAndGatesPart(t *testing.T) {
 	}}
 	openCalls := 0
 	var waits []time.Duration
-	connection, err := openEnhancedCOMConnectionWithBackend(
+	connection, err := openEnhancedCOMConnectionForFamilyWithBackend(
 		context.Background(),
-		"COM3",
+		"COM3", debugFamilyIWR6843ES2,
+
 		enhancedCOMBackend{
 			open: func(name string, baud int, timeout time.Duration) (enhancedCOMTransport, error) {
 				openCalls++
@@ -33,8 +34,8 @@ func TestOpenEnhancedCOMConnectionUsesTIDebugBaudAndGatesPart(t *testing.T) {
 				waits = append(waits, duration)
 				return ctx.Err()
 			},
-		},
-	)
+		})
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +182,7 @@ func TestOpenEnhancedCOMConnectionNegotiatesColdBootBaudOnce(t *testing.T) {
 	transports := []*fakeEnhancedCOMTransport{requestedProbe, coldBoot, requestedFinal}
 	var bauds []int
 	var waits []time.Duration
-	connection, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+	connection, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(name string, baud int, timeout time.Duration) (enhancedCOMTransport, error) {
 			if name != "COM3" || timeout != enhancedCOMOpenTimeout || len(transports) == 0 {
 				t.Fatalf("open arguments/remaining = %q, %d, %s/%d", name, baud, timeout, len(transports))
@@ -196,6 +197,7 @@ func TestOpenEnhancedCOMConnectionNegotiatesColdBootBaudOnce(t *testing.T) {
 			return ctx.Err()
 		},
 	})
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +259,7 @@ func TestOpenEnhancedCOMConnectionStopsAfterInvalidColdBootProbe(t *testing.T) {
 	coldBoot := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("bad?!"), nil}}
 	transports := []*fakeEnhancedCOMTransport{requestedProbe, coldBoot}
 	var bauds []int
-	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+	_, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(_ string, baud int, _ time.Duration) (enhancedCOMTransport, error) {
 			bauds = append(bauds, baud)
 			transport := transports[0]
@@ -266,6 +268,7 @@ func TestOpenEnhancedCOMConnectionStopsAfterInvalidColdBootProbe(t *testing.T) {
 		},
 		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 	})
+
 	if !errors.Is(err, errEnhancedCOMInvalidResponse) {
 		t.Fatalf("error = %v", err)
 	}
@@ -286,13 +289,14 @@ func TestOpenEnhancedCOMConnectionDoesNotNegotiateAfterInitialIOFailure(t *testi
 	want := errors.New("serial I/O failed")
 	transport := &fakeEnhancedCOMTransport{readError: want}
 	openCalls := 0
-	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+	_, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(string, int, time.Duration) (enhancedCOMTransport, error) {
 			openCalls++
 			return transport, nil
 		},
 		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 	})
+
 	if !errors.Is(err, want) || openCalls != 1 || transport.closeCalls != 1 {
 		t.Fatalf("error/open/close = %v/%d/%d, want I/O error/1/1", err, openCalls, transport.closeCalls)
 	}
@@ -315,7 +319,7 @@ func TestOpenEnhancedCOMConnectionGatesColdBootPartBeforeBaudWrites(t *testing.T
 				[]byte(test.efuse), nil,
 			}}
 			transports := []*fakeEnhancedCOMTransport{requestedProbe, coldBoot}
-			_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+			_, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 				open: func(string, int, time.Duration) (enhancedCOMTransport, error) {
 					transport := transports[0]
 					transports = transports[1:]
@@ -323,6 +327,7 @@ func TestOpenEnhancedCOMConnectionGatesColdBootPartBeforeBaudWrites(t *testing.T
 				},
 				wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 			})
+
 			if err == nil || !strings.Contains(err.Error(), test.wantError) {
 				t.Fatalf("error = %v", err)
 			}
@@ -342,13 +347,14 @@ func TestOpenEnhancedCOMConnectionDoesNotNegotiateWhenInitialCloseFails(t *testi
 	closeErr := errors.New("close failed")
 	transport := &fakeEnhancedCOMTransport{closeError: closeErr}
 	openCalls := 0
-	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+	_, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(string, int, time.Duration) (enhancedCOMTransport, error) {
 			openCalls++
 			return transport, nil
 		},
 		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 	})
+
 	if !errors.Is(err, closeErr) || !errors.Is(err, errEnhancedCOMReadTimeout) {
 		t.Fatalf("error = %v", err)
 	}
@@ -372,7 +378,7 @@ func TestOpenEnhancedCOMConnectionDoesNotRetryUnknownBaudSwitch(t *testing.T) {
 	}
 	transports := []*fakeEnhancedCOMTransport{requestedProbe, coldBoot}
 	var bauds []int
-	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+	_, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(_ string, baud int, _ time.Duration) (enhancedCOMTransport, error) {
 			bauds = append(bauds, baud)
 			if len(transports) == 0 {
@@ -384,6 +390,7 @@ func TestOpenEnhancedCOMConnectionDoesNotRetryUnknownBaudSwitch(t *testing.T) {
 		},
 		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 	})
+
 	if !errors.Is(err, baudSwitchErr) {
 		t.Fatalf("error = %v", err)
 	}
@@ -420,7 +427,7 @@ func TestOpenEnhancedCOMConnectionDoesNotContinueAfterUnknownBaudClockWrite(t *t
 	}
 	transports := []*fakeEnhancedCOMTransport{requestedProbe, coldBoot}
 	var bauds []int
-	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+	_, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(_ string, baud int, _ time.Duration) (enhancedCOMTransport, error) {
 			bauds = append(bauds, baud)
 			if len(transports) == 0 {
@@ -432,6 +439,7 @@ func TestOpenEnhancedCOMConnectionDoesNotContinueAfterUnknownBaudClockWrite(t *t
 		},
 		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 	})
+
 	var unknown *enhancedCOMUnknownResultError
 	if !errors.As(err, &unknown) || !errors.Is(err, io.ErrShortWrite) {
 		t.Fatalf("error = %v", err)
@@ -462,7 +470,7 @@ func TestOpenEnhancedCOMConnectionDoesNotReconnectAfterColdBootCloseFailure(t *t
 	}
 	transports := []*fakeEnhancedCOMTransport{requestedProbe, coldBoot}
 	var bauds []int
-	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+	_, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(_ string, baud int, _ time.Duration) (enhancedCOMTransport, error) {
 			bauds = append(bauds, baud)
 			if len(transports) == 0 {
@@ -474,6 +482,7 @@ func TestOpenEnhancedCOMConnectionDoesNotReconnectAfterColdBootCloseFailure(t *t
 		},
 		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 	})
+
 	if !errors.Is(err, closeErr) {
 		t.Fatalf("error = %v", err)
 	}
@@ -495,7 +504,7 @@ func TestOpenEnhancedCOMConnectionDoesNotRenegotiateAfterFinalVerificationFailur
 	requestedFinal := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("x0 ??"), nil}}
 	transports := []*fakeEnhancedCOMTransport{requestedProbe, coldBoot, requestedFinal}
 	var bauds []int
-	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+	_, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(_ string, baud int, _ time.Duration) (enhancedCOMTransport, error) {
 			bauds = append(bauds, baud)
 			if len(transports) == 0 {
@@ -507,6 +516,7 @@ func TestOpenEnhancedCOMConnectionDoesNotRenegotiateAfterFinalVerificationFailur
 		},
 		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 	})
+
 	if !errors.Is(err, errEnhancedCOMInvalidResponse) {
 		t.Fatalf("error = %v", err)
 	}
@@ -527,13 +537,14 @@ func TestOpenEnhancedCOMConnectionFailsBeforeOpenWhenCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	openCalls := 0
-	_, err := openEnhancedCOMConnectionWithBackend(ctx, "COM3", enhancedCOMBackend{
+	_, err := openEnhancedCOMConnectionForFamilyWithBackend(ctx, "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(string, int, time.Duration) (enhancedCOMTransport, error) {
 			openCalls++
 			return nil, errors.New("unexpected open")
 		},
 		wait: waitContext,
 	})
+
 	if !errors.Is(err, context.Canceled) || openCalls != 0 {
 		t.Fatalf("result = %v, open calls = %d", err, openCalls)
 	}
@@ -541,10 +552,11 @@ func TestOpenEnhancedCOMConnectionFailsBeforeOpenWhenCanceled(t *testing.T) {
 
 func TestOpenEnhancedCOMConnectionClosesOnceAfterUnknownInitialization(t *testing.T) {
 	transport := &fakeEnhancedCOMTransport{shortWrite: true}
-	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+	_, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(string, int, time.Duration) (enhancedCOMTransport, error) { return transport, nil },
 		wait: func(context.Context, time.Duration) error { return nil },
 	})
+
 	var unknown *enhancedCOMUnknownResultError
 	if !errors.As(err, &unknown) || !strings.Contains(err.Error(), "initialize Enhanced COM") {
 		t.Fatalf("error = %v", err)
@@ -556,10 +568,11 @@ func TestOpenEnhancedCOMConnectionClosesOnceAfterUnknownInitialization(t *testin
 
 func TestOpenEnhancedCOMConnectionDoesNotOwnFailedOpen(t *testing.T) {
 	want := errors.New("port unavailable")
-	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+	_, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(string, int, time.Duration) (enhancedCOMTransport, error) { return nil, want },
 		wait: func(context.Context, time.Duration) error { return nil },
 	})
+
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v", err)
 	}
@@ -580,10 +593,11 @@ func TestOpenEnhancedCOMConnectionRejectsUnsupportedPartBeforeRegisterWrites(t *
 				[]byte("00000002"), nil,
 				[]byte(test.efuse), nil,
 			}}
-			_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+			_, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 				open: func(string, int, time.Duration) (enhancedCOMTransport, error) { return transport, nil },
 				wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 			})
+
 			if err == nil || !strings.Contains(err.Error(), test.wantError) {
 				t.Fatalf("error = %v", err)
 			}
@@ -612,13 +626,14 @@ func TestSupportedXWR6843PartNumbers(t *testing.T) {
 
 func TestOpenEnhancedCOMConnectionCancelsDuringPreOpenWait(t *testing.T) {
 	openCalls := 0
-	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+	_, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(string, int, time.Duration) (enhancedCOMTransport, error) {
 			openCalls++
 			return nil, errors.New("unexpected open")
 		},
 		wait: func(context.Context, time.Duration) error { return context.Canceled },
 	})
+
 	if !errors.Is(err, context.Canceled) || openCalls != 0 {
 		t.Fatalf("result = %v, open calls = %d", err, openCalls)
 	}
@@ -633,10 +648,11 @@ func TestEnhancedCOMConnectionSubmitsFirmwareAndStaysOpenForVerification(t *test
 		[]byte("000000c0"), nil,
 		[]byte("00000003"), nil,
 	}}
-	connection, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
+	connection, err := openEnhancedCOMConnectionForFamilyWithBackend(context.Background(), "COM3", debugFamilyIWR6843ES2, enhancedCOMBackend{
 		open: func(string, int, time.Duration) (enhancedCOMTransport, error) { return transport, nil },
 		wait: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 	})
+
 	if err != nil {
 		t.Fatal(err)
 	}

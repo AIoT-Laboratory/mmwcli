@@ -12,7 +12,7 @@ import (
 
 func TestBuildPlanGoldenStudioCLIConfiguration(t *testing.T) {
 	source := goldenDebugCaptureSource(t)
-	plan, err := BuildPlan(source)
+	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, source)
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestBuildPlanRejectsInvalidWireConfiguration(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := BuildPlan(test.mutate(cloneRadarCapturePlan(source)))
+			_, err := buildPlanForFamily(debugFamilyIWR6843ES2, test.mutate(cloneRadarCapturePlan(source)))
 			if err == nil {
 				t.Fatal("BuildPlan accepted invalid configuration")
 			}
@@ -181,19 +181,19 @@ func TestBuildPlanRequiresExactCapturePlan(t *testing.T) {
 
 	invalidDialect := cloneRadarCapturePlan(source)
 	invalidDialect.Dialect = radar.Dialect{}
-	if _, err := BuildPlan(invalidDialect); err == nil || !strings.Contains(err.Error(), "studio-cli") {
+	if _, err := buildPlanForFamily(debugFamilyIWR6843ES2, invalidDialect); err == nil || !strings.Contains(err.Error(), "studio-cli") {
 		t.Fatalf("invalid dialect error = %v", err)
 	}
 
 	reuse := cloneRadarCapturePlan(source)
 	reuse.Mode = radar.ReuseConfiguration
-	if _, err := BuildPlan(reuse); err == nil || !strings.Contains(err.Error(), "full") {
+	if _, err := buildPlanForFamily(debugFamilyIWR6843ES2, reuse); err == nil || !strings.Contains(err.Error(), "full") {
 		t.Fatalf("reuse error = %v", err)
 	}
 
 	forged := cloneRadarCapturePlan(source)
 	forged.ExpectedBytes++
-	if _, err := BuildPlan(forged); err == nil || !strings.Contains(err.Error(), "metadata") {
+	if _, err := buildPlanForFamily(debugFamilyIWR6843ES2, forged); err == nil || !strings.Contains(err.Error(), "metadata") {
 		t.Fatalf("metadata mismatch error = %v", err)
 	}
 }
@@ -201,7 +201,7 @@ func TestBuildPlanRequiresExactCapturePlan(t *testing.T) {
 func TestPlanCopiesOperationsAndSource(t *testing.T) {
 	source := goldenDebugCaptureSource(t)
 	original := cloneRadarCapturePlan(source)
-	plan, err := BuildPlan(source)
+	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, source)
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestPlanCopiesOperationsAndSource(t *testing.T) {
 }
 
 func TestRFInitEventValidation(t *testing.T) {
-	plan, err := BuildPlan(goldenDebugCaptureSource(t))
+	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, goldenDebugCaptureSource(t))
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}

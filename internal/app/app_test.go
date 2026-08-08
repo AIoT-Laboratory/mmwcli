@@ -529,10 +529,10 @@ func TestPrintDebugCaptureAssetIncludesRPRCWritePlan(t *testing.T) {
 	var output bytes.Buffer
 	printDebugCaptureAsset(&output, debugcapture.File{
 		Role:        "BSS",
-		Name:        debugcapture.BSSName,
+		Name:        "xwr68xx_radarss.bin",
 		Path:        "bss.bin",
-		Size:        debugcapture.BSSSize,
-		SHA256:      debugcapture.BSSSHA256,
+		Size:        240072,
+		SHA256:      "E2C69405394E35BA376EFE1A52305EE74DBD19F8BAB72BD5A9078878853CD77F",
 		RPRCVersion: 1,
 		Sections:    12,
 		Writes:      65,
