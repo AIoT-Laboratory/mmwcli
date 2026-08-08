@@ -12,8 +12,9 @@ the separate [acquisition and decode matrix](hardware-support.md).
 ## `studio_cli` device firmware
 
 The known 0.1 firmware comes from Radar Toolbox 4.00.00.05. It is the only functional/application
-firmware in scope and currently has source-backed offline validation only. The
-`mmwcli firmware verify FILE` command checks only this asset:
+firmware in scope and closes a source-validated experimental xWR68xx family route. Runtime accepts
+only the exact `Platform: xWR68xx` family response; it does not observe a model, part, ES, board, or
+antenna geometry. The `mmwcli firmware verify FILE` command checks only this asset:
 
 | Relative path | Bytes | SHA-256 |
 | --- | ---: | --- |
@@ -87,7 +88,9 @@ Protocol checks referred to these files under `tools/studio_cli`:
 
 Different SDK versions are not assumed to be interchangeable build environments. The 0.1
 functional/application asset contract pins the prebuilt firmware through the single-file check
-above. That path currently has offline validation only and no hardware-validation record. These
+above. That family-level route has offline validation only and no hardware-validation record; the
+`6843` project path does not turn the family response into an observed IWR6843 model or ES claim.
+AOP-specific aliases and non-`xWR68xx` platform values remain planned and are rejected. These
 sources and build tools do not participate in mmwcli runtime operation.
 
 ## Multi-family TI source evidence

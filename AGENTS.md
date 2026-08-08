@@ -9,9 +9,12 @@ defined by `README.md` and `docs/`.
   explicitly documented TI routes. Device-family support is tiered and must not be inferred from a
   shared source tree, RF band, lane count, or similar part number.
 - The baseline is IWR6843 ES2 part `0xE2`, legacy frame, 16-bit complex ADC, and two LVDS lanes.
-- The functional/application workflow supports only the dedicated xWR68xx/IWR6843 TI `studio_cli`
-  device firmware and currently has source-backed offline validation only. It requires the user to
-  flash `mmwave_Studio_cli_xwr68xx.bin`; a complete Radar Toolbox installation is unnecessary.
+- The functional/application workflow is a source-validated experimental xWR68xx family route for
+  the dedicated TI `studio_cli` device firmware. It requires the exact `Platform: xWR68xx` family
+  response and user-flashed `mmwave_Studio_cli_xwr68xx.bin`; a complete Radar Toolbox installation
+  is unnecessary. This gate does not observe or prove the model, part, ES, board, or antenna
+  geometry. Keep model and revision metadata empty, reject AOP-specific aliases and every other
+  platform value, and do not promote the family route into a model-level claim.
 - `debug-capture` hardware validation covers only IWR6843 ES2 part `0xE2` with the exact firmware,
   host, FTDI, and DCA1000 combination recorded in the hardware smoke test. Other devices may enter
   a source-validated experimental tier before hardware is available only under the requirements
@@ -50,12 +53,16 @@ defined by `README.md` and `docs/`.
   reproducible validation record. A hardware-I/O route requires a hardware record for the exact
   device, ES, firmware, transport, host, and capture-card combination claimed.
 - **Source-validated experimental** may be implemented without repository-owner hardware only
-  when official TI evidence closes every field required by that route. Acquisition descriptors
-  include device identity, ES handling, bootstrap/download/runtime sequence, memory map, RF limits,
-  lane/data layout, and required assets; decoder descriptors include the exact byte layout,
-  geometry, and provenance contract they claim. Both require a closed built-in descriptor, offline
-  golden transactions or data, explicit user opt-in, fail-closed validation, honest public
-  labeling, and a community hardware-validation path.
+  when official TI evidence closes every field the route claims. A family-level descriptor may
+  leave model, part, ES, board, and geometry unobserved only when none selects a safety parameter or
+  appears in a compatibility claim; wire metadata must preserve that absence. Acquisition
+  descriptors include the observed identity scope, any identity or ES handling actually claimed,
+  bootstrap/download/runtime sequence, memory map, RF limits, lane/data layout, and required
+  assets; decoder descriptors include the exact byte layout, geometry, and provenance contract
+  they claim. Both require a closed built-in descriptor, offline golden transactions or data,
+  explicit user opt-in, fail-closed validation at the claimed scope, honest public labeling, and a
+  community hardware-validation path. If safety depends on an unobserved model, part, ES, or board,
+  the route remains planned.
 - **Planned** means no public route or named descriptor exists. Evidence may be documented, but
   users must not be told that the hardware works.
 - Never fill a missing family field with xWR68xx/IWR6843 values, infer board geometry from a part

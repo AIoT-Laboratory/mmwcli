@@ -17,11 +17,16 @@ Go 1.26+ and the standard library define the core build. Default builds use `CGO
 
 ## Mode boundaries
 
-- `studio-cli` uses the dedicated xWR68xx/IWR6843 TI firmware at 921600 baud. This route has source-backed offline validation only.
+- `studio-cli` uses the dedicated TI firmware at 921600 baud as a source-validated experimental
+  xWR68xx family route.
 - `repl` is a `studio_cli` utility and accepts only that validated line protocol.
 - `debug-capture` downloads the recorded IWR6843 ES2 RF-evaluation firmware through Enhanced COM and controls mmWaveLink through D2XX.
 
-Each text connection validates xWR68xx before its first state write. Ports and D2XX devices are operator-selected; mmwcli does not scan or guess them. Current support must not be generalized to another device without independent implementation and validation.
+Each text connection requires the exact `Platform: xWR68xx` family response before its first state
+write. That response does not observe or prove a model, part, ES, board, or antenna geometry, and
+the capture descriptor leaves model and revision empty. AOP-specific aliases and every other
+platform value are rejected and remain planned. Ports and D2XX devices are operator-selected;
+mmwcli does not scan or guess them.
 
 Text commands require their own echo followed by explicit `Done` or numeric `Error`. Timeout, cancellation, write failure, or an incomplete response leaves device state indeterminate and closes the connection without retry.
 

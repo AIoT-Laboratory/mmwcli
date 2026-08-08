@@ -4,12 +4,12 @@
 
 ## Scope
 
-- `studio-cli` and its REPL utility target the dedicated xWR68xx/IWR6843 TI firmware and currently have source-backed offline validation only.
+- `studio-cli` and its REPL utility form a source-validated experimental xWR68xx family route for the dedicated TI firmware. They require the exact `Platform: xWR68xx` family response but do not observe or prove a model, part, ES, or board.
 - `debug-capture` hardware validation is limited to IWR6843 ES2 part `0xE2`, DCA1000, Windows/amd64, and FTDI D2XX 3.2.14.
 - The capture baseline is legacy frames, complex16 ADC, two LVDS lanes, and DCA1000 raw output.
 - Advanced frames, cascade, LVDS headers, software LVDS, CSI-2, and implicit ADC processing are outside the contract.
 
-Version 0.1 validated only the recorded `debug-capture` combination. See the [hardware record](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record). Other devices and native-library combinations require independent validation.
+Version 0.1 validated only the recorded `debug-capture` combination. See the [hardware record](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record). The Studio route remains family-level experimental; model-specific combinations and native-library combinations require independent validation.
 
 ## Download and build
 
@@ -47,9 +47,9 @@ These commands do not open radar or DCA devices. `native-check` only loads the D
 
 ## Capture workflows
 
-### IWR6843 `studio_cli`
+### xWR68xx `studio_cli`
 
-Flash `mmwave_Studio_cli_xwr68xx.bin`, boot in functional/application mode, and provide its CLI UART. This route is offline-validated but does not yet have a hardware-validation record:
+Flash `mmwave_Studio_cli_xwr68xx.bin`, boot in functional/application mode, and provide its CLI UART. The runtime accepts only the exact `Platform: xWR68xx` family response. Model, part, ES, board, and antenna geometry remain unobserved, so this is family-level experimental support rather than an IWR6843 compatibility claim. AOP-specific platform aliases and every other platform value are rejected. This route does not yet have a hardware-validation record:
 
 ```text
 mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture.bin --port PORT
@@ -92,7 +92,7 @@ REPL is a `studio_cli` utility, not another firmware backend. It accepts only th
 - Low-level DCA commands are diagnostic/control operations only; ADC acquisition is available through `studio-cli capture` and `debug-capture capture`. `ping` is not a capture-readiness gate, and reset occurs only through an explicit command or option.
 - `sensorStop` stops the sensor only; it does not power off the radar or DCA1000.
 
-See the [architecture](docs/architecture.md), [multi-sensor synchronization design](docs/multisensor-sync.md), [hardware smoke test](docs/hardware-smoke-test.md), and [TI reference map](docs/ti-reference-map.md).
+See the [hardware support matrix](docs/hardware-support.md), [architecture](docs/architecture.md), [multi-sensor synchronization design](docs/multisensor-sync.md), [hardware smoke test](docs/hardware-smoke-test.md), and [TI reference map](docs/ti-reference-map.md).
 
 ## License
 
