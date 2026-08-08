@@ -7,7 +7,6 @@ import (
 	"io"
 	"math"
 	"net"
-	"os"
 	"sync"
 	"time"
 )
@@ -349,33 +348,6 @@ func (receiver *Receiver) Close() error {
 		<-receiver.done
 	}
 	return receiver.closeErr
-}
-
-// ReceiveRaw is a synchronous convenience wrapper. Use NewReceiver directly
-// when the caller must prove the data socket is bound before StartRecord.
-func ReceiveRaw(ctx context.Context, config ReceiverConfig, output io.WriterAt) (CaptureStats, error) {
-	receiver, err := NewReceiver(config)
-	if err != nil {
-		return CaptureStats{}, err
-	}
-	defer receiver.Close()
-	return receiver.Run(ctx, output)
-}
-
-// ReceiveRawFile creates a new file without overwriting existing evidence and
-// receives raw ADC bytes into it. Failed captures are intentionally retained.
-func ReceiveRawFile(ctx context.Context, config ReceiverConfig, path string) (CaptureStats, error) {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return CaptureStats{}, fmt.Errorf("create raw DCA1000 output %s: %w", path, err)
-	}
-	stats, receiveErr := ReceiveRaw(ctx, config, file)
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if receiveErr != nil || syncErr != nil || closeErr != nil {
-		return stats, errors.Join(receiveErr, syncErr, closeErr)
-	}
-	return stats, nil
 }
 
 func (receiver *Receiver) claimRun() error {
