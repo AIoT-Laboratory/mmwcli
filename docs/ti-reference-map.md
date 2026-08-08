@@ -25,49 +25,54 @@ capture prerequisites.
 
 ## `debug-cli` MSS/BSS firmware
 
-The current executable offline asset contract comes from the mmWave Studio 2.1.1 RF evaluation
-firmware. The user only needs to supply these two xWR68xx files; installing or invoking the
-mmWave Studio runtime is unnecessary:
+The executable offline asset contracts come from the mmWave Studio 2.1.1 RF-evaluation firmware.
+The user supplies the two files named for the selected family; installing or invoking the mmWave
+Studio runtime is unnecessary:
 
-| Role and relative path | Bytes | SHA-256 |
-| --- | ---: | --- |
-| BSS `rf_eval_firmware/radarss/xwr68xx_radarss.bin` | 240072 | `E2C69405394E35BA376EFE1A52305EE74DBD19F8BAB72BD5A9078878853CD77F` |
-| MSS `rf_eval_firmware/masterss/xwr68xx_masterss.bin` | 92992 | `316911D4A8DBA1762714A3A107071BD0CF06A135FAE29BFBBC92B037592DE060` |
+| Family and role | Relative path | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| xWR16xx BSS | `rf_eval_firmware/radarss/xwr16xx_radarss.bin` | 35728 | `0B134A14D539292BB7E8E20C14676CEABAC2265D131C24F0526A21087ABCAD8C` |
+| xWR16xx MSS | `rf_eval_firmware/masterss/xwr16xx_masterss.bin` | 52904 | `B4044513BA44C3290639AD4C416DAF37E72DEB43567FC0DE0314DAF2546130DF` |
+| xWR18xx BSS | `rf_eval_firmware/radarss/xwr18xx_radarss.bin` | 35728 | `0B134A14D539292BB7E8E20C14676CEABAC2265D131C24F0526A21087ABCAD8C` |
+| xWR18xx MSS | `rf_eval_firmware/masterss/xwr18xx_masterss.bin` | 52904 | `B4044513BA44C3290639AD4C416DAF37E72DEB43567FC0DE0314DAF2546130DF` |
+| xWR68xx BSS | `rf_eval_firmware/radarss/xwr68xx_radarss.bin` | 240072 | `E2C69405394E35BA376EFE1A52305EE74DBD19F8BAB72BD5A9078878853CD77F` |
+| xWR68xx MSS | `rf_eval_firmware/masterss/xwr68xx_masterss.bin` | 92992 | `316911D4A8DBA1762714A3A107071BD0CF06A135FAE29BFBBC92B037592DE060` |
 
-`mmwcli debug-cli check --bss-fw FILE --mss-fw FILE` also parses RPRC, validates xWR68xx memory
-windows, and builds the memory-write plan. It does not open the radar, DCA1000, or a USB device. A
-successful command establishes only that the assets and write plan satisfy the offline contract; it
-does not validate the D2XX library, radar, and DCA1000 combination.
+`mmwcli debug-cli check --family FAMILY --bss-fw FILE --mss-fw FILE` parses RPRC, validates the
+selected family's memory windows, and builds the memory-write plan. `FAMILY` is exactly `xwr16xx`,
+`xwr18xx`, or `xwr68xx`; it is required and has no alias or default. The command does not open the
+radar, DCA1000, or a USB device. A successful command establishes only that the assets and write
+plan satisfy the offline contract; it does not validate the D2XX library, radar, and DCA1000
+combination.
 
 During `debug-cli capture`, Enhanced COM only submits these files to SOP2 device memory. The host
 then switches to FTDI D2XX A/B and carries mmWaveLink configuration, start, and stop over SPI/IRQ.
 The host translates the capture CFG into mmWaveLink messages rather than sending it as text. No
-mmWave Studio runtime is required. The two exact hashes in the table were used for the 2026-08-05
-debug-mode hardware validation on IWR6843 ES2 part `0xE2`; no other firmware or device is covered.
-See the complete combination and result in the
+mmWave Studio runtime is required. xWR16xx and xWR18xx use two LVDS lanes, DCA1000 device mode 2,
+the 77 GHz scale, and an already-responsive 921600-baud Enhanced COM monitor. xWR16xx fixes two TX
+channels and low-power ADC mode 1; xWR18xx fixes three TX channels and low-power ADC mode 0. These
+two source-backed routes are public but have no repository-owner hardware-validation record.
+
+The two xWR68xx hashes in the table were used for the 2026-08-05 debug-mode hardware validation on
+IWR6843 ES2 part `0xE2`; that record does not cover another family, part, board, or asset. See the
+complete combination and result in the
 [hardware smoke test](hardware-smoke-test.md#debug-mode-01-hardware-validation-record).
 
-### Reference-only first-generation assets
+### Reference-only xWR12xx/xWR14xx assets
 
 The same official mmWave Studio 2.1.1 installation contains family-specific RF-evaluation assets
-for the earlier devices below. Their byte counts and SHA-256 values are recorded so community
-reports can identify an exact input and future reviewed descriptors can be closed. Current mmwcli
-does **not** accept, download, parse, or write these files, and their presence does not establish a
-boot/download or capture route.
+for xWR12xx/xWR14xx. Their byte counts and SHA-256 values are recorded for future descriptor work.
+Current mmwcli does **not** accept, download, parse, or write these files, and their presence does
+not establish a boot/download or capture route.
 
 | Family and role | Relative path | Bytes | SHA-256 |
 | --- | --- | ---: | --- |
 | xWR12xx/xWR14xx BSS | `rf_eval_firmware/radarss/xwr12xx_xwr14xx_radarss.bin` | 35728 | `0B134A14D539292BB7E8E20C14676CEABAC2265D131C24F0526A21087ABCAD8C` |
 | xWR12xx/xWR14xx MSS | `rf_eval_firmware/masterss/xwr12xx_xwr14xx_masterss.bin` | 92200 | `51522737ED3F0A62F2C3EC2F66B63E88E0256638A289AD4A0D8A55335EF8F1AE` |
-| xWR16xx BSS | `rf_eval_firmware/radarss/xwr16xx_radarss.bin` | 35728 | `0B134A14D539292BB7E8E20C14676CEABAC2265D131C24F0526A21087ABCAD8C` |
-| xWR16xx MSS | `rf_eval_firmware/masterss/xwr16xx_masterss.bin` | 52904 | `B4044513BA44C3290639AD4C416DAF37E72DEB43567FC0DE0314DAF2546130DF` |
-| xWR18xx BSS | `rf_eval_firmware/radarss/xwr18xx_radarss.bin` | 35728 | `0B134A14D539292BB7E8E20C14676CEABAC2265D131C24F0526A21087ABCAD8C` |
-| xWR18xx MSS | `rf_eval_firmware/masterss/xwr18xx_masterss.bin` | 52904 | `B4044513BA44C3290639AD4C416DAF37E72DEB43567FC0DE0314DAF2546130DF` |
 
 Identical hashes in different family-named paths are recorded intentionally. They do not make the
-families protocol-compatible: part/ES detection, Enhanced COM bootstrap, memory windows,
-mmWaveLink configuration, lane mode, and runtime behavior must still be sourced and reviewed as a
-complete descriptor.
+families protocol-compatible; each public route remains bound to its own identity, monitor,
+memory-window, RF, data-path, and runtime policy.
 
 ## Development references
 
@@ -117,10 +122,11 @@ were used as documentation evidence. They are not runtime dependencies and are n
   family-specific RPRC memory-window evidence. Similar window constants do not prove that the
   Enhanced COM bootstrap or download state machine is interchangeable.
 
-No audited public source closed every boot/download/runtime field for xWR12/xWR14/xWR16/xWR18.
-Accordingly, mmwcli acquisition for those families remains **Planned**. A future experimental
-route must use a reviewed built-in descriptor, offline golden transactions, explicit user opt-in,
-and fail-closed identity/ES/asset checks; it must not accept arbitrary register scripts.
+The xWR16xx and xWR18xx evidence above is implemented as public, closed, source-validated
+experimental descriptors selected by required `--family`. Their Enhanced COM path is deliberately
+warm-monitor-only at 921600 baud; it does not borrow the xWR68xx cold-start register sequence.
+xWR12xx and xWR14xx acquisition remain **Planned** because their complete descriptors and raw
+layout contracts are not closed.
 
 ## Current xWR68xx SDK references
 

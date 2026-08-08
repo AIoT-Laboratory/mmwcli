@@ -30,13 +30,12 @@ substitute for a reviewed descriptor.
 
 | Device or board | `mmwcli studio-cli` acquisition | `mmwcli debug-cli` acquisition | `mmwcore` raw layout | `mmwcore` antenna geometry |
 | --- | --- | --- | --- | --- |
-| IWR6843 ES2 part `0xE2` with the recorded DCA1000/host combination | Source-validated experimental at xWR68xx family level only; model, part, ES, and board are not observed | **Supported**; exact firmware and environment in the hardware smoke test only | **Supported** `group2_i_then_q` for the documented complex16 capture contract | Source-validated experimental IWR6843ISK preset when that is the actual board; the capture record does not prove geometry |
-| IWR6843ISK combinations outside that record | Source-validated experimental at xWR68xx family level only; no ISK identity is observed | Planned; no implicit relaxation of part/ES/asset checks | Source-validated experimental `group2_i_then_q` | Source-validated experimental IWR6843ISK preset |
+| IWR6843 ES2 part `0xE2` with the recorded DCA1000/host combination | Source-validated experimental at xWR68xx family level only; model, part, ES, and board are not observed | **Supported** with `--family xwr68xx`; exact firmware and environment in the hardware smoke test only | **Supported** `group2_i_then_q` for the documented complex16 capture contract | Source-validated experimental IWR6843ISK preset when that is the actual board; the capture record does not prove geometry |
+| IWR6843ISK combinations outside that record, with part `0xE2` | Source-validated experimental at xWR68xx family level only; no ISK identity is observed | Source-validated experimental with `--family xwr68xx`; the route observes the accepted part, not the board | Source-validated experimental `group2_i_then_q` | Source-validated experimental IWR6843ISK preset |
 | IWR6843 AOP | Planned; an AOP-specific platform alias and capture routing have not been established | Planned | Source-validated experimental `group2_i_then_q` only when the producer proves that layout | Source-validated experimental IWR6843 AOP preset |
 | Other non-AOP xWR68xx parts or boards reporting exact `Platform: xWR68xx` | Source-validated experimental at family level only with the dedicated asset and closed two-lane contract; model, part, ES, board, and geometry are not observed | Planned | Source-validated experimental `group2_i_then_q` | Planned; caller must provide reviewed board geometry rather than select an ISK/AOP preset by family |
-| xWR1843 standard EVM | Planned | Planned | Source-validated experimental `group2_i_then_q` | Source-validated experimental standard XWR1843 EVM preset |
-| AWR1843 AOP | Planned | Planned | Source-validated experimental `group2_i_then_q` only when the producer proves that layout | Source-validated experimental AWR1843 AOP preset |
-| xWR1642 | Planned | Planned | Source-validated experimental `group2_i_then_q` | Source-validated experimental XWR1642 preset |
+| xWR16xx devices with accepted IDs `0x60`, `0x61`, `0x04`, `0x62`, `0x67`, `0x66`, `0x01`, `0xC0`, or `0xC1` | Planned; `studio-cli` is xWR68xx-only | Source-validated experimental with `--family xwr16xx`; requires the pinned assets and a responsive 921600-baud monitor | Source-validated experimental `group2_i_then_q` | Source-validated experimental XWR1642 preset only when it matches the actual board |
+| xWR18xx devices with accepted IDs `0x70`, `0x71`, `0xD0`, or `0x05` | Planned; `studio-cli` is xWR68xx-only | Source-validated experimental with `--family xwr18xx`; requires the pinned assets and a responsive 921600-baud monitor | Source-validated experimental `group2_i_then_q` | Source-validated experimental standard XWR1843 EVM or AWR1843 AOP preset only when it matches the actual board |
 | xWR1443 | Planned | Planned | Planned; audited TI sources conflict on device-specific raw interleave | Planned; no named board geometry preset |
 | AWR1243 | Planned | Planned | Source-validated experimental `group4_i_then_q` | Planned; no named board geometry preset |
 | xWRL64xx / IWRL6432 (sometimes shortened to “xWR64”) | Planned; no descriptor is derived from xWR68xx | Planned | Planned; no named raw layout | Planned; no named board geometry |
@@ -58,8 +57,8 @@ implemented by `mmwcore`.
 | --- | --- | ---: | ---: | ---: | --- | --- | --- |
 | AWR1243 | 77 GHz scale; 76–81 GHz API range | 3 / 4 | 16 KiB | 4 | `group4_i_then_q` | shared xWR12xx/xWR14xx MSS+BSS | mmwcli boot/download and runtime descriptors are not closed |
 | xWR1443 | 77 GHz scale; 76–81 GHz API range | 3 / 4 | 16 KiB | 4 | candidate `group4_i_then_q`; evidence conflict | shared xWR12xx/xWR14xx MSS+BSS | device-specific raw interleave and mmwcli runtime descriptors are not closed |
-| xWR1642 | 77 GHz scale; 76–81 GHz API range | 2 / 4 | 32 KiB | 2 | `group2_i_then_q` | xWR16xx MSS+BSS | reference script uses low-power ADC mode 1; mmwcli descriptor is not closed |
-| xWR1843 | 77 GHz scale; 76–81 GHz API range | 3 / 4 | 32 KiB | 2 | `group2_i_then_q` | xWR18xx MSS+BSS | mmwcli boot/download and runtime descriptors are not closed |
+| xWR16xx | 77 GHz scale; 76–81 GHz API range | 2 / 4 | 32 KiB | 2, DCA type 2 | `group2_i_then_q` | pinned xWR16xx MSS+BSS | public source-validated experimental debug route; low-power ADC mode 1; warm 921600-baud monitor only; no repository-owner hardware record |
+| xWR18xx | 77 GHz scale; 76–81 GHz API range | 3 / 4 | 32 KiB | 2, DCA type 2 | `group2_i_then_q` | pinned xWR18xx MSS+BSS | public source-validated experimental debug route; low-power ADC mode 0; warm 921600-baud monitor only; no repository-owner hardware record |
 | xWR6843 | 60 GHz scale; 57–64 GHz API range | 3 / 4 | 32 KiB | 2 | `group2_i_then_q` | xWR68xx MSS+BSS; xWR68xx `studio_cli` | Studio is family-level experimental with only `Platform: xWR68xx` observed; supported debug is restricted to IWR6843 ES2 part `0xE2` and the pinned assets |
 
 Exact asset sizes and hashes, device-ID evidence, and the source paths used for this table are in
@@ -69,6 +68,19 @@ The named layouts cover legacy-frame, 16-bit complex ADC captures without LVDS h
 ADC, complex 2x, CP/CQ or mixed payloads, LVDS headers, advanced frames, CSI-2, and cascade assembly
 are not implied by the family row. A different data path needs a separately sourced descriptor and
 golden fixture.
+
+The three public debug routes are selected only by the exact values `xwr16xx`, `xwr18xx`, and
+`xwr68xx`. The repository provides matching starting configurations:
+
+| Selection | Starting CFG |
+| --- | --- |
+| `--family xwr16xx` | `hardware/debug-cli-xwr16xx-raw.cfg` |
+| `--family xwr18xx` | `hardware/debug-cli-xwr18xx-raw.cfg` |
+| `--family xwr68xx` | `hardware/debug-cli-xwr6843-raw.cfg` |
+
+There is no default family. A successful xWR16xx or xWR18xx run is valuable validation evidence;
+users do not need to wait for the repository owner to possess the same board before trying the
+public route.
 
 ## Help validate another combination
 

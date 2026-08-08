@@ -8,17 +8,20 @@ defined by `README.md` and `docs/`.
 - `mmwcli` is a cross-platform command-line controller and DCA1000 raw-ADC acquisition tool for
   explicitly documented TI routes. Device-family support is tiered and must not be inferred from a
   shared source tree, RF band, lane count, or similar part number.
-- The baseline is IWR6843 ES2 part `0xE2`, legacy frame, 16-bit complex ADC, and two LVDS lanes.
+- The raw-capture baseline is xWR16xx, xWR18xx, and xWR68xx legacy frames with 16-bit complex ADC,
+  two LVDS lanes, and DCA1000 raw mode. Each family has its own closed limits and must never inherit
+  another family's defaults.
 - The functional/application workflow is a source-validated experimental xWR68xx family route for
   the dedicated TI `studio_cli` device firmware. It requires the exact `Platform: xWR68xx` family
   response and user-flashed `mmwave_Studio_cli_xwr68xx.bin`; a complete Radar Toolbox installation
   is unnecessary. This gate does not observe or prove the model, part, ES, board, or antenna
   geometry. Keep model and revision metadata empty, reject AOP-specific aliases and every other
   platform value, and do not promote the family route into a model-level claim.
-- `debug-cli` hardware validation covers only IWR6843 ES2 part `0xE2` with the exact firmware,
-  host, FTDI, and DCA1000 combination recorded in the hardware smoke test. Other devices may enter
-  a source-validated experimental tier before hardware is available only under the requirements
-  below; they must not be described as supported.
+- `debug-cli` requires exact `--family xwr16xx|xwr18xx|xwr68xx`; do not add a default, model alias,
+  or permissive fallback. xWR16xx and xWR18xx are public source-validated experimental routes.
+  Hardware validation covers only IWR6843 ES2 part `0xE2` with the exact firmware, host, FTDI, and
+  DCA1000 combination recorded in the hardware smoke test; the experimental routes must not be
+  described as supported until a reproducible hardware record exists.
 - The top-level `repl` is a `studio_cli` utility fixed to its line protocol and xWR68xx `version`
   validation. It is not a separate firmware or capture backend.
   It must not provide a selectable custom dialect or a way to bypass validation. It may send
@@ -65,7 +68,7 @@ defined by `README.md` and `docs/`.
   the route remains planned.
 - **Planned** means no public route or named descriptor exists. Evidence may be documented, but
   users must not be told that the hardware works.
-- Never fill a missing family field with xWR68xx/IWR6843 values, infer board geometry from a part
+- Never fill a missing family field with another family's values, infer board geometry from a part
   ID, or add an arbitrary register-script/custom hardware-JSON escape hatch. Leave the route
   planned until every safety-relevant field is sourced and reviewed.
 - Community reports can promote an experimental combination only after the record is reproducible
@@ -111,12 +114,13 @@ must not be used to evade the limits.
   error, or no response. The only exception is TI's fixed baud negotiation within one
   `debug-cli` Enhanced COM connection. A new connection attempt requires a power, cable, or
   ownership change followed by a user request.
-- Do not scan serial ports or guess the CLI port, firmware, or baud. Enhanced COM permits only the
-  fixed 921600-to-115200-to-921600 negotiation. It may enter that sequence only after the initial
-  read-only probe times out or violates TI's one-to-eight-digit hexadecimal rule and the port closes
-  successfully. After the 115200 probe, IWR6843 part `0xE2` must pass validation before any state
-  write. An invalid low-speed probe, indeterminate state write, or close failure must stop without
-  continuation or retry.
+- Do not scan serial ports or guess the CLI port, firmware, baud, or device family. xWR16xx and
+  xWR18xx require an already-responsive 921600-baud Enhanced COM monitor and never execute the
+  xWR68xx baud-register sequence. xWR68xx alone permits the fixed 921600-to-115200-to-921600 cold
+  negotiation. It may enter that sequence only after the initial read-only probe times out or
+  violates TI's one-to-eight-digit hexadecimal rule and the port closes successfully. After the
+  115200 probe, IWR6843 part `0xE2` must pass validation before any state write. An invalid low-speed
+  probe, indeterminate state write, or close failure must stop without continuation or retry.
 - Do not run two DCA control commands concurrently; they contend for host UDP port 4096 by default.
 - `SystemAlive` belongs only to an explicit `dca ping`; it is not an automatic configure/capture prerequisite.
 - An indeterminate StartRecord result must not be retried. Only one bounded StopRecord recovery is allowed.

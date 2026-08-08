@@ -11,7 +11,8 @@ routes expose the same optional stream:
 
 ~~~text
 mmwcli studio-cli capture CFG OUTDIR --port PORT --stream [options]
-mmwcli debug-cli capture CFG OUTDIR --enhanced-port PORT ... --stream [options]
+mmwcli debug-cli capture CFG OUTDIR --family xwr16xx|xwr18xx|xwr68xx \
+  --enhanced-port PORT ... --stream [options]
 ~~~
 
 `OUTDIR` is always the authoritative strict **mmwcli.capture_session.v1** transaction, whether or
@@ -78,8 +79,9 @@ SESSION is strict UTF-8 JSON with schema **mmwcli.capture_stream.v1** and a maxi
 - producer name mmwcli and a version of 1..128 valid UTF-8 bytes, with no surrounding whitespace
   or control characters;
 - capture mode studio-cli or debug-cli;
-- hardware keys `vendor`, `family`, `model`, `revision`, and `identity_source`, with the current
-  closed tuple `ti`, `xwr68xx`, empty model, empty revision, and `route_declaration`;
+- hardware keys `vendor`, `family`, `model`, `revision`, and `identity_source`, with vendor `ti`,
+  family exactly `xwr16xx`, `xwr18xx`, or `xwr68xx`, empty model and revision, and identity source
+  `route_declaration`;
 - finite frame count, frame bytes, and their checked expected-byte product;
 - explicit zero origins for record sequence, frame index, and logical ADC byte offset;
 - ADC keys `dtype`, `byte_order`, `lane_count`, and `layout`, with the current closed tuple `int16`,

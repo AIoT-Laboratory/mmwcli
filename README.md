@@ -1,15 +1,25 @@
 # mmwcli
 
-`mmwcli` controls its documented TI xWR68xx/IWR6843 acquisition routes, coordinates DCA1000 capture, and publishes raw ADC data with finite-capture integrity checks. It has no GUI, MATLAB, Lua host, mmWave Studio runtime, or signal-processing pipeline.
+`mmwcli` captures raw ADC data from TI xWR16xx, xWR18xx, and xWR68xx devices through
+DCA1000, with explicit family selection, finite-capture integrity checks, reproducible session
+artifacts, and optional live frame streaming. It has no GUI, MATLAB, Lua host, mmWave Studio
+runtime, or signal-processing pipeline.
 
 ## Scope
 
-- `studio-cli` and its REPL utility form a source-validated experimental xWR68xx family route for the dedicated TI firmware. They require the exact `Platform: xWR68xx` family response but do not observe or prove a model, part, ES, or board.
-- `debug-cli` hardware validation is limited to IWR6843 ES2 part `0xE2`, DCA1000, Windows/amd64, and FTDI D2XX 3.2.14.
+- `debug-cli --family xwr16xx|xwr18xx|xwr68xx` exposes three closed, family-specific capture
+  routes. xWR16xx and xWR18xx are source-validated experimental routes awaiting community
+  hardware reports. The recorded IWR6843 ES2 combination remains the only supported-tier route.
+- `studio-cli` and its REPL utility remain a source-validated experimental xWR68xx-only route for
+  the dedicated TI firmware. They require the exact `Platform: xWR68xx` family response but do not
+  observe or prove a model, part, ES, or board.
 - The capture baseline is legacy frames, complex16 ADC, two LVDS lanes, and DCA1000 raw output.
 - Advanced frames, cascade, LVDS headers, software LVDS, CSI-2, and implicit ADC processing are outside the contract.
 
-Version 0.1 validated only the recorded `debug-cli` combination. See the [hardware record](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record). The Studio route remains family-level experimental; model-specific combinations and native-library combinations require independent validation.
+Version 0.1 hardware validation covers one recorded IWR6843 ES2 `debug-cli` combination. The
+xWR16xx and xWR18xx public routes are intentionally available before repository-owner hardware is
+available so hardware owners can exercise them and report results. See the [support
+matrix](docs/hardware-support.md) and [validation record](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record).
 
 ## Download and build
 
@@ -39,7 +49,9 @@ The repository and release archives do not distribute FTDI or TI assets.
 mmwcli doctor
 mmwcli firmware verify PATH/mmwave_Studio_cli_xwr68xx.bin
 mmwcli studio-cli check hardware/studio-cli-xwr6843-raw.cfg
-mmwcli debug-cli check --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin
+mmwcli debug-cli check --family xwr16xx --bss-fw PATH/xwr16xx_radarss.bin --mss-fw PATH/xwr16xx_masterss.bin
+mmwcli debug-cli check --family xwr18xx --bss-fw PATH/xwr18xx_radarss.bin --mss-fw PATH/xwr18xx_masterss.bin
+mmwcli debug-cli check --family xwr68xx --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin
 mmwcli debug-cli native-check
 ```
 
@@ -57,22 +69,42 @@ mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-session --
 
 Every `studio-cli capture` performs full preflight and applies the complete configuration; capture does not reuse a prior radar configuration.
 
-### IWR6843 ES2 debug mode
+### xWR16xx, xWR18xx, and xWR68xx debug mode
 
-Use an `ftd2xx` build and the user-supplied RF-evaluation BSS/MSS firmware recorded for IWR6843 ES2 part `0xE2`:
+Use an `ftd2xx` build and select the device family explicitly. There is no default family and no
+model-name alias. `--family` selects the radar contract; the existing `--device` option remains the
+DCA1000 IPv4 address. Each route requires its family-named mmWave Studio 2.1.1 RF-evaluation assets:
 
 ```text
+mmwcli debug-cli capture hardware/debug-cli-xwr16xx-raw.cfg capture-xwr16xx \
+  --family xwr16xx --enhanced-port PORT \
+  --bss-fw PATH/xwr16xx_radarss.bin --mss-fw PATH/xwr16xx_masterss.bin \
+  --d2xx-description AR-DevPack-EVM-012
+
+mmwcli debug-cli capture hardware/debug-cli-xwr18xx-raw.cfg capture-xwr18xx \
+  --family xwr18xx --enhanced-port PORT \
+  --bss-fw PATH/xwr18xx_radarss.bin --mss-fw PATH/xwr18xx_masterss.bin \
+  --d2xx-description AR-DevPack-EVM-012
+
 mmwcli debug-cli capture hardware/debug-cli-xwr6843-raw.cfg capture-session \
-  --enhanced-port PORT \
+  --family xwr68xx --enhanced-port PORT \
   --bss-fw PATH/xwr68xx_radarss.bin \
   --mss-fw PATH/xwr68xx_masterss.bin \
   --d2xx-description AR-DevPack-EVM-012 \
   --sop2-reset
 ```
 
+xWR16xx uses the 77 GHz profile domain, two TX channels, low-power ADC mode 1, and two LVDS lanes.
+xWR18xx uses the 77 GHz profile domain, three TX channels, low-power ADC mode 0, and two LVDS
+lanes. Both experimental routes require an already-responsive 921600-baud Enhanced COM monitor;
+they do not run the xWR68xx cold-start baud-register sequence. xWR68xx uses its 60 GHz profile
+domain and retains the validated IWR6843 ES2 cold-start path.
+
 `AR-DevPack-EVM-012` is the D2XX description base used for the 0.1 validation. A serial-base example is `--d2xx-serial FT1234` for interfaces `FT1234A`/`FT1234B` and, with `--sop2-reset`, `FT1234C`/`FT1234D`. The example serial is not the validation board's serial.
 
-Enhanced COM downloads firmware; D2XX A/B carries mmWaveLink control. D/C is opened only for explicit `--sop2-reset`.
+Enhanced COM downloads firmware; D2XX A/B carries mmWaveLink control. D/C is opened only for
+explicit `--sop2-reset`. The exact asset hashes, accepted device IDs, and validation tiers are in
+the [TI reference map](docs/ti-reference-map.md) and [hardware support matrix](docs/hardware-support.md).
 
 ### `studio_cli` REPL
 
