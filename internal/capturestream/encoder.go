@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"hash"
 	"io"
+
+	"mmwcli/internal/radar"
 )
 
 var (
@@ -27,6 +29,8 @@ const (
 type Encoder struct {
 	writer        io.Writer
 	session       Session
+	frameCount    uint64
+	frameBytes    uint64
 	expectedBytes uint64
 	nextFrame     uint64
 	adcBytes      uint64
@@ -35,11 +39,16 @@ type Encoder struct {
 	failure       error
 }
 
-func NewEncoder(writer io.Writer, session Session, radarConfig []byte) (*Encoder, error) {
+func NewEncoder(
+	writer io.Writer,
+	session Session,
+	plan radar.CapturePlan,
+	radarConfig []byte,
+) (*Encoder, error) {
 	if writer == nil {
 		return nil, errors.New("capture stream writer is nil")
 	}
-	sessionPayload, expectedBytes, err := buildSessionPayload(session, radarConfig)
+	sessionPayload, shape, err := buildSessionPayload(session, plan, radarConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +75,9 @@ func NewEncoder(writer io.Writer, session Session, radarConfig []byte) (*Encoder
 	return &Encoder{
 		writer:        writer,
 		session:       session,
-		expectedBytes: expectedBytes,
+		frameCount:    shape.frameCount,
+		frameBytes:    shape.frameBytes,
+		expectedBytes: shape.expectedBytes,
 		adcHash:       sha256.New(),
 		state:         encoderReady,
 	}, nil
@@ -83,19 +94,19 @@ func (encoder *Encoder) WriteFrame(index uint64, payload []byte) error {
 			encoder.nextFrame,
 		))
 	}
-	if index >= encoder.session.FrameCount {
+	if index >= encoder.frameCount {
 		return encoder.poison(fmt.Errorf(
 			"capture stream frame index %d exceeds finite frame count %d",
 			index,
-			encoder.session.FrameCount,
+			encoder.frameCount,
 		))
 	}
-	if uint64(len(payload)) != encoder.session.FrameBytes {
+	if uint64(len(payload)) != encoder.frameBytes {
 		return encoder.poison(fmt.Errorf(
 			"capture stream frame %d is %d bytes; expected %d",
 			index,
 			len(payload),
-			encoder.session.FrameBytes,
+			encoder.frameBytes,
 		))
 	}
 	if err := writeRecord(
@@ -126,11 +137,11 @@ func (encoder *Encoder) Commit(artifact Artifact) error {
 	if err := encoder.requireReady(); err != nil {
 		return err
 	}
-	if encoder.nextFrame != encoder.session.FrameCount {
+	if encoder.nextFrame != encoder.frameCount {
 		return encoder.poison(fmt.Errorf(
 			"capture stream has %d frame(s); expected %d before commit",
 			encoder.nextFrame,
-			encoder.session.FrameCount,
+			encoder.frameCount,
 		))
 	}
 	if artifact.SizeBytes != encoder.expectedBytes || artifact.SizeBytes != encoder.adcBytes {

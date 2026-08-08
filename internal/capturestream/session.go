@@ -8,10 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"mmwcli/internal/radar"
 )
 
 const (
@@ -34,14 +35,19 @@ const (
 	CaptureModeDebugCapture CaptureMode = "debug-capture"
 )
 
-// Session is the immutable, finite capture contract written before hardware
-// activity. StreamID is correlation metadata; it does not authenticate a peer.
+// Session is immutable producer metadata. NewEncoder combines it with an exact
+// CFG-bound radar plan before writing the finite capture contract. StreamID is
+// correlation metadata; it does not authenticate a peer.
 type Session struct {
 	StreamID        [16]byte
 	ProducerVersion string
 	Mode            CaptureMode
-	FrameCount      uint64
-	FrameBytes      uint64
+}
+
+type captureShape struct {
+	frameCount    uint64
+	frameBytes    uint64
+	expectedBytes uint64
 }
 
 // Artifact is the already-published capture-session ADC evidence checked
@@ -122,10 +128,14 @@ func NewStreamID() ([16]byte, error) {
 	return identifier, nil
 }
 
-func buildSessionPayload(session Session, radarConfig []byte) ([]byte, uint64, error) {
-	expectedBytes, err := validateSession(session, radarConfig)
+func buildSessionPayload(
+	session Session,
+	plan radar.CapturePlan,
+	radarConfig []byte,
+) ([]byte, captureShape, error) {
+	shape, err := validateSession(session, plan, radarConfig)
 	if err != nil {
-		return nil, 0, err
+		return nil, captureShape{}, err
 	}
 	configDigest := sha256.Sum256(radarConfig)
 	record := sessionRecordV1{
@@ -137,9 +147,9 @@ func buildSessionPayload(session Session, radarConfig []byte) ([]byte, uint64, e
 		},
 		Mode: string(session.Mode),
 		Capture: captureRecordV1{
-			FrameCount:           session.FrameCount,
-			FrameBytes:           session.FrameBytes,
-			ExpectedBytes:        expectedBytes,
+			FrameCount:           shape.frameCount,
+			FrameBytes:           shape.frameBytes,
+			ExpectedBytes:        shape.expectedBytes,
 			RecordSequenceOrigin: 0,
 			FrameIndexOrigin:     0,
 			ADCByteOffsetOrigin:  0,
@@ -161,58 +171,76 @@ func buildSessionPayload(session Session, radarConfig []byte) ([]byte, uint64, e
 	}
 	payload, err := encodeJSONLine(record)
 	if err != nil {
-		return nil, 0, fmt.Errorf("encode capture stream session: %w", err)
+		return nil, captureShape{}, fmt.Errorf("encode capture stream session: %w", err)
 	}
 	if len(payload) > MaxSessionPayloadBytes {
-		return nil, 0, fmt.Errorf(
+		return nil, captureShape{}, fmt.Errorf(
 			"capture stream session header is %d bytes; limit is %d",
 			len(payload),
 			MaxSessionPayloadBytes,
 		)
 	}
-	return payload, expectedBytes, nil
+	return payload, shape, nil
 }
 
-func validateSession(session Session, radarConfig []byte) (uint64, error) {
+func validateSession(
+	session Session,
+	plan radar.CapturePlan,
+	radarConfig []byte,
+) (captureShape, error) {
 	if session.StreamID == ([16]byte{}) {
-		return 0, errors.New("capture stream identifier must not be zero")
+		return captureShape{}, errors.New("capture stream identifier must not be zero")
 	}
 	if err := validateProducerVersion(session.ProducerVersion); err != nil {
-		return 0, err
+		return captureShape{}, err
 	}
 	if session.Mode != CaptureModeStudioCLI && session.Mode != CaptureModeDebugCapture {
-		return 0, fmt.Errorf("unsupported capture stream mode %q", session.Mode)
-	}
-	if session.FrameCount == 0 {
-		return 0, errors.New("capture stream frame count must be positive")
-	}
-	if session.FrameBytes == 0 || session.FrameBytes%2 != 0 {
-		return 0, errors.New("capture stream frame size must be positive and aligned to int16")
-	}
-	if session.FrameBytes > MaxFramePayloadBytes {
-		return 0, fmt.Errorf(
-			"capture stream frame size %d exceeds limit %d",
-			session.FrameBytes,
-			MaxFramePayloadBytes,
-		)
-	}
-	if session.FrameCount > math.MaxInt64/session.FrameBytes {
-		return 0, errors.New("capture stream expected byte count exceeds int64")
+		return captureShape{}, fmt.Errorf("unsupported capture stream mode %q", session.Mode)
 	}
 	if len(radarConfig) == 0 || len(bytes.TrimSpace(radarConfig)) == 0 {
-		return 0, errors.New("capture stream radar configuration is empty")
+		return captureShape{}, errors.New("capture stream radar configuration is empty")
 	}
 	if len(radarConfig) > MaxRadarConfigBytes {
-		return 0, fmt.Errorf(
+		return captureShape{}, fmt.Errorf(
 			"capture stream radar configuration is %d bytes; limit is %d",
 			len(radarConfig),
 			MaxRadarConfigBytes,
 		)
 	}
 	if !utf8.Valid(radarConfig) {
-		return 0, errors.New("capture stream radar configuration is not valid UTF-8")
+		return captureShape{}, errors.New("capture stream radar configuration is not valid UTF-8")
 	}
-	return session.FrameCount * session.FrameBytes, nil
+	if err := radar.ValidateCaptureSessionV1Plan(radarConfig, plan); err != nil {
+		return captureShape{}, fmt.Errorf("bind capture stream to radar plan: %w", err)
+	}
+	return captureShapeFromPlan(plan)
+}
+
+func captureShapeFromPlan(plan radar.CapturePlan) (captureShape, error) {
+	if plan.NumberOfFrames == 0 {
+		return captureShape{}, errors.New("capture stream frame count must be positive")
+	}
+	if plan.BytesPerFrame <= 0 || plan.BytesPerFrame%2 != 0 {
+		return captureShape{}, errors.New("capture stream frame size must be positive and aligned to int16")
+	}
+	if plan.BytesPerFrame > int64(MaxFramePayloadBytes) {
+		return captureShape{}, fmt.Errorf(
+			"capture stream frame size %d exceeds limit %d",
+			plan.BytesPerFrame,
+			MaxFramePayloadBytes,
+		)
+	}
+	frameCount := uint64(plan.NumberOfFrames)
+	frameBytes := uint64(plan.BytesPerFrame)
+	expectedBytes := frameCount * frameBytes
+	if plan.ExpectedBytes <= 0 || uint64(plan.ExpectedBytes) != expectedBytes {
+		return captureShape{}, errors.New("capture stream expected byte count does not match its finite frame shape")
+	}
+	return captureShape{
+		frameCount:    frameCount,
+		frameBytes:    frameBytes,
+		expectedBytes: expectedBytes,
+	}, nil
 }
 
 func validateProducerVersion(version string) error {

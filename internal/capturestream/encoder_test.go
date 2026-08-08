@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"mmwcli/internal/radar"
@@ -27,7 +29,7 @@ const goldenRadarConfig = "flushCfg\n" +
 	"sensorStart\n"
 
 func TestEncoderWritesGoldenFiniteCommitStream(t *testing.T) {
-	session := testSession(1, 64)
+	session := testSession()
 	config := []byte(goldenRadarConfig)
 	plan, err := radar.BuildCaptureSessionV1Plan(config, radar.FullConfiguration)
 	if err != nil {
@@ -41,7 +43,7 @@ func TestEncoderWritesGoldenFiniteCommitStream(t *testing.T) {
 		frame[index] = byte(index)
 	}
 	var stream bytes.Buffer
-	encoder, err := NewEncoder(&stream, session, config)
+	encoder, err := NewEncoder(&stream, session, plan, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,13 +135,15 @@ func TestEncoderWritesGoldenFiniteCommitStream(t *testing.T) {
 }
 
 func TestEncoderWritesAbortForProvisionalFrames(t *testing.T) {
-	session := testSession(2, 4)
+	session := testSession()
+	plan, config := testCapturePlan(t, 2)
 	var stream bytes.Buffer
-	encoder, err := NewEncoder(&stream, session, []byte("flushCfg\n"))
+	encoder, err := NewEncoder(&stream, session, plan, config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	frame := []byte{1, 2, 3, 4}
+	frame := make([]byte, 64)
+	frame[0] = 1
 	if err := encoder.WriteFrame(0, frame); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +175,7 @@ func TestEncoderWritesAbortForProvisionalFrames(t *testing.T) {
 	if terminal.Outcome != "abort" ||
 		terminal.ReasonCode != string(AbortCancelled) ||
 		terminal.Frames != 1 ||
-		terminal.ADCBytes != 4 ||
+		terminal.ADCBytes != 64 ||
 		terminal.ADCSHA256 != hex.EncodeToString(digest[:]) {
 		t.Fatalf("abort terminal = %+v", terminal)
 	}
@@ -187,7 +191,7 @@ func TestEncoderPoisonsInvalidTransitions(t *testing.T) {
 	}{
 		{
 			name: "wrong frame index",
-			run:  func(encoder *Encoder) error { return encoder.WriteFrame(1, make([]byte, 4)) },
+			run:  func(encoder *Encoder) error { return encoder.WriteFrame(1, make([]byte, 64)) },
 		},
 		{
 			name: "wrong frame size",
@@ -204,8 +208,9 @@ func TestEncoderPoisonsInvalidTransitions(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			plan, config := testCapturePlan(t, 1)
 			var stream bytes.Buffer
-			encoder, err := NewEncoder(&stream, testSession(1, 4), []byte("flushCfg\n"))
+			encoder, err := NewEncoder(&stream, testSession(), plan, config)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -220,16 +225,18 @@ func TestEncoderPoisonsInvalidTransitions(t *testing.T) {
 }
 
 func TestEncoderRejectsArtifactMismatchAndSecondTerminal(t *testing.T) {
-	frame := []byte{1, 2, 3, 4}
+	plan, config := testCapturePlan(t, 1)
+	frame := make([]byte, 64)
+	frame[0] = 1
 	var mismatchStream bytes.Buffer
-	mismatch, err := NewEncoder(&mismatchStream, testSession(1, 4), []byte("flushCfg\n"))
+	mismatch, err := NewEncoder(&mismatchStream, testSession(), plan, config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := mismatch.WriteFrame(0, frame); err != nil {
 		t.Fatal(err)
 	}
-	if err := mismatch.Commit(Artifact{SizeBytes: 4}); err == nil {
+	if err := mismatch.Commit(Artifact{SizeBytes: 64}); err == nil {
 		t.Fatal("mismatched artifact digest was accepted")
 	}
 	if err := mismatch.Abort(AbortIntegrityFailed); !errors.Is(err, ErrEncoderPoisoned) {
@@ -237,7 +244,7 @@ func TestEncoderRejectsArtifactMismatchAndSecondTerminal(t *testing.T) {
 	}
 
 	var committedStream bytes.Buffer
-	committed, err := NewEncoder(&committedStream, testSession(1, 4), []byte("flushCfg\n"))
+	committed, err := NewEncoder(&committedStream, testSession(), plan, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +252,7 @@ func TestEncoderRejectsArtifactMismatchAndSecondTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(frame)
-	if err := committed.Commit(Artifact{SizeBytes: 4, SHA256: digest}); err != nil {
+	if err := committed.Commit(Artifact{SizeBytes: 64, SHA256: digest}); err != nil {
 		t.Fatal(err)
 	}
 	if err := committed.Abort(AbortCancelled); !errors.Is(err, ErrEncoderTerminal) {
@@ -254,55 +261,83 @@ func TestEncoderRejectsArtifactMismatchAndSecondTerminal(t *testing.T) {
 }
 
 func TestNewEncoderValidatesCompleteContractBeforeWriting(t *testing.T) {
-	valid := testSession(1, 4)
 	tests := []struct {
-		name    string
-		session Session
-		config  []byte
+		name   string
+		mutate func(*Session, *radar.CapturePlan, *[]byte)
 	}{
-		{name: "zero stream id", session: func() Session {
-			session := valid
-			session.StreamID = [16]byte{}
-			return session
-		}(), config: []byte("flushCfg\n")},
-		{name: "blank version", session: func() Session {
-			session := valid
-			session.ProducerVersion = " "
-			return session
-		}(), config: []byte("flushCfg\n")},
-		{name: "unknown mode", session: func() Session {
-			session := valid
-			session.Mode = "custom"
-			return session
-		}(), config: []byte("flushCfg\n")},
-		{name: "zero frames", session: func() Session {
-			session := valid
-			session.FrameCount = 0
-			return session
-		}(), config: []byte("flushCfg\n")},
-		{name: "unaligned frame", session: func() Session {
-			session := valid
-			session.FrameBytes = 3
-			return session
-		}(), config: []byte("flushCfg\n")},
-		{name: "oversize frame", session: func() Session {
-			session := valid
-			session.FrameBytes = MaxFramePayloadBytes + 2
-			return session
-		}(), config: []byte("flushCfg\n")},
-		{name: "capture size overflow", session: func() Session {
-			session := valid
-			session.FrameCount = math.MaxUint64
-			return session
-		}(), config: []byte("flushCfg\n")},
-		{name: "empty config", session: valid, config: nil},
-		{name: "invalid UTF-8 config", session: valid, config: []byte{0xff}},
-		{name: "oversize config", session: valid, config: make([]byte, MaxRadarConfigBytes+1)},
+		{
+			name: "zero stream id",
+			mutate: func(session *Session, _ *radar.CapturePlan, _ *[]byte) {
+				session.StreamID = [16]byte{}
+			},
+		},
+		{
+			name: "blank version",
+			mutate: func(session *Session, _ *radar.CapturePlan, _ *[]byte) {
+				session.ProducerVersion = " "
+			},
+		},
+		{
+			name: "unknown mode",
+			mutate: func(session *Session, _ *radar.CapturePlan, _ *[]byte) {
+				session.Mode = "custom"
+			},
+		},
+		{
+			name: "zero frames in supplied plan",
+			mutate: func(_ *Session, plan *radar.CapturePlan, _ *[]byte) {
+				plan.NumberOfFrames = 0
+			},
+		},
+		{
+			name: "unaligned frame in supplied plan",
+			mutate: func(_ *Session, plan *radar.CapturePlan, _ *[]byte) {
+				plan.BytesPerFrame = 3
+			},
+		},
+		{
+			name: "different physical command with equal geometry",
+			mutate: func(_ *Session, _ *radar.CapturePlan, config *[]byte) {
+				*config = []byte(strings.Replace(
+					string(*config),
+					"profileCfg 0 60",
+					"profileCfg 0 61",
+					1,
+				))
+			},
+		},
+		{
+			name: "incomplete config",
+			mutate: func(_ *Session, _ *radar.CapturePlan, config *[]byte) {
+				*config = []byte("flushCfg\n")
+			},
+		},
+		{
+			name: "empty config",
+			mutate: func(_ *Session, _ *radar.CapturePlan, config *[]byte) {
+				*config = nil
+			},
+		},
+		{
+			name: "invalid UTF-8 config",
+			mutate: func(_ *Session, _ *radar.CapturePlan, config *[]byte) {
+				*config = []byte{0xff}
+			},
+		},
+		{
+			name: "oversize config",
+			mutate: func(_ *Session, _ *radar.CapturePlan, config *[]byte) {
+				*config = make([]byte, MaxRadarConfigBytes+1)
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			session := testSession()
+			plan, config := testCapturePlan(t, 1)
+			test.mutate(&session, &plan, &config)
 			var stream bytes.Buffer
-			if _, err := NewEncoder(&stream, test.session, test.config); err == nil {
+			if _, err := NewEncoder(&stream, session, plan, config); err == nil {
 				t.Fatal("invalid contract was accepted")
 			}
 			if stream.Len() != 0 {
@@ -312,14 +347,72 @@ func TestNewEncoderValidatesCompleteContractBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestCaptureShapeEnforcesStreamBounds(t *testing.T) {
+	oversized := int64(MaxFramePayloadBytes) + 2
+	tests := []struct {
+		name string
+		plan radar.CapturePlan
+	}{
+		{
+			name: "zero frames",
+			plan: radar.CapturePlan{BytesPerFrame: 64},
+		},
+		{
+			name: "negative frame bytes",
+			plan: radar.CapturePlan{NumberOfFrames: 1, BytesPerFrame: -2},
+		},
+		{
+			name: "unaligned frame bytes",
+			plan: radar.CapturePlan{NumberOfFrames: 1, BytesPerFrame: 3, ExpectedBytes: 3},
+		},
+		{
+			name: "oversized frame bytes",
+			plan: radar.CapturePlan{
+				NumberOfFrames: 1,
+				BytesPerFrame:  oversized,
+				ExpectedBytes:  oversized,
+			},
+		},
+		{
+			name: "mismatched expected bytes",
+			plan: radar.CapturePlan{NumberOfFrames: 2, BytesPerFrame: 64, ExpectedBytes: 64},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := captureShapeFromPlan(test.plan); err == nil {
+				t.Fatal("invalid capture shape was accepted")
+			}
+		})
+	}
+
+	frameCount := uint16(math.MaxUint16)
+	frameBytes := int64(MaxFramePayloadBytes)
+	expectedBytes := int64(frameCount) * frameBytes
+	shape, err := captureShapeFromPlan(radar.CapturePlan{
+		NumberOfFrames: frameCount,
+		BytesPerFrame:  frameBytes,
+		ExpectedBytes:  expectedBytes,
+	})
+	if err != nil {
+		t.Fatalf("maximum bounded capture shape: %v", err)
+	}
+	if shape.frameCount != uint64(frameCount) ||
+		shape.frameBytes != uint64(frameBytes) ||
+		shape.expectedBytes != uint64(expectedBytes) {
+		t.Fatalf("maximum bounded capture shape = %+v", shape)
+	}
+}
+
 func TestEncoderWriteFailurePoisonsState(t *testing.T) {
+	plan, config := testCapturePlan(t, 1)
 	writer := &budgetWriter{remaining: math.MaxInt}
-	encoder, err := NewEncoder(writer, testSession(1, 4), []byte("flushCfg\n"))
+	encoder, err := NewEncoder(writer, testSession(), plan, config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	writer.remaining = 10
-	if err := encoder.WriteFrame(0, []byte{1, 2, 3, 4}); !errors.Is(err, errBudgetExhausted) {
+	if err := encoder.WriteFrame(0, make([]byte, 64)); !errors.Is(err, errBudgetExhausted) {
 		t.Fatalf("frame write error = %v", err)
 	}
 	if err := encoder.Abort(AbortCaptureFailed); !errors.Is(err, ErrEncoderPoisoned) {
@@ -337,7 +430,7 @@ func TestNewStreamIDIsNonZero(t *testing.T) {
 	}
 }
 
-func testSession(frameCount, frameBytes uint64) Session {
+func testSession() Session {
 	return Session{
 		StreamID: [16]byte{
 			0x00, 0x01, 0x02, 0x03,
@@ -347,9 +440,22 @@ func testSession(frameCount, frameBytes uint64) Session {
 		},
 		ProducerVersion: "test",
 		Mode:            CaptureModeStudioCLI,
-		FrameCount:      frameCount,
-		FrameBytes:      frameBytes,
 	}
+}
+
+func testCapturePlan(t *testing.T, frameCount uint16) (radar.CapturePlan, []byte) {
+	t.Helper()
+	config := []byte(strings.Replace(
+		goldenRadarConfig,
+		"frameCfg 0 0 1 1 10 1 0",
+		fmt.Sprintf("frameCfg 0 0 1 %d 10 1 0", frameCount),
+		1,
+	))
+	plan, err := radar.BuildCaptureSessionV1Plan(config, radar.FullConfiguration)
+	if err != nil {
+		t.Fatalf("build test capture plan: %v", err)
+	}
+	return plan, config
 }
 
 var errBudgetExhausted = errors.New("writer budget exhausted")

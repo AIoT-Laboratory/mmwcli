@@ -36,6 +36,56 @@ func TestBuildCaptureSessionV1PlanSupportsReuseWithoutFlush(t *testing.T) {
 	}
 }
 
+func TestValidateCaptureSessionV1PlanBindsExactSemantics(t *testing.T) {
+	snapshot := renderSessionConfig(validCommands())
+	plan, err := BuildCaptureSessionV1Plan(snapshot, FullConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCaptureSessionV1Plan(snapshot, plan); err != nil {
+		t.Fatalf("validate exact plan: %v", err)
+	}
+
+	t.Run("tampered plan geometry", func(t *testing.T) {
+		tampered := plan
+		tampered.BytesPerFrame--
+		if err := ValidateCaptureSessionV1Plan(snapshot, tampered); err == nil {
+			t.Fatal("tampered capture plan was accepted")
+		}
+	})
+
+	t.Run("tampered plan command", func(t *testing.T) {
+		tampered := plan
+		tampered.ConfigurationCommands = replaceCommand(
+			plan.ConfigurationCommands,
+			"profileCfg",
+			"profileCfg 0 61 7 3 24 0 0 166 1 256 12500 0 0 158",
+		)
+		if err := ValidateCaptureSessionV1Plan(snapshot, tampered); err == nil {
+			t.Fatal("capture plan with different physical commands was accepted")
+		}
+	})
+
+	t.Run("different CFG with same geometry", func(t *testing.T) {
+		alternate := replaceCommand(
+			validCommands(),
+			"profileCfg",
+			"profileCfg 0 61 7 3 24 0 0 166 1 256 12500 0 0 158",
+		)
+		alternateSnapshot := renderSessionConfig(alternate)
+		alternatePlan, err := BuildCaptureSessionV1Plan(alternateSnapshot, FullConfiguration)
+		if err != nil {
+			t.Fatalf("build alternate capture plan: %v", err)
+		}
+		if !sameCaptureGeometry(alternatePlan, plan) {
+			t.Fatal("alternate capture plan did not preserve byte geometry")
+		}
+		if err := ValidateCaptureSessionV1Plan(alternateSnapshot, plan); err == nil {
+			t.Fatal("different physical CFG with equal byte geometry was accepted")
+		}
+	})
+}
+
 func TestBuildCaptureSessionV1PlanUsesMmwcoreCommentBoundary(t *testing.T) {
 	commands := append([]string{"// ignored by the offline contract parser"}, validCommands()...)
 	if _, err := BuildCaptureSessionV1Plan(renderSessionConfig(commands), FullConfiguration); err != nil {

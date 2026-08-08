@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -54,6 +55,37 @@ func BuildCaptureSessionV1Plan(snapshot []byte, mode ConfigurationMode) (Capture
 		return CapturePlan{}, fmt.Errorf("capture session v1 CFG is not representable: %w", err)
 	}
 	return plan, nil
+}
+
+// ValidateCaptureSessionV1Plan binds an already-built capture plan to the
+// exact CFG snapshot that will be carried by a capture-session v1 artifact or
+// stream. It rejects semantic differences even when they preserve byte
+// geometry.
+func ValidateCaptureSessionV1Plan(snapshot []byte, actual CapturePlan) error {
+	expected, err := BuildCaptureSessionV1Plan(snapshot, actual.Mode)
+	if err != nil {
+		return err
+	}
+	if !sameCapturePlan(expected, actual) {
+		return errors.New("capture session v1 CFG snapshot does not match the supplied radar capture plan")
+	}
+	return nil
+}
+
+func sameCapturePlan(left, right CapturePlan) bool {
+	return left.Dialect == right.Dialect &&
+		left.Mode == right.Mode &&
+		slices.Equal(left.ConfigurationCommands, right.ConfigurationCommands) &&
+		left.DeclaredStartCommand == right.DeclaredStartCommand &&
+		left.StartCommand == right.StartCommand &&
+		left.StartWasSynthesized == right.StartWasSynthesized &&
+		left.ExpectedDCADataFormat == right.ExpectedDCADataFormat &&
+		left.BytesPerFrame == right.BytesPerFrame &&
+		left.ExpectedBytes == right.ExpectedBytes &&
+		left.HardwareLVDSEnabled == right.HardwareLVDSEnabled &&
+		left.InfiniteFrames == right.InfiniteFrames &&
+		left.NumberOfFrames == right.NumberOfFrames &&
+		left.FramePeriod == right.FramePeriod
 }
 
 // parseCaptureSessionV1Commands mirrors mmwcore's public TI-CFG comment
