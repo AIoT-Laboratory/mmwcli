@@ -24,7 +24,25 @@ reproducible xWR68xx combination.
 
 ## Download and build
 
-Download binaries and checksums from [GitHub Releases](https://github.com/AIoT-Laboratory/mmwcli/releases/latest).
+Install the latest core binary from GitHub Releases. Both downloaders read the release metadata and
+verify the selected executable against the published `SHA256SUMS` before installation:
+
+```sh
+curl -fsSLo /tmp/download-mmwcli.sh https://raw.githubusercontent.com/AIoT-Laboratory/mmwcli/main/scripts/download-mmwcli.sh
+sh /tmp/download-mmwcli.sh
+```
+
+```powershell
+$downloader = Join-Path $env:TEMP 'download-mmwcli.ps1'
+Invoke-WebRequest https://raw.githubusercontent.com/AIoT-Laboratory/mmwcli/main/scripts/download-mmwcli.ps1 -OutFile $downloader
+& $downloader
+```
+
+Linux defaults to `$HOME/.local/bin`; Windows defaults to
+`%LOCALAPPDATA%\Programs\mmwcli`. Select an exact release or directory with
+`--version 0.2 --install-dir DIR` on Linux and `-Version 0.2 -InstallDir DIR` on Windows.
+Windows amd64 users who need the native D2XX route can also pass `-Ftd2xx`; the FTDI DLL remains
+user-installed. See the [release guide](docs/releasing.md) for the exact asset contract.
 
 Go 1.26 or newer is required. The repository has no third-party Go modules.
 
@@ -42,7 +60,7 @@ Default builds use `CGO_ENABLED=0`. Enable the D2XX backend with the `ftd2xx` bu
 
 Build the tagged command with `go build -tags ftd2xx ./cmd/mmwcli` on Windows or `CGO_ENABLED=1 go build -tags ftd2xx ./cmd/mmwcli` on Linux.
 
-The repository and release archives do not distribute FTDI or TI assets.
+The repository and release assets do not distribute FTDI or TI assets.
 
 ## Validate before capture
 
