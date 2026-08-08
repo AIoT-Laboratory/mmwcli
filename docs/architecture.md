@@ -121,7 +121,11 @@ binary capture-stream v1 records. Diagnostics remain on stderr, stream failure c
 capture context, and terminal COMMIT or ABORT is followed by EOF. The published session directory
 remains the authoritative artifact; this does not move hardware ownership out of mmwcli.
 
-Multi-sensor coordination and clock uncertainty remain a separate, unimplemented aggregate contract; see the [multi-sensor synchronization design](multisensor-sync.md). It does not extend capture-stream v1 or move device/process ownership into mmwcore.
+Multi-sensor capture is implemented as a separate aggregate contract; see
+[multi-sensor synchronization](multisensor-sync.md). `--multisensor-plan` launches bounded external
+producers behind the radar lifecycle, publishes one no-overwrite aggregate directory, and may use
+`--stream` to emit `mmwcli.multisensor_stream.v1`. This does not extend capture-stream v1 or move
+device/process ownership into mmwcore.
 
 ## Transactional output
 

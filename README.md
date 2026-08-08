@@ -1,9 +1,9 @@
 # mmwcli
 
 `mmwcli` captures raw ADC data from TI xWR16xx, xWR18xx, and xWR68xx devices through
-DCA1000, with explicit family selection, finite-capture integrity checks, reproducible session
-artifacts, and optional live frame streaming. It has no GUI, MATLAB, Lua host, mmWave Studio
-runtime, or signal-processing pipeline.
+DCA1000. It publishes finite radar or synchronized radar-plus-camera sessions and can mirror both
+forms as live streams for inference. It has no GUI, MATLAB, Lua host, mmWave Studio runtime, or
+signal-processing pipeline.
 
 ## Scope
 
@@ -16,9 +16,9 @@ runtime, or signal-processing pipeline.
 - The capture baseline is legacy frames, complex16 ADC, two LVDS lanes, and DCA1000 raw output.
 - Advanced frames, cascade, LVDS headers, software LVDS, CSI-2, and implicit ADC processing are outside the contract.
 
-Version 0.1 hardware validation covers one recorded IWR6843 ES2 `debug-cli` combination. The
-xWR16xx and xWR18xx public routes are intentionally available before repository-owner hardware is
-available so hardware owners can exercise them and report results. See the [support
+All three family routes are public. Version 0.1 hardware validation records one IWR6843 ES2
+`debug-cli` combination; xWR16xx and xWR18xx remain source-validated experimental until hardware
+owners report reproducible runs. See the [support
 matrix](docs/hardware-support.md) and [validation record](docs/hardware-smoke-test.md#debug-mode-01-hardware-validation-record).
 
 ## Download and build
@@ -114,6 +114,29 @@ mmwcli repl --port PORT
 
 REPL is a `studio_cli` utility, not another firmware backend. It accepts only the validated line protocol; a response without explicit `Done` or numeric `Error` terminates the session.
 
+### Synchronized radar and camera capture
+
+Generate a plan for any camera command that writes fixed-size raw frames, validate it without
+opening hardware, then pass it to either radar route:
+
+```text
+mmwcli multisensor init camera.json --format camera.rgb8.v1 \
+  --frame-bytes 921600 --max-items 300 -- ffmpeg ... pipe:1
+mmwcli multisensor check camera.json
+mmwcli studio-cli capture CFG OUTDIR --port PORT --multisensor-plan camera.json
+mmwcli debug-cli capture CFG OUTDIR --family xwr18xx ... --multisensor-plan camera.json
+```
+
+The generated plan uses the built-in `sensor-producer fixed-frames` adapter, so ffmpeg,
+GStreamer, and vendor camera programs do not need to implement the control/data protocol.
+`--stream` may be combined with `--multisensor-plan`: stdout then carries the aggregate radar and
+camera stream, while `OUTDIR` remains the authoritative training capture.
+
+Ordinary cameras use `delivery_observed`: mmwcli timestamps a frame only after receiving it and
+does not call that time an exposure timestamp. A producer with a real exposure clock may declare
+`exposure_midpoint` and its clock mapping instead. The aggregate live stream carries a conservative
+radar-start interval so radar and delivery-observed camera items share one host-relative time axis.
+
 ## Output guarantees
 
 - CFG, mode, size, and output checks complete before hardware access.
@@ -121,6 +144,9 @@ REPL is a `studio_cli` utility, not another firmware backend. It accepts only th
 - Finite captures require exact byte coverage. Gaps, overlaps, short data, and extra data fail.
 - Both capture routes stage `OUTDIR.part` and publish a strict capture-session v1 directory as `OUTDIR` without overwrite only after capture and cleanup succeed. It contains `adc.bin`, the exact `radar.cfg`, and `capture.json`; failure retains the partial directory.
 - `--stream` additionally mirrors provisional capture-stream v1 records on binary stdout while diagnostics remain on stderr. The published session directory remains authoritative.
+- `--multisensor-plan` adds bounded external sources to the same transaction. With `--stream`,
+  provisional radar and sensor items become trustworthy only after source outcomes, global COMMIT,
+  and EOF.
 - Low-level DCA commands are diagnostic/control operations only; ADC acquisition is available through `studio-cli capture` and `debug-cli capture`. `ping` is not a capture-readiness gate, and reset occurs only through an explicit command or option.
 - `sensorStop` stops the sensor only; it does not power off the radar or DCA1000.
 

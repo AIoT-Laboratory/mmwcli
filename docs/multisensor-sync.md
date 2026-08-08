@@ -1,7 +1,9 @@
-# Multi-sensor synchronization design
+# Multi-sensor synchronization
 
-Status: design only. No multi-sensor coordinator, camera producer protocol, aggregate stream, or
-mmwcore reader described here is implemented yet. This design does not change
+Status: implemented for finite software-barrier radar-plus-camera capture. mmwcli provides the
+coordinator, transactional directory, fixed index, controlled producer protocol, fixed-frame
+camera adapter, and aggregate live stream. mmwcore provides caller-owned offline and live readers.
+External-trigger and PTP grades remain planned. This contract does not change
 `mmwcli.capture_stream.v1`.
 
 ## Boundaries
@@ -40,7 +42,7 @@ data terminal never substitutes for STOP/CANCEL cleanup.
 
 ## Session and source contracts
 
-The proposed aggregate schemas are `mmwcli.multisensor_session.v1` for the published directory and
+The aggregate schemas are `mmwcli.multisensor_session.v1` for the published directory and
 `mmwcli.multisensor_stream.v1` for provisional delivery. One random session ID binds both. Every
 source has a unique stable `source_id`, a kind such as `radar` or `camera`, a producer name and
 version, a finite item and byte limit, a payload contract, exactly one clock contract, and an
@@ -162,9 +164,12 @@ sample or camera exposure time. Software-triggered radar frame times are derived
 host trigger interval and declared frame period, so their uncertainty cannot be smaller than that
 start interval.
 
-An optional delivery observation is explicitly `delivery_only` and records a host-monotonic
-receive interval; it is usable for backpressure and latency diagnostics only. Matching uses each
-item's mapped physical sample/exposure interval, including duration and uncertainty. For configured
+An ordinary camera may use `delivery_observed`. Its producer sends zero clock fields and mmwcli
+assigns a host-relative nanosecond tick only after the complete ITEM arrives. This is a delivery
+time, never an exposure claim. The aggregate stream's RADAR_START record maps radar tick zero to a
+conservative host interval, so radar and delivery-observed camera items can be paired during live
+inference. A real device exposure clock remains `exposure_midpoint` with an explicit affine map.
+Matching uses each item's mapped interval, including duration and uncertainty. For configured
 causal lag `[lag_min, lag_max]`, item B may match item A only when the possible lag interval
 `[B.start - A.end, B.end - A.start]` intersects that window. Multiple candidates remain ambiguous
 unless an event ID or application policy resolves them; arrival order and nearest delivery time do
@@ -222,20 +227,19 @@ A real-time inference consumer may compute from provisional ITEM records, but it
 provisional. It may publish no derived artifact until it has validated the single global COMMIT and
 following EOF; ABORT, truncation, or missing EOF discards or explicitly quarantines those results.
 
-## Delivery batches
+## User workflow
 
-Implementation is intentionally split into independently testable work:
+`mmwcli multisensor init` creates a single-camera `delivery_observed` plan around a caller-supplied
+fixed-frame command. `mmwcli multisensor check` validates and prints that plan without starting a
+process or hardware. Either radar capture command accepts `--multisensor-plan PLAN`; adding
+`--stream` emits the aggregate stream on binary stdout. The generated adapter works with ffmpeg,
+GStreamer, or a vendor CLI that writes exact fixed-size frames.
 
-A. Freeze the JSON schemas, fixed index codec, limits, and cross-language golden fixtures.
-B. Implement clock validation, wrap arithmetic, affine segments, uncertainty propagation, and
-   synchronization-grade evidence with deterministic vectors.
-C. Implement the coordinator state machine, bounded queues, cancellation, staged directory, and
-   published-evidence COMMIT/EOF transaction using fake sources.
-D. Adapt the existing finite radar capture/session output without changing capture-stream v1.
-E. Add the controlled external producer contract and fake camera producer; vendor camera SDKs stay
-   outside this repository.
-F. Add mmwcore's read-only published-session and caller-owned `BinaryIO` decoders, then run
-   cross-language corruption, backpressure, clock-wrap, and terminal-state tests.
+mmwcore opens published training data with `open_multisensor_capture`, opens the nested radar
+capture through `source.open_radar_capture`, and pairs conservative intervals with `causal_pairs`.
+`open_multisensor_stream` yields provisional live items; radar and delivery-observed camera items
+have mapped host intervals. Derived results remain provisional until COMMIT and EOF, and
+`commit.accepts(item)` excludes failed or omitted optional sources.
 
-No batch may claim hardware synchronization from offline tests. External-trigger and PTP support
-remain experimental until their evidence records can be reproduced.
+Offline tests do not claim hardware synchronization. External-trigger and PTP support remain
+planned until their evidence paths and hardware records are implemented.

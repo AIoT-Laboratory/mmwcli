@@ -179,3 +179,6 @@ final. Closing a data pipe or killing a process does not turn provisional frames
 V1 does not define continuous capture, reconnect, resume, seeking, multiple consumers, fan-out,
 compression, encryption, shared memory, clock synchronization, physical arrival timestamps, or a
 stream-only transaction. It does not add device, process, or transport ownership to mmwcore.
+
+Radar-plus-camera capture uses the separate `mmwcli.multisensor_stream.v1` contract documented in
+[multi-sensor synchronization](multisensor-sync.md); it does not overload this radar-only format.
