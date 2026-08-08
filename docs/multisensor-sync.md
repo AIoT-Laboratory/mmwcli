@@ -56,12 +56,12 @@ Each `index.bin` uses schema `mmwcli.sensor_index.v1`. Its 32-byte header is:
 | 0 | 8 | ASCII `MMWSIDX1` |
 | 8 | 2 | major version, exactly 1 |
 | 10 | 2 | header bytes, exactly 32 |
-| 12 | 2 | entry bytes, exactly 56 |
+| 12 | 2 | entry bytes, exactly 64 |
 | 14 | 2 | flags, zero in v1 |
 | 16 | 8 | item count |
 | 24 | 8 | payload byte count |
 
-Every 56-byte entry is unsigned little-endian:
+Every 64-byte entry is unsigned little-endian:
 
 | Offset | Size | Field |
 | ---: | ---: | --- |
@@ -71,12 +71,17 @@ Every 56-byte entry is unsigned little-endian:
 | 24 | 8 | raw source-clock ticks |
 | 32 | 8 | wrap count |
 | 40 | 8 | sample/exposure duration in ticks; zero means unavailable |
-| 48 | 4 | flags, zero in v1 |
-| 52 | 4 | reserved, zero |
+| 48 | 8 | `sync_event_id`; `MAX_U64` means no associated event |
+| 56 | 4 | flags, zero in v1 |
+| 60 | 4 | reserved, zero |
 
 Indices and payload ranges must be contiguous, ordered, start at zero, remain within declared
 bounds, and exactly cover the payload file. Unknown flags fail. Static source metadata defines what
-the tick denotes, for example radar frame start or camera exposure midpoint.
+the tick denotes, for example radar frame start or camera exposure midpoint. Event IDs are compared
+across sources, never inferred from item indices. A source declares its allowed item cardinality per
+event; validation rejects an absent required event, a missing or unexpected duplicate association,
+and cardinality outside that declaration. Valid event IDs exclude `MAX_U64`, never wrap, and session
+creation aborts rather than overflowing the ID space.
 
 ## Clock model
 
@@ -113,8 +118,10 @@ start interval.
 
 - `software_barrier`: sources are armed behind a coordinator barrier and receive bounded host
   start intervals. It provides alignment with measured uncertainty, not simultaneous sampling.
-- `external_trigger`: required sources bind to the same recorded physical trigger event. Trigger
-  routing and sensor response uncertainty remain explicit.
+- `external_trigger`: required sources bind each triggered item to the same recorded physical event
+  through `sync_event_id`; `MAX_U64` is invalid where an event is required. Required-source event
+  sets and declared per-event cardinalities must agree, without assuming one item per event or
+  matching item indices. Trigger routing and sensor response uncertainty remain explicit.
 - `ptp`: a source clock has recorded PTP domain/grandmaster evidence and a bounded mapping to the
   aggregate clock. Merely using Ethernet or wall-clock time does not qualify.
 
