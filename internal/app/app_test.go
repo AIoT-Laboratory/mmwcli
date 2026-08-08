@@ -25,7 +25,7 @@ func TestHelpContainsOnlyCLIBackends(t *testing.T) {
 	if !strings.HasPrefix(text, "mmwcli dev -") {
 		t.Fatalf("help does not report the development identity:\n%s", text)
 	}
-	for _, expected := range []string{"mmwcli version", "studio-cli", "demo", "repl", "dca", "debug-capture", "native-check", "cross-platform"} {
+	for _, expected := range []string{"mmwcli version", "studio-cli", "repl", "dca", "debug-capture", "native-check", "cross-platform"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("help does not contain %q:\n%s", expected, text)
 		}
@@ -33,7 +33,7 @@ func TestHelpContainsOnlyCLIBackends(t *testing.T) {
 	if !strings.Contains(text, "[--sop2-reset] [options]") {
 		t.Fatalf("top-level debug-capture synopsis omits capture options:\n%s", text)
 	}
-	for _, removed := range []string{"studio lua", "--studio-root", "--legacy-studio", ".NET"} {
+	for _, removed := range []string{"mmwcli demo", "studio lua", "--studio-root", "--legacy-studio", ".NET"} {
 		if strings.Contains(text, removed) {
 			t.Fatalf("help still contains removed backend %q:\n%s", removed, text)
 		}
@@ -51,9 +51,16 @@ func TestVersionReportsDevelopmentIdentity(t *testing.T) {
 }
 
 func TestUnknownCommandIsUsageError(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"studio"}, &stdout, &stderr); code != 2 {
-		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+	for _, command := range []string{"studio", "demo"} {
+		t.Run(command, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := Run([]string{command}, &stdout, &stderr); code != 2 {
+				t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "unknown command: "+command) {
+				t.Fatalf("missing unknown command error: %s", stderr.String())
+			}
+		})
 	}
 }
 
@@ -66,91 +73,6 @@ func TestStudioCLICheckIsOffline(t *testing.T) {
 	if !strings.Contains(stdout.String(), "commands=9") || !strings.Contains(stdout.String(), "frames=1") {
 		t.Fatalf("unexpected check output: %s", stdout.String())
 	}
-}
-
-func TestDemoRadarFamilyCheckIsOffline(t *testing.T) {
-	defaultConfig := writeValidConfig(t)
-	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"demo", "check", defaultConfig}, &stdout, &stderr); code != 0 {
-		t.Fatalf("default xwr68xx exit code = %d, stderr=%s", code, stderr.String())
-	}
-
-	xwr18Config := writeValidConfig(t)
-	contents, err := os.ReadFile(xwr18Config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	contents = []byte(strings.Replace(string(contents), "profileCfg 0 60 ", "profileCfg 0 77 ", 1))
-	if err := os.WriteFile(xwr18Config, contents, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := Run(
-		[]string{"demo", "check", xwr18Config, "--radar-family", "xwr18xx"},
-		&stdout,
-		&stderr,
-	); code != 0 {
-		t.Fatalf("xwr18xx exit code = %d, stderr=%s", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "family=xwr18xx") {
-		t.Fatalf("xwr18xx preflight output = %s", stdout.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := Run(
-		[]string{"demo", "check", xwr18Config, "--radar-family", "xwr64xx"},
-		&stdout,
-		&stderr,
-	); code != 4 {
-		t.Fatalf("wrong-band exit code = %d, stderr=%s", code, stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "outside 57..64 GHz") {
-		t.Fatalf("wrong-band error = %s", stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := Run(
-		[]string{"demo", "check", xwr18Config, "--radar-family", "xwr16xx"},
-		&stdout,
-		&stderr,
-	); code != 4 {
-		t.Fatalf("xwr16xx TX2 exit code = %d, stderr=%s", code, stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "TX0..TX1") {
-		t.Fatalf("xwr16xx TX2 error = %s", stderr.String())
-	}
-}
-
-func TestDemoInvalidRadarFamilyFailsBeforeConfigOutputOrHardware(t *testing.T) {
-	root := t.TempDir()
-	missingConfig := filepath.Join(root, "missing.cfg")
-	missingPort := "__mmwcli_test_missing_port__"
-	output := filepath.Join(root, "capture.bin")
-	tests := [][]string{
-		{"demo", "check", missingConfig, "--radar-family", "XWR18XX"},
-		{"demo", "version", "--radar-family", "XWR18XX", "--port", missingPort},
-		{"demo", "apply", missingConfig, "--radar-family", "XWR18XX", "--port", missingPort},
-		{"demo", "start", "--radar-family", "XWR18XX", "--port", missingPort},
-		{"demo", "stop", "--radar-family", "XWR18XX", "--port", missingPort},
-		{"demo", "capture", missingConfig, output, "--radar-family", "XWR18XX", "--port", missingPort},
-	}
-	for _, arguments := range tests {
-		t.Run(strings.Join(arguments[1:2], " "), func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			if code := Run(arguments, &stdout, &stderr); code != 2 {
-				t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-			}
-			if !strings.Contains(stderr.String(), "unsupported device family") {
-				t.Fatalf("missing family error: %s", stderr.String())
-			}
-		})
-	}
-	assertPathDoesNotExist(t, output)
-	assertPathDoesNotExist(t, output+".part")
 }
 
 func TestStudioCLIRejectsRadarFamilyFlag(t *testing.T) {
@@ -272,13 +194,6 @@ func TestCommandHelpDoesNotRequirePositionalsOrHardware(t *testing.T) {
 		{"studio-cli", "check", "--help"},
 		{"studio-cli", "apply", "--help"},
 		{"studio-cli", "capture", "--help"},
-		{"demo", "--help"},
-		{"demo", "check", "--help"},
-		{"demo", "version", "--help"},
-		{"demo", "apply", "--help"},
-		{"demo", "start", "--help"},
-		{"demo", "stop", "--help"},
-		{"demo", "capture", "--help"},
 		{"dca", "--help"},
 		{"dca", "capture", "--help"},
 		{"firmware", "--help"},
@@ -292,46 +207,17 @@ func TestCommandHelpDoesNotRequirePositionalsOrHardware(t *testing.T) {
 			if code := Run(arguments, &stdout, &stderr); code != 0 {
 				t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 			}
-			if arguments[0] == "demo" && !strings.Contains(stdout.String()+stderr.String(), "radar-family") {
-				t.Fatalf("demo help does not contain radar-family: stdout=%s stderr=%s", stdout.String(), stderr.String())
-			}
 		})
 	}
 }
 
-func TestCaptureNoReconfigureFlagIsStudioOnly(t *testing.T) {
-	for _, test := range []struct {
-		command string
-		want    bool
-	}{
-		{command: "studio-cli", want: true},
-		{command: "demo", want: false},
-	} {
-		t.Run(test.command, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			if code := Run([]string{test.command, "capture", "--help"}, &stdout, &stderr); code != 0 {
-				t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-			}
-			if got := strings.Contains(stderr.String(), "no-reconfig"); got != test.want {
-				t.Fatalf("no-reconfig in help = %t, want %t:\n%s", got, test.want, stderr.String())
-			}
-		})
-	}
-
-	config := writeValidConfig(t)
-	output := filepath.Join(t.TempDir(), "capture.bin")
+func TestStudioCaptureHelpContainsNoReconfigureFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	arguments := []string{"demo", "capture", config, output, "--no-reconfig", "--port", "COM3"}
-	if code := Run(arguments, &stdout, &stderr); code != 2 {
+	if code := Run([]string{"studio-cli", "capture", "--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "no-reconfig") {
-		t.Fatalf("missing rejected flag in error: %s", stderr.String())
-	}
-	for _, path := range []string{output, output + ".part"} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("offline flag failure created %s: %v", path, err)
-		}
+		t.Fatalf("studio-cli capture help omits no-reconfig: %s", stderr.String())
 	}
 }
 
@@ -342,7 +228,6 @@ func TestCaptureSessionDirectoryFlagScope(t *testing.T) {
 	}{
 		{arguments: []string{"studio-cli", "capture", "--help"}, want: true},
 		{arguments: []string{"debug-capture", "capture", "--help"}, want: true},
-		{arguments: []string{"demo", "capture", "--help"}, want: false},
 		{arguments: []string{"dca", "capture", "--help"}, want: false},
 		{arguments: []string{"studio-cli", "check", "--help"}, want: false},
 	} {
@@ -358,22 +243,13 @@ func TestCaptureSessionDirectoryFlagScope(t *testing.T) {
 		})
 	}
 
-	for _, command := range []string{"demo", "dca"} {
-		t.Run(command+" rejects flag", func(t *testing.T) {
-			output := filepath.Join(t.TempDir(), "capture")
-			arguments := []string{command, "capture"}
-			if command == "demo" {
-				arguments = append(arguments, "missing.cfg")
-			}
-			arguments = append(arguments, output, "--session-dir")
-			var stdout, stderr bytes.Buffer
-			if code := Run(arguments, &stdout, &stderr); code != 2 {
-				t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-			}
-			assertPathDoesNotExist(t, output)
-			assertPathDoesNotExist(t, output+".part")
-		})
+	output := filepath.Join(t.TempDir(), "capture")
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"dca", "capture", output, "--session-dir"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
+	assertPathDoesNotExist(t, output)
+	assertPathDoesNotExist(t, output+".part")
 }
 
 func TestStudioCaptureSessionContractPrecedesOutput(t *testing.T) {
@@ -608,7 +484,6 @@ func TestActionSpecificFlagsFailBeforeHardware(t *testing.T) {
 	for _, arguments := range [][]string{
 		{"dca", "start", "--reset"},
 		{"studio-cli", "stop", "--no-reconfig", "--port", "COM3"},
-		{"demo", "start", "--no-reconfig", "--port", "COM3"},
 	} {
 		t.Run(strings.Join(arguments, " "), func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -741,7 +616,6 @@ func TestREPLCancellationClassification(t *testing.T) {
 
 func TestOnlyCaptureInvocationsClaimCancellationCleanup(t *testing.T) {
 	for _, arguments := range [][]string{
-		{"demo", "capture"},
 		{"studio-cli", "CAPTURE"},
 		{"dca", "capture"},
 	} {
@@ -751,7 +625,7 @@ func TestOnlyCaptureInvocationsClaimCancellationCleanup(t *testing.T) {
 	}
 	for _, arguments := range [][]string{
 		{"studio-cli", "start"},
-		{"demo", "apply"},
+		{"demo", "capture"},
 		{"dca", "stop"},
 		{"dca", "version"},
 		{"firmware", "verify"},

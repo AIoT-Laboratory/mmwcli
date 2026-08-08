@@ -43,7 +43,7 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 		err = runDebugCapture(arguments[1:], stdout, stderr)
 	case "repl":
 		err = runREPL(arguments[1:], os.Stdin, stdout, stderr, openStudioREPLClient)
-	case "demo", "studio-cli":
+	case "studio-cli":
 		err = runRadar(arguments[0], arguments[1:], stdout, stderr)
 	case "dca":
 		err = runDCA(arguments[1:], stdout, stderr)
@@ -82,7 +82,7 @@ func captureInvocationHasCleanup(arguments []string) bool {
 		return false
 	}
 	switch strings.ToLower(arguments[0]) {
-	case "demo", "studio-cli", "dca", "debug-capture":
+	case "studio-cli", "dca", "debug-capture":
 		return true
 	default:
 		return false
@@ -264,7 +264,6 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "  mmwcli debug-capture native-check")
 	fmt.Fprintln(writer, "  mmwcli debug-capture capture CFG OUT --enhanced-port PORT --bss-fw FILE --mss-fw FILE (--d2xx-serial BASE | --d2xx-description BASE) [--sop2-reset] [options]")
 	fmt.Fprintln(writer, "  mmwcli repl --port PORT [options]")
-	fmt.Fprintln(writer, "  mmwcli demo check|version|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli studio-cli check|version|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli dca ping|version|configure|start|stop|reset-fpga|reset-radar|capture ...")
 	fmt.Fprintln(writer)
@@ -273,15 +272,11 @@ func printHelp(writer io.Writer) {
 
 func printRadarHelp(writer io.Writer, command string) {
 	command = strings.ToLower(command)
-	familyOption := ""
-	if command == "demo" {
-		familyOption = " [--radar-family FAMILY]"
-	}
-	fmt.Fprintf(writer, "usage: mmwcli %s check CFG%s\n", command, familyOption)
-	fmt.Fprintf(writer, "       mmwcli %s version --port PORT%s [options]\n", command, familyOption)
-	fmt.Fprintf(writer, "       mmwcli %s apply CFG --port PORT%s [options]\n", command, familyOption)
-	fmt.Fprintf(writer, "       mmwcli %s start|stop --port PORT%s [options]\n", command, familyOption)
-	fmt.Fprintf(writer, "       mmwcli %s capture CFG OUT --port PORT%s [options]\n", command, familyOption)
+	fmt.Fprintf(writer, "usage: mmwcli %s check CFG\n", command)
+	fmt.Fprintf(writer, "       mmwcli %s version --port PORT [options]\n", command)
+	fmt.Fprintf(writer, "       mmwcli %s apply CFG --port PORT [options]\n", command)
+	fmt.Fprintf(writer, "       mmwcli %s start|stop --port PORT [options]\n", command)
+	fmt.Fprintf(writer, "       mmwcli %s capture CFG OUT --port PORT [options]\n", command)
 }
 
 func printDCAHelp(writer io.Writer) {

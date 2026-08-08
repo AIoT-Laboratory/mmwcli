@@ -2,7 +2,6 @@ package app
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -17,13 +16,8 @@ import (
 	"mmwcli/internal/session"
 )
 
-const radarFamilyHelp = "SDK demo radar family (xwr16xx, xwr18xx, xwr64xx, or xwr68xx)"
-
 func runRadar(command string, arguments []string, stdout, stderr io.Writer) error {
-	dialect := radar.SDKDemo
-	if strings.EqualFold(command, "studio-cli") {
-		dialect = radar.StudioCLI
-	}
+	dialect := radar.StudioCLI
 	if len(arguments) == 0 {
 		return usageError{message: command + " requires check, version, apply, start, stop, or capture"}
 	}
@@ -46,7 +40,6 @@ func runRadar(command string, arguments []string, stdout, stderr io.Writer) erro
 
 func checkRadarConfig(dialect radar.Dialect, arguments []string, stdout, stderr io.Writer) error {
 	flags := newCommandFlagSet(dialect.Name()+" check", stderr, "mmwcli "+dialect.Name()+" check CFG")
-	radarFamily := addRadarFamilyFlag(flags, dialect)
 	if len(arguments) != 0 && isHelp(arguments[0]) {
 		return parseCommandFlags(flags, arguments)
 	}
@@ -58,11 +51,6 @@ func checkRadarConfig(dialect radar.Dialect, arguments []string, stdout, stderr 
 	}
 	if flags.NArg() != 0 {
 		return usageError{message: "unexpected check arguments: " + strings.Join(flags.Args(), " ")}
-	}
-	var err error
-	dialect, err = resolveRadarDialect(dialect, radarFamily)
-	if err != nil {
-		return err
 	}
 	plan, err := loadCapturePlan(dialect, arguments[0], radar.FullConfiguration)
 	if err != nil {
@@ -83,12 +71,11 @@ func controlRadar(dialect radar.Dialect, action string, arguments []string, stdo
 		usage = "mmwcli " + dialect.Name() + " apply CFG [options]"
 	}
 	flags := newCommandFlagSet(dialect.Name()+" "+action, stderr, usage)
-	radarFamily := addRadarFamilyFlag(flags, dialect)
 	portName := flags.String("port", "", "serial port (COM3 or /dev/ttyACM0)")
 	baud := flags.Int("baud", dialect.DefaultBaud(), "serial baud")
 	timeoutMS := flags.Int("serial-timeout-ms", 10000, "serial command timeout")
 	noReconfigure := false
-	if action == "start" && dialect == radar.StudioCLI {
+	if action == "start" {
 		flags.BoolVar(&noReconfigure, "no-reconfig", false, "start using the existing radar configuration")
 	}
 	if action == "apply" {
@@ -106,10 +93,6 @@ func controlRadar(dialect radar.Dialect, action string, arguments []string, stdo
 	}
 	if flags.NArg() != 0 {
 		return usageError{message: "unexpected " + action + " arguments: " + strings.Join(flags.Args(), " ")}
-	}
-	dialect, err = resolveRadarDialect(dialect, radarFamily)
-	if err != nil {
-		return err
 	}
 	if *portName == "" {
 		return usageError{message: "--port is required; mmwcli never scans serial ports"}
@@ -185,16 +168,13 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 		stderr,
 		"mmwcli "+dialect.Name()+" capture CFG OUT [options]",
 	)
-	radarFamily := addRadarFamilyFlag(flags, dialect)
 	portName := flags.String("port", "", "serial port (COM3 or /dev/ttyACM0)")
 	baud := flags.Int("baud", dialect.DefaultBaud(), "serial baud")
 	serialTimeoutMS := flags.Int("serial-timeout-ms", 10000, "serial command timeout")
 	noReconfigure := false
 	sessionDirectory := false
-	if dialect == radar.StudioCLI {
-		flags.BoolVar(&noReconfigure, "no-reconfig", false, "reuse the existing radar configuration")
-		flags.BoolVar(&sessionDirectory, "session-dir", false, "publish ADC data and v1 metadata as an output directory")
-	}
+	flags.BoolVar(&noReconfigure, "no-reconfig", false, "reuse the existing radar configuration")
+	flags.BoolVar(&sessionDirectory, "session-dir", false, "publish ADC data and v1 metadata as an output directory")
 	dcaValues := addDCAFlags(flags, "dca-timeout-ms", dcaConfigurationFlags|dcaReceiverFlags)
 	if len(arguments) != 0 && isHelp(arguments[0]) {
 		return parseCommandFlags(flags, arguments)
@@ -208,11 +188,6 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	}
 	if flags.NArg() != 0 {
 		return usageError{message: "unexpected capture arguments: " + strings.Join(flags.Args(), " ")}
-	}
-	var err error
-	dialect, err = resolveRadarDialect(dialect, radarFamily)
-	if err != nil {
-		return err
 	}
 	if *portName == "" {
 		return usageError{message: "--port is required; mmwcli never scans serial ports"}
@@ -352,24 +327,6 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	}
 	fmt.Fprintln(stdout, formatCaptureStats(stats))
 	return nil
-}
-
-func addRadarFamilyFlag(flags *flag.FlagSet, dialect radar.Dialect) *string {
-	if dialect != radar.SDKDemo {
-		return nil
-	}
-	return flags.String("radar-family", dialect.DeviceFamily().Name(), radarFamilyHelp)
-}
-
-func resolveRadarDialect(dialect radar.Dialect, family *string) (radar.Dialect, error) {
-	if family == nil {
-		return dialect, nil
-	}
-	selected, err := radar.SDKDemoForFamily(*family)
-	if err != nil {
-		return radar.Dialect{}, usageError{message: err.Error()}
-	}
-	return selected, nil
 }
 
 func loadCapturePlan(dialect radar.Dialect, path string, mode radar.ConfigurationMode) (radar.CapturePlan, error) {
