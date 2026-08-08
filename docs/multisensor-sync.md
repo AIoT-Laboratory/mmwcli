@@ -16,6 +16,28 @@ adapter, or infer a device clock.
 caller-owned `BinaryIO`, but it does not launch producers, open devices or sockets, close the
 caller's stream, or resume an incomplete session.
 
+### Migration and minimum producer interface
+
+The old OpenMMW arrangement built around `mmwcore.session`, UDP handoff, and processes watching a
+shared capture directory is a migration source, not a compatibility target. Device and process
+lifecycle moves to `mmwcli`; completed-directory and caller-owned-stream consumption moves to
+`mmwcore.io`. Producers never coordinate through partially written shared files, and this design
+does not restore a live session API in mmwcore.
+
+`mmwcli` is the only global acquisition coordinator and capture-session publisher. Each external
+sensor producer has separate bounded control and data handles. Its minimum control sequence is
+`READY -> ARM -> START -> STOP` for success or `READY/ARM/START -> CANCEL` on failure. Every control
+message carries the session and source IDs plus a strictly increasing per-source sequence; the
+producer must return the matching ACK before the coordinator sends the next step. READY confirms
+the contract, ARM opens the finite device/buffers without sampling, START releases acquisition,
+and STOP or CANCEL performs bounded cleanup. Every step has a coordinator-owned deadline; a late,
+missing, duplicate, or mismatched ACK cancels the global acquisition.
+
+The data handle independently emits exactly `SESSION -> ITEM* -> END -> EOF`. SESSION fixes the
+source, limits, clock, payload, and metadata contract before ITEM; ITEM is provisional; END binds
+the finite result; EOF proves closure. Control ACKs never substitute for data END+EOF, and a valid
+data terminal never substitutes for STOP/CANCEL cleanup.
+
 ## Session and source contracts
 
 The proposed aggregate schemas are `mmwcli.multisensor_session.v1` for the published directory and
@@ -47,6 +69,12 @@ and sparse payloads are rejected. `session.json` records every required leaf's s
 the source outcomes, clock mappings, synchronization grade, and the aggregate counts. A source may
 declare a different fixed payload filename, but it cannot add undeclared leaves. Board geometry and
 camera calibration are explicit metadata, never inferred from a radar family or image dimensions.
+
+Application-specific metadata uses one `application_metadata` JSON object with namespaced
+top-level keys (for example `org.openmmw.training`), never flat additions to protocol objects. Its
+exact encoded bytes participate in the containing record digest, the source END lineage, the
+published `session.json` digest, and therefore the global COMMIT. A digest proves integrity and
+lineage, not identity or authenticity; this local producer contract adds no authentication layer.
 
 ### Fixed little-endian index
 
@@ -134,6 +162,14 @@ sample or camera exposure time. Software-triggered radar frame times are derived
 host trigger interval and declared frame period, so their uncertainty cannot be smaller than that
 start interval.
 
+An optional delivery observation is explicitly `delivery_only` and records a host-monotonic
+receive interval; it is usable for backpressure and latency diagnostics only. Matching uses each
+item's mapped physical sample/exposure interval, including duration and uncertainty. For configured
+causal lag `[lag_min, lag_max]`, item B may match item A only when the possible lag interval
+`[B.start - A.end, B.end - A.start]` intersects that window. Multiple candidates remain ambiguous
+unless an event ID or application policy resolves them; arrival order and nearest delivery time do
+not.
+
 ## Synchronization grades
 
 - `software_barrier`: sources are armed behind a coordinator barrier and receive bounded host
@@ -179,6 +215,12 @@ has a configured hard bound. The coordinator writes accepted bytes to the staged
 making an item provisionally visible. It never drops, fills, duplicates, silently spills, or grows
 an unbounded queue. Backpressure or a disconnected consumer cancels every source and enters bounded
 cleanup.
+
+Offline training joins use the fixed key `(session_id, source_id, item_index)` and append
+`sync_event_id` when event identity is required; filenames, row order, and timestamps are not keys.
+A real-time inference consumer may compute from provisional ITEM records, but its results remain
+provisional. It may publish no derived artifact until it has validated the single global COMMIT and
+following EOF; ABORT, truncation, or missing EOF discards or explicitly quarantines those results.
 
 ## Delivery batches
 
