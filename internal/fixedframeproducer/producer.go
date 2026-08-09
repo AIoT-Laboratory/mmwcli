@@ -23,9 +23,9 @@ import (
 
 const (
 	ProducerName        = "mmwcli-fixed-frames"
-	ProducerVersion     = "1"
+	ProducerVersion     = "2"
 	JPEGProducerName    = "mmwcli-jpeg-stream"
-	JPEGProducerVersion = "1"
+	JPEGProducerVersion = "2"
 	JPEGFormat          = "image.jpeg.v1"
 	MaximumFrameBytes   = uint64(sensorproducer.MaxPayloadBytes)
 )

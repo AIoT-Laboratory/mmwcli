@@ -516,6 +516,16 @@ func nextRecord(
 	return record
 }
 
+func TestProducerVersionsIdentifyStartBoundaryContract(t *testing.T) {
+	if ProducerVersion != "2" || JPEGProducerVersion != "2" {
+		t.Fatalf(
+			"producer versions = fixed %q, JPEG %q; want START-boundary contract version 2",
+			ProducerVersion,
+			JPEGProducerVersion,
+		)
+	}
+}
+
 func decodeMetadata[T any](t *testing.T, encoded []byte) T {
 	t.Helper()
 	var result T

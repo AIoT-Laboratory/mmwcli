@@ -31,9 +31,12 @@ sensor producer has separate bounded control and data handles. Its minimum contr
 `READY -> ARM -> START -> STOP` for success or `READY/ARM/START -> CANCEL` on failure. Every control
 message carries the session and source IDs plus a strictly increasing per-source sequence; the
 producer must return the matching ACK before the coordinator sends the next step. READY confirms
-the contract, ARM opens the finite device/buffers without sampling, START releases acquisition,
-and STOP or CANCEL performs bounded cleanup. Every step has a coordinator-owned deadline; a late,
-missing, duplicate, or mismatched ACK cancels the global acquisition.
+the contract. ARM may start the finite child/device and continuously parse and discard complete
+frames, but it must not publish an ITEM before START. START establishes the publication boundary,
+and STOP or CANCEL performs bounded cleanup. The built-in fixed-frame and JPEG producers identify
+this START-boundary contract as producer version `2`; consumers may reject version `1` captures.
+Every step has a coordinator-owned deadline; a late, missing, duplicate, or mismatched ACK cancels
+the global acquisition.
 
 The data handle independently emits exactly `SESSION -> ITEM* -> END -> EOF`. SESSION fixes the
 source, limits, clock, payload, and metadata contract before ITEM; ITEM is provisional; END binds

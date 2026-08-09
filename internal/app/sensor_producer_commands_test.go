@@ -280,7 +280,7 @@ func writeAppProducerPlan(t *testing.T) (string, multisensorcapture.Plan) {
 			"--source", appProducerSourceID, "--frame-bytes", "4", "--", "camera-command",
 		},
 		QueueSize: 4,
-		Producer:  multisensor.Producer{Name: "mmwcli-fixed-frames", Version: "1"},
+		Producer:  multisensor.Producer{Name: "mmwcli-fixed-frames", Version: "2"},
 		Limits: multisensor.SourceLimits{
 			MaxItems: 8, MaxItemBytes: 4, MaxPayloadBytes: 32,
 		},
