@@ -230,10 +230,12 @@ following EOF; ABORT, truncation, or missing EOF discards or explicitly quaranti
 ## User workflow
 
 `mmwcli multisensor init` creates a single-camera `delivery_observed` plan around a caller-supplied
-fixed-frame command. `mmwcli multisensor check` validates and prints that plan without starting a
-process or hardware. Either radar capture command accepts `--multisensor-plan PLAN`; adding
-`--stream` emits the aggregate stream on binary stdout. The generated adapter works with ffmpeg,
-GStreamer, or a vendor CLI that writes exact fixed-size frames.
+command. Non-JPEG formats require `--frame-bytes`; exact `image.jpeg.v1` instead requires
+`--max-item-bytes` and selects the marker-aware MJPEG adapter. `mmwcli multisensor check` validates
+and prints either plan without starting a process or hardware. Either radar capture command accepts
+`--multisensor-plan PLAN`; adding `--stream` emits the aggregate stream on binary stdout. The
+generated adapters work with ffmpeg, GStreamer, or a vendor CLI that writes exact-size raw frames or
+concatenated complete JPEG images.
 
 mmwcore opens published training data with `open_multisensor_capture`, opens the nested radar
 capture through `source.open_radar_capture`, and pairs conservative intervals with `causal_pairs`.

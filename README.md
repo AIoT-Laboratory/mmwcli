@@ -68,6 +68,7 @@ The repository and release assets do not distribute FTDI or TI assets.
 mmwcli doctor
 mmwcli firmware verify PATH/mmwave_Studio_cli_xwr68xx.bin
 mmwcli studio-cli check hardware/studio-cli-xwr6843-raw.cfg
+mmwcli studio-cli check hardware/studio-cli-iwr6843-actions-3tx.cfg
 mmwcli debug-cli check --family xwr16xx --bss-fw PATH/xwr16xx_radarss.bin --mss-fw PATH/xwr16xx_masterss.bin
 mmwcli debug-cli check --family xwr18xx --bss-fw PATH/xwr18xx_radarss.bin --mss-fw PATH/xwr18xx_masterss.bin
 mmwcli debug-cli check --family xwr68xx --bss-fw PATH/xwr68xx_radarss.bin --mss-fw PATH/xwr68xx_masterss.bin
@@ -84,6 +85,12 @@ Flash `mmwave_Studio_cli_xwr68xx.bin`, boot in functional/application mode, and 
 
 ```text
 mmwcli studio-cli capture hardware/studio-cli-xwr6843-raw.cfg capture-session --port PORT
+```
+
+For OpenMMW's maintained three-TX RT/RPC pipeline, use the separately named matching profile:
+
+```text
+mmwcli studio-cli capture hardware/studio-cli-iwr6843-actions-3tx.cfg capture-session --port PORT
 ```
 
 Every `studio-cli capture` performs full preflight and applies the complete configuration; capture does not reuse a prior radar configuration.
@@ -135,19 +142,22 @@ REPL is a `studio_cli` utility, not another firmware backend. It accepts only th
 
 ### Synchronized radar and camera capture
 
-Generate a plan for any camera command that writes fixed-size raw frames, validate it without
-opening hardware, then pass it to either radar route:
+Generate a plan for a camera command, validate it without opening hardware, then pass it to either
+radar route. This JPEG example is directly consumable by OpenMMW's MediaPipe annotation workflow:
 
 ```text
-mmwcli multisensor init camera.json --format camera.rgb8.v1 \
-  --frame-bytes 921600 --max-items 300 -- ffmpeg ... pipe:1
+mmwcli multisensor init camera.json --format image.jpeg.v1 \
+  --max-item-bytes 2097152 --max-items 2100 -- \
+  ffmpeg ... -c:v mjpeg -f image2pipe pipe:1
 mmwcli multisensor check camera.json
 mmwcli studio-cli capture CFG OUTDIR --port PORT --multisensor-plan camera.json
 mmwcli debug-cli capture CFG OUTDIR --family xwr18xx ... --multisensor-plan camera.json
 ```
 
-The generated plan uses the built-in `sensor-producer fixed-frames` adapter, so ffmpeg,
-GStreamer, and vendor camera programs do not need to implement the control/data protocol.
+`image.jpeg.v1` selects the built-in `sensor-producer jpeg-stream` adapter, which follows JPEG
+markers and emits one complete variable-size image per item. Other explicit formats use
+`--frame-bytes` and the built-in `fixed-frames` adapter. ffmpeg, GStreamer, and vendor camera
+programs therefore do not need to implement the control/data protocol.
 `--stream` may be combined with `--multisensor-plan`: stdout then carries the aggregate radar and
 camera stream, while `OUTDIR` remains the authoritative training capture.
 

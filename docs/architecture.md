@@ -147,11 +147,12 @@ validate radar CFG and multi-sensor plan
   -> emit global COMMIT + EOF, or ABORT + EOF
 ```
 
-`mmwcli multisensor init` creates the common fixed-frame camera plan, and `multisensor check`
-validates any plan without opening hardware. The built-in fixed-frame producer can wrap ffmpeg,
-GStreamer, or a vendor program that writes exact-size frames; camera SDK ownership stays outside
-mmwcli. `delivery_observed` records when a complete camera frame reaches mmwcli and never labels it
-as exposure time. RADAR_START supplies a conservative radar tick-zero interval on the same
+`mmwcli multisensor init` creates either a fixed-frame camera plan or an `image.jpeg.v1` plan, and
+`multisensor check` validates either without opening hardware. The built-in producers wrap an
+exact-size byte stream or an MJPEG `image2pipe` stream; the latter emits one complete JPEG per item
+for direct offline annotation. Camera SDK and codec-process ownership stay outside mmwcli.
+`delivery_observed` records when a complete camera frame reaches mmwcli and never labels it as
+exposure time. RADAR_START supplies a conservative radar tick-zero interval on the same
 host-relative axis. External-trigger and PTP evidence grades remain future extensions.
 
 ## Transactional output
