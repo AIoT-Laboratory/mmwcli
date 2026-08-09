@@ -15,16 +15,20 @@ func runSensorProducer(
 	stdout, stderr io.Writer,
 ) error {
 	if len(arguments) == 0 {
-		return usageError{message: "sensor-producer requires fixed-frames"}
+		return usageError{message: "sensor-producer requires fixed-frames or jpeg-stream"}
 	}
 	if isHelp(arguments[0]) {
 		printSensorProducerHelp(stdout)
 		return nil
 	}
-	if !strings.EqualFold(arguments[0], "fixed-frames") {
+	switch strings.ToLower(arguments[0]) {
+	case "fixed-frames":
+		return runFixedFramesProducer(arguments[1:], stdin, stdout, stderr)
+	case "jpeg-stream":
+		return runJPEGStreamProducer(arguments[1:], stdin, stdout, stderr)
+	default:
 		return usageError{message: "unknown sensor-producer command: " + arguments[0]}
 	}
-	return runFixedFramesProducer(arguments[1:], stdin, stdout, stderr)
 }
 
 func runFixedFramesProducer(
@@ -86,6 +90,54 @@ func runFixedFramesProducer(
 	)
 }
 
+func runJPEGStreamProducer(
+	arguments []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) error {
+	flags := newCommandFlagSet(
+		"sensor-producer jpeg-stream",
+		stderr,
+		"mmwcli sensor-producer jpeg-stream --plan PLAN --source SOURCE -- CAMERA_COMMAND [ARG...]",
+	)
+	planPath := flags.String("plan", "", "strict mmwcli.multisensor_plan.v1 JSON file")
+	sourceID := flags.String("source", "", "exact source_id from PLAN")
+
+	separator := commandSeparator(arguments)
+	flagArguments := arguments
+	var cameraArgv []string
+	if separator >= 0 {
+		flagArguments = arguments[:separator]
+		cameraArgv = arguments[separator+1:]
+	}
+	if err := parseCommandFlags(flags, flagArguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return usageError{
+			message: "unexpected jpeg-stream arguments before --: " + strings.Join(flags.Args(), " "),
+		}
+	}
+	if separator < 0 || len(cameraArgv) == 0 {
+		return usageError{message: "jpeg-stream requires -- CAMERA_COMMAND [ARG...]"}
+	}
+	if *planPath == "" || *sourceID == "" {
+		return usageError{message: "jpeg-stream requires --plan PLAN and --source SOURCE"}
+	}
+
+	plan, err := multisensorcapture.LoadPlan(*planPath)
+	if err != nil {
+		return err
+	}
+	source, err := exactProducerSource(plan, *sourceID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := hardwareSignalContext()
+	defer cancel()
+	return fixedframeproducer.RunJPEG(ctx, source, cameraArgv, stdin, stdout, stderr)
+}
+
 func exactProducerSource(
 	plan multisensorcapture.Plan,
 	sourceID string,
@@ -114,5 +166,9 @@ func printSensorProducerHelp(writer io.Writer) {
 	fmt.Fprintln(
 		writer,
 		"usage: mmwcli sensor-producer fixed-frames --plan PLAN --source SOURCE --frame-bytes N -- CAMERA_COMMAND [ARG...]",
+	)
+	fmt.Fprintln(
+		writer,
+		"       mmwcli sensor-producer jpeg-stream --plan PLAN --source SOURCE -- CAMERA_COMMAND [ARG...]",
 	)
 }

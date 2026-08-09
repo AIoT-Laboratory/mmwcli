@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"io"
 	"os"
 	"slices"
@@ -71,6 +74,60 @@ func TestRunStreamsTwoFixedFramesAndStopsCleanly(t *testing.T) {
 	}
 	if !strings.Contains(harness.stderr.String(), "fixed-frame camera helper") {
 		t.Fatalf("child stderr = %q", harness.stderr.String())
+	}
+}
+
+func TestRunJPEGStreamsTwoCompleteImagesAndStopsCleanly(t *testing.T) {
+	harness := newJPEGProducerHarness(t, "jpeg-two")
+	harness.start(t)
+	nextRecord(t, harness, sensorproducer.FrameSession)
+	payloads := [][]byte{testJPEGFrame(0x20), testJPEGFrame(0xe0)}
+	for index, wantPayload := range payloads {
+		record := nextRecord(t, harness, sensorproducer.FrameItem)
+		item := decodeMetadata[multisensorcapture.ProducerItemMetadata](t, record.Metadata)
+		if item.ItemIndex != uint64(index) || !slices.Equal(record.Payload, wantPayload) {
+			t.Fatalf("ITEM %d = %+v payload=%x", index, item, record.Payload)
+		}
+	}
+	if err := harness.client.Stop(harness.ctx); err != nil {
+		t.Fatal(err)
+	}
+	end := decodeMetadata[multisensorcapture.ProducerEndMetadata](
+		t,
+		nextRecord(t, harness, sensorproducer.FrameEnd).Metadata,
+	)
+	joined := append(append([]byte(nil), payloads[0]...), payloads[1]...)
+	digest := sha256.Sum256(joined)
+	if end.ItemCount != 2 || end.PayloadBytes != uint64(len(joined)) ||
+		end.PayloadSHA256 != hex.EncodeToString(digest[:]) {
+		t.Fatalf("END metadata = %+v", end)
+	}
+	nextRecord(t, harness, sensorproducer.FrameEOF)
+	if err := harness.client.Wait(harness.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.wait(t); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunJPEGRejectsNonJPEGChildOutput(t *testing.T) {
+	harness := newJPEGProducerHarness(t, "jpeg-invalid")
+	harness.start(t)
+	nextRecord(t, harness, sensorproducer.FrameSession)
+	failure := decodeMetadata[sensorproducer.ErrorMetadata](
+		t,
+		nextRecord(t, harness, sensorproducer.FrameError).Metadata,
+	)
+	if !strings.Contains(failure.Message, "SOI marker") {
+		t.Fatalf("ERROR message = %q", failure.Message)
+	}
+	nextRecord(t, harness, sensorproducer.FrameEOF)
+	if err := harness.client.Wait(harness.ctx); err == nil {
+		t.Fatal("client Wait unexpectedly succeeded")
+	}
+	if err := harness.wait(t); err == nil || !strings.Contains(err.Error(), "SOI marker") {
+		t.Fatalf("RunJPEG error = %v", err)
 	}
 }
 
@@ -159,6 +216,13 @@ func TestFixedFrameCameraHelper(t *testing.T) {
 		os.Exit(3)
 	case "block":
 		time.Sleep(time.Hour)
+	case "jpeg-two":
+		writeHelperBytes(testJPEGFrame(0x20))
+		writeHelperBytes(testJPEGFrame(0xe0))
+		time.Sleep(time.Hour)
+	case "jpeg-invalid":
+		writeHelperBytes([]byte("not-a-jpeg"))
+		time.Sleep(time.Hour)
 	default:
 		_, _ = fmt.Fprintln(os.Stderr, "unknown helper mode", mode)
 		os.Exit(2)
@@ -187,6 +251,46 @@ func newProducerHarness(t *testing.T, mode string) *producerHarness {
 		err := Run(
 			ctx, harness.plan, uint64(len(testFrame0)), helperCommand(mode),
 			producerInput, producerOutput, &harness.stderr,
+		)
+		_ = producerInput.Close()
+		_ = producerOutput.Close()
+		harness.done <- err
+	}()
+	client, err := sensorproducer.NewClient(
+		controlOutput,
+		recordInput,
+		testSessionID,
+		testSourceID,
+		sensorproducer.ClientOptions{},
+	)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	harness.client = client
+	t.Cleanup(func() {
+		cancel()
+		_ = client.Close()
+	})
+	return harness
+}
+
+func newJPEGProducerHarness(t *testing.T, mode string) *producerHarness {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	producerInput, controlOutput := io.Pipe()
+	recordInput, producerOutput := io.Pipe()
+	harness := &producerHarness{
+		ctx: ctx, cancel: cancel, plan: validJPEGSourcePlan(), done: make(chan error, 1),
+	}
+	go func() {
+		err := RunJPEG(
+			ctx,
+			harness.plan,
+			helperCommand(mode),
+			producerInput,
+			producerOutput,
+			&harness.stderr,
 		)
 		_ = producerInput.Close()
 		_ = producerOutput.Close()
@@ -274,6 +378,31 @@ func validSourcePlan() multisensorcapture.SourcePlan {
 		SyncEventSemantics:  multisensorcapture.SyncEventSemanticsNone,
 		ApplicationMetadata: multisensor.ApplicationMetadata{},
 	}
+}
+
+func validJPEGSourcePlan() multisensorcapture.SourcePlan {
+	plan := validSourcePlan()
+	plan.Argv = []string{"mmwcli", "sensor-producer", "jpeg-stream"}
+	plan.Producer = multisensor.Producer{Name: JPEGProducerName, Version: JPEGProducerVersion}
+	plan.Limits = multisensor.SourceLimits{
+		MaxItems: 8, MaxItemBytes: 1 << 20, MaxPayloadBytes: 8 << 20,
+	}
+	plan.Payload = multisensor.PayloadContract{Filename: "frames.jpgs", Format: JPEGFormat}
+	return plan
+}
+
+func testJPEGFrame(level uint8) []byte {
+	imageData := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	for y := range 2 {
+		for x := range 2 {
+			imageData.SetRGBA(x, y, color.RGBA{R: level, G: level, B: level, A: 0xff})
+		}
+	}
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, imageData, &jpeg.Options{Quality: 80}); err != nil {
+		panic(err)
+	}
+	return encoded.Bytes()
 }
 
 func helperCommand(mode string) []string {

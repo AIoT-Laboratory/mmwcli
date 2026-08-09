@@ -22,14 +22,18 @@ import (
 )
 
 const (
-	ProducerName      = "mmwcli-fixed-frames"
-	ProducerVersion   = "1"
-	MaximumFrameBytes = uint64(sensorproducer.MaxPayloadBytes)
+	ProducerName        = "mmwcli-fixed-frames"
+	ProducerVersion     = "1"
+	JPEGProducerName    = "mmwcli-jpeg-stream"
+	JPEGProducerVersion = "1"
+	JPEGFormat          = "image.jpeg.v1"
+	MaximumFrameBytes   = uint64(sensorproducer.MaxPayloadBytes)
 )
 
 type producer struct {
 	plan       multisensorcapture.SourcePlan
 	frameBytes int
+	jpeg       bool
 	childArgv  []string
 	stderr     io.Writer
 	controls   *sensorproducer.ControlDecoder
@@ -60,10 +64,36 @@ func Run(
 	stdout io.Writer,
 	stderr io.Writer,
 ) error {
+	return run(ctx, plan, frameBytes, false, cameraArgv, stdin, stdout, stderr)
+}
+
+// RunJPEG serves one sensor-producer connection whose child writes a
+// concatenated stream of complete JPEG images.
+func RunJPEG(
+	ctx context.Context,
+	plan multisensorcapture.SourcePlan,
+	cameraArgv []string,
+	stdin io.Reader,
+	stdout io.Writer,
+	stderr io.Writer,
+) error {
+	return run(ctx, plan, plan.Limits.MaxItemBytes, true, cameraArgv, stdin, stdout, stderr)
+}
+
+func run(
+	ctx context.Context,
+	plan multisensorcapture.SourcePlan,
+	frameBytes uint64,
+	jpeg bool,
+	cameraArgv []string,
+	stdin io.Reader,
+	stdout io.Writer,
+	stderr io.Writer,
+) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := validateConfiguration(plan, frameBytes, cameraArgv, stdin, stdout); err != nil {
+	if err := validateConfiguration(plan, frameBytes, jpeg, cameraArgv, stdin, stdout); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -81,8 +111,9 @@ func Run(
 		stderr = io.Discard
 	}
 	runner := &producer{
-		plan: plan, frameBytes: int(frameBytes), childArgv: append([]string(nil), cameraArgv...),
-		stderr: stderr, controls: controls, records: records,
+		plan: plan, frameBytes: int(frameBytes), jpeg: jpeg,
+		childArgv: append([]string(nil), cameraArgv...),
+		stderr:    stderr, controls: controls, records: records,
 		nextControlSeq: 1, nextRecordSeq: 1, payloadHash: sha256.New(),
 	}
 	return runner.run(ctx)
@@ -91,33 +122,42 @@ func Run(
 func validateConfiguration(
 	plan multisensorcapture.SourcePlan,
 	frameBytes uint64,
+	jpeg bool,
 	cameraArgv []string,
 	stdin io.Reader,
 	stdout io.Writer,
 ) error {
 	if stdin == nil || stdout == nil {
-		return errors.New("fixed-frame producer stdin and stdout are required")
+		return errors.New("camera producer stdin and stdout are required")
 	}
 	if plan.Kind != multisensor.SourceCamera {
-		return errors.New("fixed-frame producer requires a camera source plan")
+		return errors.New("camera producer requires a camera source plan")
 	}
 	clock := plan.Clock
 	if clock.TimestampSemantics != multisensor.TimestampDeliveryObserved ||
 		clock.ClockID != multisensor.DeliveryObservedClockID(plan.SourceID) ||
 		clock.TickHz != uint64(time.Second/time.Nanosecond) || clock.WrapTicks != 0 {
-		return errors.New("fixed-frame producer requires the source delivery_observed 1GHz clock")
+		return errors.New("camera producer requires the source delivery_observed 1GHz clock")
 	}
 	if plan.SyncEventSemantics != multisensorcapture.SyncEventSemanticsNone {
-		return errors.New("fixed-frame producer requires sync_event_semantics=none")
+		return errors.New("camera producer requires sync_event_semantics=none")
 	}
 	if err := plan.Limits.Validate(); err != nil {
-		return fmt.Errorf("fixed-frame producer limits: %w", err)
+		return fmt.Errorf("camera producer limits: %w", err)
 	}
 	maximumInt := uint64(^uint(0) >> 1)
 	if frameBytes == 0 || frameBytes > maximumInt ||
 		frameBytes > MaximumFrameBytes ||
 		frameBytes > plan.Limits.MaxItemBytes || frameBytes > plan.Limits.MaxPayloadBytes {
 		return errors.New("frame_bytes is outside the producer or source limits")
+	}
+	if jpeg {
+		if plan.Payload.Format != JPEGFormat {
+			return fmt.Errorf("JPEG producer requires payload format %q", JPEGFormat)
+		}
+		if frameBytes != plan.Limits.MaxItemBytes {
+			return errors.New("JPEG producer maximum item size must match the source limits")
+		}
 	}
 	if len(cameraArgv) == 0 || cameraArgv[0] == "" {
 		return errors.New("camera child argv[0] is required")
@@ -193,7 +233,12 @@ func (runner *producer) stream(ctx context.Context) error {
 		control, err := runner.nextControl(ctx)
 		controls <- controlResult{control: control, err: err}
 	}()
-	events := runner.child.stream(runner.frameBytes)
+	var events <-chan frameEvent
+	if runner.jpeg {
+		events = runner.child.streamJPEG(runner.frameBytes)
+	} else {
+		events = runner.child.streamFixed(runner.frameBytes)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -216,7 +261,7 @@ func (runner *producer) stream(ctx context.Context) error {
 			}
 			if event.readErr != nil {
 				_, waitErr := runner.child.terminate()
-				failure := classifyFrameFailure(event, waitErr, runner.frameBytes)
+				failure := classifyFrameFailure(event, waitErr, runner.frameBytes, runner.jpeg)
 				return errors.Join(failure, runner.writeFailure(failure))
 			}
 			if err := runner.writeItem(event.payload); err != nil {
@@ -285,7 +330,10 @@ func (runner *producer) writeSession() error {
 }
 
 func (runner *producer) writeItem(payload []byte) error {
-	frameBytes := uint64(runner.frameBytes)
+	frameBytes := uint64(len(payload))
+	if frameBytes == 0 || frameBytes > runner.plan.Limits.MaxItemBytes {
+		return runner.fail(errors.New("camera child produced an item outside the source limits"))
+	}
 	if runner.itemCount >= runner.plan.Limits.MaxItems ||
 		runner.payloadBytes > runner.plan.Limits.MaxPayloadBytes-frameBytes {
 		return runner.fail(errors.New("camera child output exceeds the source limits"))
@@ -380,7 +428,7 @@ func (runner *producer) writeRecord(
 	}
 	encoded, err := json.Marshal(metadata)
 	if err != nil {
-		return fmt.Errorf("encode fixed-frame producer metadata: %w", err)
+		return fmt.Errorf("encode camera producer metadata: %w", err)
 	}
 	sequence := runner.nextRecordSeq
 	if sequence == math.MaxUint64 {
@@ -394,7 +442,10 @@ func (runner *producer) writeRecord(
 	})
 }
 
-func classifyFrameFailure(event frameEvent, waitErr error, frameBytes int) error {
+func classifyFrameFailure(event frameEvent, waitErr error, frameBytes int, jpeg bool) error {
+	if jpeg && event.readBytes != 0 {
+		return fmt.Errorf("camera child produced an invalid JPEG item: %w", event.readErr)
+	}
 	if event.readBytes != 0 {
 		return fmt.Errorf(
 			"camera child produced a partial frame: got %d of %d bytes",
@@ -406,6 +457,9 @@ func classifyFrameFailure(event frameEvent, waitErr error, frameBytes int) error
 		return fmt.Errorf("camera child failed before STOP: %w", waitErr)
 	}
 	if errors.Is(event.readErr, io.EOF) || errors.Is(event.readErr, io.ErrUnexpectedEOF) {
+		if jpeg && errors.Is(event.readErr, io.ErrUnexpectedEOF) {
+			return errors.New("camera child produced a truncated JPEG before STOP")
+		}
 		return errors.New("camera child reached EOF before STOP")
 	}
 	return fmt.Errorf("read camera child frame: %w", event.readErr)
@@ -421,7 +475,7 @@ func boundedErrorMessage(err error) string {
 		message = message[:len(message)-size]
 	}
 	if message == "" {
-		return "fixed-frame producer failed"
+		return "camera producer failed"
 	}
 	return message
 }

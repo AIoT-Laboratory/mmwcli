@@ -92,6 +92,49 @@ func TestMultisensorInitCreatesRunnableFixedFramePlan(t *testing.T) {
 	}
 }
 
+func TestMultisensorInitCreatesRunnableJPEGPlan(t *testing.T) {
+	planPath := filepath.Join(t.TempDir(), "camera-jpeg-plan.json")
+	arguments := []string{
+		"multisensor", "init", planPath,
+		"--format", fixedframeproducer.JPEGFormat,
+		"--max-item-bytes", "1048576",
+		"--max-items", "300",
+		"--payload", "camera.mjpeg",
+		"--", "ffmpeg", "-f", "dshow", "-i", "video=Camera",
+		"-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run(arguments, &stdout, &stderr); code != 0 {
+		t.Fatalf("Run code = %d, stderr = %q", code, stderr.String())
+	}
+	plan, err := multisensorcapture.LoadPlan(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := plan.Sources[0]
+	if source.Producer != (multisensor.Producer{
+		Name: fixedframeproducer.JPEGProducerName, Version: fixedframeproducer.JPEGProducerVersion,
+	}) || source.Limits != (multisensor.SourceLimits{
+		MaxItems: 300, MaxItemBytes: 1 << 20, MaxPayloadBytes: 300 << 20,
+	}) || source.Payload != (multisensor.PayloadContract{
+		Filename: "camera.mjpeg", Format: fixedframeproducer.JPEGFormat,
+	}) {
+		t.Fatalf("source = %+v", source)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPrefix := []string{
+		executable, "sensor-producer", "jpeg-stream", "--plan", planPath,
+		"--source", "camera-0", "--",
+	}
+	if len(source.Argv) < len(wantPrefix) ||
+		strings.Join(source.Argv[:len(wantPrefix)], "\x00") != strings.Join(wantPrefix, "\x00") {
+		t.Fatalf("argv = %#v, want prefix %#v", source.Argv, wantPrefix)
+	}
+}
+
 func TestMultisensorInitSupportsOptionalSourceAndNeverOverwrites(t *testing.T) {
 	planPath := filepath.Join(t.TempDir(), "optional-plan.json")
 	arguments := []string{
@@ -138,6 +181,12 @@ func TestMultisensorInitRejectsMissingCommandAndOverflow(t *testing.T) {
 		{"multisensor", "init", filepath.Join(t.TempDir(), "overflow.json"),
 			"--format", "camera.raw.v1", "--frame-bytes", "67108864",
 			"--max-items", "18446744073709551615", "--", "camera"},
+		{"multisensor", "init", filepath.Join(t.TempDir(), "jpeg-fixed.json"),
+			"--format", fixedframeproducer.JPEGFormat, "--frame-bytes", "4096",
+			"--max-items", "2", "--", "camera"},
+		{"multisensor", "init", filepath.Join(t.TempDir(), "raw-max.json"),
+			"--format", "camera.rgb8.v1", "--max-item-bytes", "4096",
+			"--max-items", "2", "--", "camera"},
 	}
 	for _, arguments := range tests {
 		var stdout, stderr bytes.Buffer

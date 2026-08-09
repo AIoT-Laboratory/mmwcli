@@ -110,6 +110,7 @@ func TestSensorProducerFixedFramesIsDiscoverableAndHasNoAlias(t *testing.T) {
 		{arguments: []string{"help"}, code: 0, contains: "mmwcli sensor-producer fixed-frames"},
 		{arguments: []string{"sensor-producer", "--help"}, code: 0, contains: "usage: mmwcli sensor-producer fixed-frames"},
 		{arguments: []string{"sensor-producer", "fixed-frames", "--help"}, code: 0, contains: "usage: mmwcli sensor-producer fixed-frames"},
+		{arguments: []string{"sensor-producer", "jpeg-stream", "--help"}, code: 0, contains: "usage: mmwcli sensor-producer jpeg-stream"},
 		{arguments: []string{"sensor-producer"}, code: 2, contains: "requires fixed-frames"},
 		{arguments: []string{"sensor-producer", "frames"}, code: 2, contains: "unknown sensor-producer command"},
 		{arguments: []string{"fixed-frames"}, code: 2, contains: "unknown command"},

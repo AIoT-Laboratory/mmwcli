@@ -38,12 +38,18 @@ func runMultisensorInit(arguments []string, stdout, stderr io.Writer) error {
 	flags := newCommandFlagSet(
 		"multisensor init",
 		stderr,
-		"mmwcli multisensor init PLAN [--source-id ID] --format FORMAT --frame-bytes N "+
+		"mmwcli multisensor init PLAN [--source-id ID] --format FORMAT "+
+			"(--frame-bytes N | --max-item-bytes N) "+
 			"--max-items N [--required=false] [--payload FILE] -- CAMERA_COMMAND [ARG...]",
 	)
 	sourceID := flags.String("source-id", "camera-0", "camera source_id")
 	format := flags.String("format", "", "explicit payload format contract")
 	frameBytes := flags.Uint64("frame-bytes", 0, "bytes in each headerless camera frame")
+	maxItemBytes := flags.Uint64(
+		"max-item-bytes",
+		0,
+		"maximum bytes in each image.jpeg.v1 item",
+	)
 	maxItems := flags.Uint64("max-items", 0, "maximum camera frames in the capture")
 	required := flags.Bool("required", true, "require this camera to complete the aggregate capture")
 	payloadFilename := flags.String("payload", "frames.bin", "published camera payload filename")
@@ -72,35 +78,63 @@ func runMultisensorInit(arguments []string, stdout, stderr io.Writer) error {
 	if len(cameraArgv) == 0 || cameraArgv[0] == "" {
 		return usageError{message: "multisensor init requires CAMERA_COMMAND after --"}
 	}
-	if strings.TrimSpace(*format) == "" || *frameBytes == 0 || *maxItems == 0 {
-		return usageError{message: "multisensor init requires --format, --frame-bytes N > 0, and --max-items N > 0"}
+	if strings.TrimSpace(*format) == "" || *maxItems == 0 {
+		return usageError{message: "multisensor init requires --format and --max-items N > 0"}
 	}
-	if *frameBytes > fixedframeproducer.MaximumFrameBytes {
+	jpeg := *format == fixedframeproducer.JPEGFormat
+	if jpeg && (*maxItemBytes == 0 || *frameBytes != 0) {
+		return usageError{
+			message: "image.jpeg.v1 requires --max-item-bytes N > 0 and does not accept --frame-bytes",
+		}
+	}
+	if !jpeg && (*frameBytes == 0 || *maxItemBytes != 0) {
+		return usageError{
+			message: "non-JPEG formats require --frame-bytes N > 0 and do not accept --max-item-bytes",
+		}
+	}
+	itemBytes := *frameBytes
+	if jpeg {
+		itemBytes = *maxItemBytes
+	}
+	if itemBytes > fixedframeproducer.MaximumFrameBytes {
 		return usageError{message: fmt.Sprintf(
-			"--frame-bytes exceeds the fixed-frame producer maximum %d",
+			"camera item bytes exceed the producer maximum %d",
 			fixedframeproducer.MaximumFrameBytes,
 		)}
 	}
-	high, payloadBytes := bits.Mul64(*frameBytes, *maxItems)
+	high, payloadBytes := bits.Mul64(itemBytes, *maxItems)
 	if high != 0 {
-		return usageError{message: "--frame-bytes * --max-items overflows uint64"}
+		return usageError{message: "camera item bytes * --max-items overflows uint64"}
 	}
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve mmwcli executable: %w", err)
 	}
-	producerArgv := []string{
-		executable,
-		"sensor-producer",
-		"fixed-frames",
+	producerCommand := "fixed-frames"
+	producerName := fixedframeproducer.ProducerName
+	producerVersion := fixedframeproducer.ProducerVersion
+	producerArgv := []string{executable, "sensor-producer"}
+	if jpeg {
+		producerCommand = "jpeg-stream"
+		producerName = fixedframeproducer.JPEGProducerName
+		producerVersion = fixedframeproducer.JPEGProducerVersion
+	}
+	producerArgv = append(
+		producerArgv,
+		producerCommand,
 		"--plan",
 		planPath,
 		"--source",
 		*sourceID,
-		"--frame-bytes",
-		strconv.FormatUint(*frameBytes, 10),
-		"--",
+	)
+	if !jpeg {
+		producerArgv = append(
+			producerArgv,
+			"--frame-bytes",
+			strconv.FormatUint(*frameBytes, 10),
+		)
 	}
+	producerArgv = append(producerArgv, "--")
 	producerArgv = append(producerArgv, cameraArgv...)
 	plan := multisensorcapture.Plan{
 		Schema: multisensorcapture.PlanSchema,
@@ -108,10 +142,10 @@ func runMultisensorInit(arguments []string, stdout, stderr io.Writer) error {
 			SourceID: *sourceID, Kind: multisensor.SourceCamera, Required: *required,
 			Argv: producerArgv, QueueSize: 0,
 			Producer: multisensor.Producer{
-				Name: fixedframeproducer.ProducerName, Version: fixedframeproducer.ProducerVersion,
+				Name: producerName, Version: producerVersion,
 			},
 			Limits: multisensor.SourceLimits{
-				MaxItems: *maxItems, MaxItemBytes: *frameBytes, MaxPayloadBytes: payloadBytes,
+				MaxItems: *maxItems, MaxItemBytes: itemBytes, MaxPayloadBytes: payloadBytes,
 			},
 			Payload: multisensor.PayloadContract{Filename: *payloadFilename, Format: *format},
 			Clock: multisensor.Clock{
@@ -229,6 +263,9 @@ func runMultisensorCheck(arguments []string, stdout, stderr io.Writer) error {
 }
 
 func printMultisensorHelp(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: mmwcli multisensor init PLAN [options] -- CAMERA_COMMAND [ARG...]")
+	fmt.Fprintln(
+		writer,
+		"usage: mmwcli multisensor init PLAN [options] -- CAMERA_COMMAND [ARG...]",
+	)
 	fmt.Fprintln(writer, "usage: mmwcli multisensor check PLAN")
 }

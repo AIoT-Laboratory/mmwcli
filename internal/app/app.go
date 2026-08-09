@@ -275,6 +275,7 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "  mmwcli multisensor init PLAN [options] -- CAMERA_COMMAND [ARG...]")
 	fmt.Fprintln(writer, "  mmwcli multisensor check PLAN")
 	fmt.Fprintln(writer, "  mmwcli sensor-producer fixed-frames --plan PLAN --source SOURCE --frame-bytes N -- CAMERA_COMMAND [ARG...]")
+	fmt.Fprintln(writer, "  mmwcli sensor-producer jpeg-stream --plan PLAN --source SOURCE -- CAMERA_COMMAND [ARG...]")
 	fmt.Fprintln(writer, "  mmwcli repl --port PORT [options]")
 	fmt.Fprintln(writer, "  mmwcli studio-cli check|version|apply|start|stop|capture ...")
 	fmt.Fprintln(writer, "  mmwcli dca ping|version|configure|start|stop|reset-fpga|reset-radar ...")
