@@ -27,8 +27,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Require FFmpeg image2pipe integration fixture
-        run: ffmpeg -version
+      - name: Install FFmpeg image2pipe integration fixture
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes ffmpeg
+          ffmpeg -version
       - run: make check
 
   windows-test:
