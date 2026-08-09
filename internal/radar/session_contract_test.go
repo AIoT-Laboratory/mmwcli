@@ -15,6 +15,7 @@ func TestBuildCaptureSessionV1PlanAcceptsRepositoryConfigs(t *testing.T) {
 		expectedBytes int64
 	}{
 		{name: "studio-cli-xwr6843-raw.cfg", family: "xwr68xx", bytesPerFrame: 262_144, expectedBytes: 26_214_400},
+		{name: "studio-cli-iwr6843-actions-3tx.cfg", family: "xwr68xx", bytesPerFrame: 1_572_864, expectedBytes: 943_718_400},
 		{name: "debug-cli-xwr6843-raw.cfg", family: "xwr68xx", bytesPerFrame: 262_144, expectedBytes: 26_214_400},
 		{name: "debug-cli-xwr16xx-raw.cfg", family: "xwr16xx", bytesPerFrame: 262_144, expectedBytes: 26_214_400},
 		{name: "debug-cli-xwr18xx-raw.cfg", family: "xwr18xx", bytesPerFrame: 393_216, expectedBytes: 39_321_600},
