@@ -10,11 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 )
 
 type frameEvent struct {
 	payload   []byte
 	consumed  chan struct{}
+	sequence  uint64
 	readBytes int
 	readErr   error
 }
@@ -30,6 +32,7 @@ type cameraChild struct {
 
 	events   chan frameEvent
 	readDone chan struct{}
+	complete atomic.Uint64
 }
 
 func startCameraChild(
@@ -96,8 +99,11 @@ func (child *cameraChild) readFrames(frameBytes int) {
 			return
 		}
 		consumed := make(chan struct{})
+		sequence := child.complete.Add(1)
 		select {
-		case child.events <- frameEvent{payload: buffer, consumed: consumed}:
+		case child.events <- frameEvent{
+			payload: buffer, consumed: consumed, sequence: sequence,
+		}:
 		case <-child.stop:
 			return
 		}
@@ -123,8 +129,11 @@ func (child *cameraChild) readJPEGFrames(maxFrameBytes int) {
 			return
 		}
 		consumed := make(chan struct{})
+		sequence := child.complete.Add(1)
 		select {
-		case child.events <- frameEvent{payload: payload, consumed: consumed}:
+		case child.events <- frameEvent{
+			payload: payload, consumed: consumed, sequence: sequence,
+		}:
 		case <-child.stop:
 			return
 		}
@@ -134,6 +143,10 @@ func (child *cameraChild) readJPEGFrames(maxFrameBytes int) {
 			return
 		}
 	}
+}
+
+func (child *cameraChild) completedFrames() uint64 {
+	return child.complete.Load()
 }
 
 // readJPEGFrame reads exactly one JPEG image without decoding its pixels. It

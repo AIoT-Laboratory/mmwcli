@@ -55,22 +55,22 @@ OUT.part/
   session.json
   sensors/
     radar-0/
-      source.json
       adc.bin
       index.bin
       radar.cfg
       capture.json
     camera-0/
-      source.json
       frames.bin
       index.bin
 ```
 
 Names are fixed leaves or validated source IDs; traversal, links, devices, unknown `.part` files,
-and sparse payloads are rejected. `session.json` records every required leaf's size and SHA-256,
-the source outcomes, clock mappings, synchronization grade, and the aggregate counts. A source may
-declare a different fixed payload filename, but it cannot add undeclared leaves. Board geometry and
-camera calibration are explicit metadata, never inferred from a radar family or image dimensions.
+and sparse payloads are rejected. Source contracts are entries inside the single root
+`session.json`; there is no per-source `source.json`. That root records every required leaf's size
+and SHA-256, the source outcomes, clock mappings, synchronization grade, and aggregate counts. A
+camera source may declare a different payload filename such as `camera.mjpeg`, but it cannot add
+undeclared leaves. Board geometry and camera calibration are explicit metadata, never inferred from
+a radar family or image dimensions.
 
 Application-specific metadata uses one `application_metadata` JSON object with namespaced
 top-level keys (for example `org.openmmw.training`), never flat additions to protocol objects. Its

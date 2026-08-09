@@ -13,6 +13,8 @@ import (
 	"image/jpeg"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -131,6 +133,116 @@ func TestRunJPEGRejectsNonJPEGChildOutput(t *testing.T) {
 	}
 }
 
+func TestRunJPEGNeverPublishesAFrameCompletedBeforeStart(t *testing.T) {
+	discarded := make(chan uint64, 1)
+	harness := newJPEGProducerHarnessWithHooks(
+		t,
+		"jpeg-preroll",
+		&producerHooks{preStartDiscarded: func(sequence uint64) {
+			discarded <- sequence
+		}},
+		validJPEGSourcePlan(),
+		nil,
+	)
+	harness.readyAndArm(t)
+	select {
+	case sequence := <-discarded:
+		if sequence != 1 {
+			t.Fatalf("discarded sequence = %d, want 1", sequence)
+		}
+	case <-harness.ctx.Done():
+		t.Fatalf("pre-START JPEG was not parsed and discarded: %v", harness.ctx.Err())
+	}
+	harness.startCapture(t)
+	nextRecord(t, harness, sensorproducer.FrameSession)
+	item := nextRecord(t, harness, sensorproducer.FrameItem)
+	if !slices.Equal(item.Payload, testJPEGFrame(0xf0)) {
+		t.Fatalf("first ITEM is not the post-START JPEG: %x", item.Payload)
+	}
+	if err := harness.client.Stop(harness.ctx); err != nil {
+		t.Fatal(err)
+	}
+	nextRecord(t, harness, sensorproducer.FrameEnd)
+	nextRecord(t, harness, sensorproducer.FrameEOF)
+	if err := harness.client.Wait(harness.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.wait(t); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunJPEGReportsTruncatedAndOversizeImages(t *testing.T) {
+	tests := []struct {
+		name         string
+		mode         string
+		maxItemBytes uint64
+		message      string
+	}{
+		{name: "truncated", mode: "jpeg-truncated", maxItemBytes: 1 << 20, message: "truncated JPEG"},
+		{name: "oversize", mode: "jpeg-oversize", maxItemBytes: 128, message: "exceeds 128 bytes"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan := validJPEGSourcePlan()
+			plan.Limits.MaxItemBytes = test.maxItemBytes
+			plan.Limits.MaxPayloadBytes = test.maxItemBytes * plan.Limits.MaxItems
+			harness := newJPEGProducerHarnessWithHooks(t, test.mode, nil, plan, nil)
+			harness.start(t)
+			nextRecord(t, harness, sensorproducer.FrameSession)
+			failure := decodeMetadata[sensorproducer.ErrorMetadata](
+				t,
+				nextRecord(t, harness, sensorproducer.FrameError).Metadata,
+			)
+			if !strings.Contains(failure.Message, test.message) {
+				t.Fatalf("ERROR message = %q, want %q", failure.Message, test.message)
+			}
+			nextRecord(t, harness, sensorproducer.FrameEOF)
+			if err := harness.client.Wait(harness.ctx); err == nil {
+				t.Fatal("client Wait unexpectedly succeeded")
+			}
+			if err := harness.wait(t); err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("RunJPEG error = %v, want %q", err, test.message)
+			}
+		})
+	}
+}
+
+func TestRunJPEGReadsRealFFmpegImage2Pipe(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	command := []string{
+		ffmpeg,
+		"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc=size=32x24:rate=10",
+		"-an", "-c:v", "mjpeg", "-q:v", "5", "-f", "image2pipe", "pipe:1",
+	}
+	harness := newJPEGProducerHarnessWithHooks(
+		t, "", nil, validJPEGSourcePlan(), command,
+	)
+	harness.start(t)
+	nextRecord(t, harness, sensorproducer.FrameSession)
+	for index := range 2 {
+		record := nextRecord(t, harness, sensorproducer.FrameItem)
+		if _, err := jpeg.Decode(bytes.NewReader(record.Payload)); err != nil {
+			t.Fatalf("FFmpeg ITEM %d is not a complete JPEG: %v", index, err)
+		}
+	}
+	if err := harness.client.Stop(harness.ctx); err != nil {
+		t.Fatal(err)
+	}
+	nextRecord(t, harness, sensorproducer.FrameEnd)
+	nextRecord(t, harness, sensorproducer.FrameEOF)
+	if err := harness.client.Wait(harness.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.wait(t); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunReportsTruncatedAndFailedCameraChildren(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -189,7 +301,7 @@ func TestRunRejectsNonDeliveryObservedContracts(t *testing.T) {
 		TimestampSemantics: multisensor.TimestampExposureMidpoint,
 	}
 	err := Run(
-		context.Background(), plan, 4, helperCommand("block"),
+		context.Background(), plan, 4, helperCommand("block", "unused"),
 		bytes.NewReader(nil), io.Discard, io.Discard,
 	)
 	if err == nil || !strings.Contains(err.Error(), "delivery_observed") {
@@ -198,11 +310,16 @@ func TestRunRejectsNonDeliveryObservedContracts(t *testing.T) {
 }
 
 func TestFixedFrameCameraHelper(t *testing.T) {
-	mode, ok := helperMode(os.Args)
+	mode, releasePath, ok := helperArguments(os.Args)
 	if !ok {
 		return
 	}
 	_, _ = fmt.Fprintln(os.Stderr, "fixed-frame camera helper")
+	if mode == "jpeg-preroll" {
+		writeHelperBytes(testJPEGFrame(0x10))
+	} else {
+		waitForHelperRelease(releasePath)
+	}
 	switch mode {
 	case "two":
 		writeHelperBytes(testFrame0)
@@ -223,6 +340,16 @@ func TestFixedFrameCameraHelper(t *testing.T) {
 	case "jpeg-invalid":
 		writeHelperBytes([]byte("not-a-jpeg"))
 		time.Sleep(time.Hour)
+	case "jpeg-preroll":
+		waitForHelperRelease(releasePath)
+		writeHelperBytes(testJPEGFrame(0xf0))
+		time.Sleep(time.Hour)
+	case "jpeg-truncated":
+		frame := testJPEGFrame(0x80)
+		writeHelperBytes(frame[:len(frame)-2])
+	case "jpeg-oversize":
+		writeHelperBytes(testJPEGFrame(0x80))
+		time.Sleep(time.Hour)
 	default:
 		_, _ = fmt.Fprintln(os.Stderr, "unknown helper mode", mode)
 		os.Exit(2)
@@ -231,12 +358,13 @@ func TestFixedFrameCameraHelper(t *testing.T) {
 }
 
 type producerHarness struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	client *sensorproducer.Client
-	plan   multisensorcapture.SourcePlan
-	stderr bytes.Buffer
-	done   chan error
+	ctx         context.Context
+	cancel      context.CancelFunc
+	client      *sensorproducer.Client
+	plan        multisensorcapture.SourcePlan
+	stderr      bytes.Buffer
+	done        chan error
+	releasePath string
 }
 
 func newProducerHarness(t *testing.T, mode string) *producerHarness {
@@ -246,10 +374,11 @@ func newProducerHarness(t *testing.T, mode string) *producerHarness {
 	recordInput, producerOutput := io.Pipe()
 	harness := &producerHarness{
 		ctx: ctx, cancel: cancel, plan: validSourcePlan(), done: make(chan error, 1),
+		releasePath: filepath.Join(t.TempDir(), "release"),
 	}
 	go func() {
 		err := Run(
-			ctx, harness.plan, uint64(len(testFrame0)), helperCommand(mode),
+			ctx, harness.plan, uint64(len(testFrame0)), helperCommand(mode, harness.releasePath),
 			producerInput, producerOutput, &harness.stderr,
 		)
 		_ = producerInput.Close()
@@ -276,21 +405,38 @@ func newProducerHarness(t *testing.T, mode string) *producerHarness {
 }
 
 func newJPEGProducerHarness(t *testing.T, mode string) *producerHarness {
+	return newJPEGProducerHarnessWithHooks(t, mode, nil, validJPEGSourcePlan(), nil)
+}
+
+func newJPEGProducerHarnessWithHooks(
+	t *testing.T,
+	mode string,
+	hooks *producerHooks,
+	plan multisensorcapture.SourcePlan,
+	command []string,
+) *producerHarness {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	producerInput, controlOutput := io.Pipe()
 	recordInput, producerOutput := io.Pipe()
 	harness := &producerHarness{
-		ctx: ctx, cancel: cancel, plan: validJPEGSourcePlan(), done: make(chan error, 1),
+		ctx: ctx, cancel: cancel, plan: plan, done: make(chan error, 1),
+		releasePath: filepath.Join(t.TempDir(), "release"),
+	}
+	if command == nil {
+		command = helperCommand(mode, harness.releasePath)
 	}
 	go func() {
-		err := RunJPEG(
+		err := run(
 			ctx,
 			harness.plan,
-			helperCommand(mode),
+			harness.plan.Limits.MaxItemBytes,
+			true,
+			command,
 			producerInput,
 			producerOutput,
 			&harness.stderr,
+			hooks,
 		)
 		_ = producerInput.Close()
 		_ = producerOutput.Close()
@@ -317,14 +463,29 @@ func newJPEGProducerHarness(t *testing.T, mode string) *producerHarness {
 
 func (harness *producerHarness) start(t *testing.T) {
 	t.Helper()
+	harness.readyAndArm(t)
+	harness.startCapture(t)
+}
+
+func (harness *producerHarness) readyAndArm(t *testing.T) {
+	t.Helper()
 	for _, operation := range []func(context.Context) error{
 		harness.client.Ready,
 		harness.client.Arm,
-		harness.client.Start,
 	} {
 		if err := operation(harness.ctx); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func (harness *producerHarness) startCapture(t *testing.T) {
+	t.Helper()
+	if err := harness.client.Start(harness.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(harness.releasePath, []byte("start"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -405,17 +566,31 @@ func testJPEGFrame(level uint8) []byte {
 	return encoded.Bytes()
 }
 
-func helperCommand(mode string) []string {
-	return []string{os.Args[0], "-test.run=^TestFixedFrameCameraHelper$", "--", mode}
+func helperCommand(mode, releasePath string) []string {
+	return []string{
+		os.Args[0], "-test.run=^TestFixedFrameCameraHelper$", "--", mode, releasePath,
+	}
 }
 
-func helperMode(arguments []string) (string, bool) {
+func helperArguments(arguments []string) (string, string, bool) {
 	for index, argument := range arguments {
-		if argument == "--" && index+1 < len(arguments) {
-			return arguments[index+1], true
+		if argument == "--" && index+2 < len(arguments) {
+			return arguments[index+1], arguments[index+2], true
 		}
 	}
-	return "", false
+	return "", "", false
+}
+
+func waitForHelperRelease(path string) {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	_, _ = fmt.Fprintln(os.Stderr, "timed out waiting for START release")
+	os.Exit(5)
 }
 
 func writeHelperBytes(payload []byte) {

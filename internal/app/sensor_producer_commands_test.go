@@ -148,11 +148,21 @@ func TestSensorProducerFixedFramesRequiresExactPlanSourceBeforeChild(t *testing.
 }
 
 func TestAppFixedFrameCameraHelper(t *testing.T) {
-	mode, ok := appProducerHelperMode(os.Args)
+	mode, releasePath, ok := appProducerHelperArguments(os.Args)
 	if !ok {
 		return
 	}
 	_, _ = fmt.Fprintln(os.Stderr, "app fixed-frame camera helper")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(releasePath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			os.Exit(5)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	switch mode {
 	case "two":
 		appProducerWrite(appProducerFrame0)
@@ -169,12 +179,13 @@ func TestAppFixedFrameCameraHelper(t *testing.T) {
 }
 
 type appProducerHarness struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	client *sensorproducer.Client
-	plan   multisensorcapture.Plan
-	stderr bytes.Buffer
-	done   chan error
+	ctx         context.Context
+	cancel      context.CancelFunc
+	client      *sensorproducer.Client
+	plan        multisensorcapture.Plan
+	stderr      bytes.Buffer
+	done        chan error
+	releasePath string
 }
 
 func newAppProducerHarness(t *testing.T, mode string) *appProducerHarness {
@@ -185,12 +196,13 @@ func newAppProducerHarness(t *testing.T, mode string) *appProducerHarness {
 	recordInput, producerOutput := io.Pipe()
 	harness := &appProducerHarness{
 		ctx: ctx, cancel: cancel, plan: plan, done: make(chan error, 1),
+		releasePath: filepath.Join(t.TempDir(), "release"),
 	}
 	arguments := []string{
 		"fixed-frames", "--plan", planPath, "--source", appProducerSourceID,
 		"--frame-bytes", "4", "--",
 	}
-	arguments = append(arguments, appProducerHelperCommand(mode)...)
+	arguments = append(arguments, appProducerHelperCommand(mode, harness.releasePath)...)
 	go func() {
 		err := runSensorProducer(arguments, producerInput, producerOutput, &harness.stderr)
 		_ = producerInput.Close()
@@ -226,6 +238,9 @@ func (harness *appProducerHarness) start(t *testing.T) {
 		if err := operation(harness.ctx); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.WriteFile(harness.releasePath, []byte("start"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -291,17 +306,19 @@ func writeAppProducerPlan(t *testing.T) (string, multisensorcapture.Plan) {
 	return path, plan
 }
 
-func appProducerHelperCommand(mode string) []string {
-	return []string{os.Args[0], "-test.run=^TestAppFixedFrameCameraHelper$", "--", mode}
+func appProducerHelperCommand(mode, releasePath string) []string {
+	return []string{
+		os.Args[0], "-test.run=^TestAppFixedFrameCameraHelper$", "--", mode, releasePath,
+	}
 }
 
-func appProducerHelperMode(arguments []string) (string, bool) {
+func appProducerHelperArguments(arguments []string) (string, string, bool) {
 	for index, argument := range arguments {
-		if argument == "--" && index+1 < len(arguments) {
-			return arguments[index+1], true
+		if argument == "--" && index+2 < len(arguments) {
+			return arguments[index+1], arguments[index+2], true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 func appProducerWrite(payload []byte) {

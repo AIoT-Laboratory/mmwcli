@@ -1,5 +1,5 @@
-// Package fixedframeproducer adapts one raw fixed-size camera frame stream to
-// the mmwcli sensor-producer protocol.
+// Package fixedframeproducer adapts fixed-size raw frames or a concatenated
+// JPEG stream to the mmwcli sensor-producer protocol.
 package fixedframeproducer
 
 import (
@@ -46,11 +46,19 @@ type producer struct {
 	payloadBytes   uint64
 	payloadHash    hash.Hash
 	child          *cameraChild
+	events         <-chan frameEvent
+	discardThrough uint64
+	hooks          *producerHooks
+}
+
+type producerHooks struct {
+	preStartDiscarded func(uint64)
 }
 
 type controlResult struct {
-	control sensorproducer.Control
-	err     error
+	control       sensorproducer.Control
+	frameBoundary uint64
+	err           error
 }
 
 // Run serves one sensor-producer connection and launches cameraArgv on ARM.
@@ -64,7 +72,7 @@ func Run(
 	stdout io.Writer,
 	stderr io.Writer,
 ) error {
-	return run(ctx, plan, frameBytes, false, cameraArgv, stdin, stdout, stderr)
+	return run(ctx, plan, frameBytes, false, cameraArgv, stdin, stdout, stderr, nil)
 }
 
 // RunJPEG serves one sensor-producer connection whose child writes a
@@ -77,7 +85,7 @@ func RunJPEG(
 	stdout io.Writer,
 	stderr io.Writer,
 ) error {
-	return run(ctx, plan, plan.Limits.MaxItemBytes, true, cameraArgv, stdin, stdout, stderr)
+	return run(ctx, plan, plan.Limits.MaxItemBytes, true, cameraArgv, stdin, stdout, stderr, nil)
 }
 
 func run(
@@ -89,6 +97,7 @@ func run(
 	stdin io.Reader,
 	stdout io.Writer,
 	stderr io.Writer,
+	hooks *producerHooks,
 ) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -113,7 +122,7 @@ func run(
 	runner := &producer{
 		plan: plan, frameBytes: int(frameBytes), jpeg: jpeg,
 		childArgv: append([]string(nil), cameraArgv...),
-		stderr:    stderr, controls: controls, records: records,
+		stderr:    stderr, controls: controls, records: records, hooks: hooks,
 		nextControlSeq: 1, nextRecordSeq: 1, payloadHash: sha256.New(),
 	}
 	return runner.run(ctx)
@@ -204,27 +213,67 @@ func (runner *producer) run(ctx context.Context) error {
 	defer func() {
 		_, _ = runner.child.terminate()
 	}()
+	runner.events = runner.startEvents()
 	if err := runner.writeACK(arm, true, ""); err != nil {
 		return err
 	}
+	return runner.awaitStart(ctx)
+}
 
-	start, err := runner.nextControl(ctx)
-	if err != nil {
-		return err
+func (runner *producer) startEvents() <-chan frameEvent {
+	if runner.jpeg {
+		return runner.child.streamJPEG(runner.frameBytes)
 	}
-	if start.Command == sensorproducer.CommandCancel {
-		return runner.cancel(start)
+	return runner.child.streamFixed(runner.frameBytes)
+}
+
+func (runner *producer) awaitStart(ctx context.Context) error {
+	controls := make(chan controlResult, 1)
+	go func() {
+		control, err := runner.nextControl(ctx)
+		controls <- controlResult{
+			control: control, frameBoundary: runner.child.completedFrames(), err: err,
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case result := <-controls:
+			if result.err != nil {
+				return result.err
+			}
+			if result.control.Command == sensorproducer.CommandCancel {
+				return runner.cancel(result.control)
+			}
+			if result.control.Command != sensorproducer.CommandStart {
+				return runner.reject(result.control, errors.New("expected START"))
+			}
+			runner.discardThrough = result.frameBoundary
+			if err := runner.writeACK(result.control, true, ""); err != nil {
+				return err
+			}
+			if err := runner.writeSession(); err != nil {
+				return err
+			}
+			return runner.stream(ctx)
+		case event, ok := <-runner.events:
+			if !ok {
+				return runner.fail(errors.New("camera frame reader stopped before START"))
+			}
+			if event.readErr != nil {
+				return runner.frameFailure(event)
+			}
+			runner.discardPreStart(event)
+		}
 	}
-	if start.Command != sensorproducer.CommandStart {
-		return runner.reject(start, errors.New("expected START"))
+}
+
+func (runner *producer) discardPreStart(event frameEvent) {
+	close(event.consumed)
+	if runner.hooks != nil && runner.hooks.preStartDiscarded != nil {
+		runner.hooks.preStartDiscarded(event.sequence)
 	}
-	if err := runner.writeACK(start, true, ""); err != nil {
-		return err
-	}
-	if err := runner.writeSession(); err != nil {
-		return err
-	}
-	return runner.stream(ctx)
 }
 
 func (runner *producer) stream(ctx context.Context) error {
@@ -233,12 +282,6 @@ func (runner *producer) stream(ctx context.Context) error {
 		control, err := runner.nextControl(ctx)
 		controls <- controlResult{control: control, err: err}
 	}()
-	var events <-chan frameEvent
-	if runner.jpeg {
-		events = runner.child.streamJPEG(runner.frameBytes)
-	} else {
-		events = runner.child.streamFixed(runner.frameBytes)
-	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -255,14 +298,16 @@ func (runner *producer) stream(ctx context.Context) error {
 			default:
 				return runner.reject(result.control, errors.New("expected STOP or CANCEL"))
 			}
-		case event, ok := <-events:
+		case event, ok := <-runner.events:
 			if !ok {
 				return runner.fail(errors.New("camera frame reader stopped before STOP"))
 			}
 			if event.readErr != nil {
-				_, waitErr := runner.child.terminate()
-				failure := classifyFrameFailure(event, waitErr, runner.frameBytes, runner.jpeg)
-				return errors.Join(failure, runner.writeFailure(failure))
+				return runner.frameFailure(event)
+			}
+			if event.sequence <= runner.discardThrough {
+				close(event.consumed)
+				continue
 			}
 			if err := runner.writeItem(event.payload); err != nil {
 				return err
@@ -270,6 +315,12 @@ func (runner *producer) stream(ctx context.Context) error {
 			close(event.consumed)
 		}
 	}
+}
+
+func (runner *producer) frameFailure(event frameEvent) error {
+	_, waitErr := runner.child.terminate()
+	failure := classifyFrameFailure(event, waitErr, runner.frameBytes, runner.jpeg)
+	return errors.Join(failure, runner.writeFailure(failure))
 }
 
 func (runner *producer) nextControl(ctx context.Context) (sensorproducer.Control, error) {
@@ -443,6 +494,9 @@ func (runner *producer) writeRecord(
 }
 
 func classifyFrameFailure(event frameEvent, waitErr error, frameBytes int, jpeg bool) error {
+	if jpeg && errors.Is(event.readErr, io.ErrUnexpectedEOF) {
+		return errors.New("camera child produced a truncated JPEG before STOP")
+	}
 	if jpeg && event.readBytes != 0 {
 		return fmt.Errorf("camera child produced an invalid JPEG item: %w", event.readErr)
 	}
@@ -457,9 +511,6 @@ func classifyFrameFailure(event frameEvent, waitErr error, frameBytes int, jpeg 
 		return fmt.Errorf("camera child failed before STOP: %w", waitErr)
 	}
 	if errors.Is(event.readErr, io.EOF) || errors.Is(event.readErr, io.ErrUnexpectedEOF) {
-		if jpeg && errors.Is(event.readErr, io.ErrUnexpectedEOF) {
-			return errors.New("camera child produced a truncated JPEG before STOP")
-		}
 		return errors.New("camera child reached EOF before STOP")
 	}
 	return fmt.Errorf("read camera child frame: %w", event.readErr)
