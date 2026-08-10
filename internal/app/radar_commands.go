@@ -187,7 +187,7 @@ func captureRadar(
 	baud := flags.Int("baud", dialect.DefaultBaud(), "serial baud")
 	serialTimeoutMS := flags.Int("serial-timeout-ms", 10000, "serial command timeout")
 	streamOutput := false
-	flags.BoolVar(&streamOutput, "stream", false, "also emit capture-stream v1 on stdout")
+	flags.BoolVar(&streamOutput, "stream", false, "also emit the radar or aggregate stream on stdout")
 	multisensorPlanPath := flags.String("multisensor-plan", "", "external sensor plan JSON file")
 	var frameCount optionalFrameCount
 	flags.Var(&frameCount, "frame-count", "override frameCfg count (0 means until gracefully stopped)")
@@ -228,15 +228,13 @@ func captureRadar(
 		return err
 	}
 	plan := prepared.plan
-	if plan.InfiniteFrames {
-		if !*stopOnStdinEOF {
-			return usageError{message: "an infinite capture requires --stop-on-stdin-eof for graceful publication"}
-		}
-		if streamOutput {
-			return usageError{message: "--stream requires a finite frame count"}
-		}
-	} else if *stopOnStdinEOF {
-		return usageError{message: "--stop-on-stdin-eof is valid only when the effective frame count is 0"}
+	if err := validateCaptureDurationControls(
+		plan,
+		*stopOnStdinEOF,
+		streamOutput,
+		*multisensorPlanPath,
+	); err != nil {
+		return err
 	}
 	diagnostics := stdout
 	if streamOutput {
@@ -256,16 +254,8 @@ func captureRadar(
 			dcaOptions.fpga.DataFormat,
 		)}
 	}
-	if plan.ExpectedBytes > 0 {
-		if dcaOptions.receiver.MaxOutputBytes < plan.ExpectedBytes {
-			return usageError{message: fmt.Sprintf(
-				"--max-bytes=%d is smaller than the CFG-derived finite capture size %d",
-				dcaOptions.receiver.MaxOutputBytes,
-				plan.ExpectedBytes,
-			)}
-		}
-		// A finite plan has a stronger bound than the generic safety ceiling.
-		dcaOptions.receiver.MaxOutputBytes = plan.ExpectedBytes
+	if err := constrainCaptureOutputBytes(plan, &dcaOptions.receiver); err != nil {
+		return err
 	}
 	requiredIdleTimeout, err := session.MinimumReceiverIdleTimeout(plan)
 	if err != nil {
@@ -305,7 +295,8 @@ func captureRadar(
 	defer stopSignal()
 	// Reserve OUT.part and complete external READY before hardware access.
 	output, aggregate, err := createCaptureDestination(
-		ctx, outputPath, *multisensorPlanPath, prepared, stderr, streamStdout, stopSignal,
+		ctx, outputPath, *multisensorPlanPath, prepared, dcaOptions.receiver.MaxOutputBytes,
+		stderr, streamStdout, stopSignal,
 	)
 	if err != nil {
 		return err
@@ -475,6 +466,53 @@ func stopWhenReaderEnds(reader io.Reader) <-chan struct{} {
 		close(stopped)
 	}()
 	return stopped
+}
+
+func validateCaptureDurationControls(
+	plan radar.CapturePlan,
+	stopOnStdinEOF bool,
+	streamOutput bool,
+	multisensorPlanPath string,
+) error {
+	if plan.InfiniteFrames {
+		if !stopOnStdinEOF {
+			return usageError{message: "an infinite capture requires --stop-on-stdin-eof for graceful publication"}
+		}
+		if streamOutput && multisensorPlanPath == "" {
+			return usageError{
+				message: "an infinite --stream capture requires --multisensor-plan; capture-stream v1 is finite",
+			}
+		}
+	} else if stopOnStdinEOF {
+		return usageError{message: "--stop-on-stdin-eof is valid only when the effective frame count is 0"}
+	}
+	return nil
+}
+
+func constrainCaptureOutputBytes(plan radar.CapturePlan, receiver *dca.ReceiverConfig) error {
+	if receiver == nil {
+		return errors.New("DCA receiver configuration is nil")
+	}
+	if plan.InfiniteFrames {
+		if receiver.MaxOutputBytes < plan.BytesPerFrame {
+			return usageError{message: fmt.Sprintf(
+				"--max-bytes=%d is smaller than one CFG-derived radar frame of %d bytes",
+				receiver.MaxOutputBytes,
+				plan.BytesPerFrame,
+			)}
+		}
+		return nil
+	}
+	if receiver.MaxOutputBytes < plan.ExpectedBytes {
+		return usageError{message: fmt.Sprintf(
+			"--max-bytes=%d is smaller than the CFG-derived finite capture size %d",
+			receiver.MaxOutputBytes,
+			plan.ExpectedBytes,
+		)}
+	}
+	// A finite plan has a stronger bound than the generic safety ceiling.
+	receiver.MaxOutputBytes = plan.ExpectedBytes
+	return nil
 }
 
 const captureSessionMaxConfigBytes = 4 << 20

@@ -14,6 +14,7 @@ import (
 	"mmwcli/internal/multisensor"
 	"mmwcli/internal/multisensorcapture"
 	"mmwcli/internal/multisensorstream"
+	"mmwcli/internal/radar"
 	"mmwcli/internal/session"
 )
 
@@ -60,6 +61,7 @@ func createCaptureDestination(
 	outputPath string,
 	multisensorPlanPath string,
 	prepared preparedCaptureOutput,
+	maximumRadarBytes int64,
 	producerStderr io.Writer,
 	streamStdout *os.File,
 	cancelCapture context.CancelFunc,
@@ -99,7 +101,8 @@ func createCaptureDestination(
 	}
 	if streamStdout != nil {
 		capture.stream, err = startMultisensorStream(
-			ctx, streamStdout, radarDirectory, prepared, plan, sessionID, cancelCapture,
+			ctx, streamStdout, radarDirectory, prepared, maximumRadarBytes,
+			plan, sessionID, cancelCapture,
 		)
 		if err != nil {
 			_ = radarDirectory.Close()
@@ -129,10 +132,18 @@ func startMultisensorStream(
 	stdout *os.File,
 	radarDirectory *capturefile.SessionDirectory,
 	prepared preparedCaptureOutput,
+	maximumRadarBytes int64,
 	plan multisensorcapture.Plan,
 	sessionID string,
 	cancelCapture context.CancelFunc,
 ) (*activeMultisensorStream, error) {
+	radarLimits, mirrorConfig, err := aggregateRadarStreamBounds(
+		prepared.plan,
+		maximumRadarBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
 	streamSession := multisensorstream.Session{
 		SessionID: sessionID, SynchronizationGrade: multisensorstream.SynchronizationSoftwareBarrier,
 		Sources: []multisensorstream.Source{{
@@ -145,10 +156,7 @@ func startMultisensorStream(
 				ClockID: aggregateRadarSourceID + "-frame-clock", TickHz: uint64(time.Second),
 				TimestampSemantics: multisensorstream.TimestampFrameStart,
 			},
-			Limits: multisensorstream.SourceLimits{
-				MaxItems: uint64(prepared.plan.NumberOfFrames), MaxItemBytes: uint64(prepared.plan.BytesPerFrame),
-				MaxPayloadBytes: uint64(prepared.plan.ExpectedBytes),
-			},
+			Limits: radarLimits,
 		}},
 	}
 	for _, source := range plan.Sources {
@@ -179,10 +187,7 @@ func startMultisensorStream(
 		radarDirectory,
 		radarSink,
 		cancelCapture,
-		capturestream.DefaultMirrorConfig(
-			prepared.plan.BytesPerFrame,
-			uint64(prepared.plan.NumberOfFrames),
-		),
+		mirrorConfig,
 	)
 	if err != nil {
 		return nil, abort(err)
@@ -190,6 +195,67 @@ func startMultisensorStream(
 	return &activeMultisensorStream{
 		adapter: adapter, mirror: mirror, radarSink: radarSink, startContext: ctx,
 	}, nil
+}
+
+func aggregateRadarStreamBounds(
+	plan radar.CapturePlan,
+	maximumRadarBytes int64,
+) (multisensorstream.SourceLimits, capturestream.MirrorConfig, error) {
+	if plan.BytesPerFrame <= 0 {
+		return multisensorstream.SourceLimits{}, capturestream.MirrorConfig{},
+			errors.New("aggregate radar stream frame size must be positive")
+	}
+	frameBytes := uint64(plan.BytesPerFrame)
+	if frameBytes > multisensor.MaximumItemBytes {
+		return multisensorstream.SourceLimits{}, capturestream.MirrorConfig{},
+			errors.New("aggregate radar stream frame size exceeds the protocol limit")
+	}
+
+	frameCount := uint64(plan.NumberOfFrames)
+	payloadBytes := uint64(0)
+	mirrorConfig := capturestream.DefaultMirrorConfig(plan.BytesPerFrame, frameCount)
+	if plan.InfiniteFrames {
+		if plan.NumberOfFrames != 0 || plan.ExpectedBytes != 0 {
+			return multisensorstream.SourceLimits{}, capturestream.MirrorConfig{},
+				errors.New("aggregate open-ended radar plan has invalid frame accounting")
+		}
+		if maximumRadarBytes < plan.BytesPerFrame {
+			return multisensorstream.SourceLimits{}, capturestream.MirrorConfig{},
+				errors.New("aggregate open-ended radar byte limit is smaller than one frame")
+		}
+		frameCount = uint64(maximumRadarBytes / plan.BytesPerFrame)
+		if frameCount > multisensor.MaximumIndexItems {
+			frameCount = multisensor.MaximumIndexItems
+		}
+		payloadFrameLimit := multisensor.MaximumPayloadBytes / frameBytes
+		if payloadFrameLimit == 0 {
+			return multisensorstream.SourceLimits{}, capturestream.MirrorConfig{},
+				errors.New("aggregate open-ended radar frame limit exceeds the protocol payload bound")
+		}
+		if frameCount > payloadFrameLimit {
+			frameCount = payloadFrameLimit
+		}
+		payloadBytes = frameCount * frameBytes
+		mirrorConfig = capturestream.BoundedOpenEndedMirrorConfig(
+			plan.BytesPerFrame,
+			int64(payloadBytes),
+		)
+	} else {
+		if frameCount == 0 || plan.ExpectedBytes <= 0 ||
+			uint64(plan.ExpectedBytes) != frameCount*frameBytes {
+			return multisensorstream.SourceLimits{}, capturestream.MirrorConfig{},
+				errors.New("aggregate finite radar plan has invalid frame accounting")
+		}
+		payloadBytes = uint64(plan.ExpectedBytes)
+	}
+	limits := multisensorstream.SourceLimits{
+		MaxItems: frameCount, MaxItemBytes: frameBytes, MaxPayloadBytes: payloadBytes,
+	}
+	if err := limits.Validate(); err != nil {
+		return multisensorstream.SourceLimits{}, capturestream.MirrorConfig{},
+			fmt.Errorf("aggregate radar stream limits: %w", err)
+	}
+	return limits, mirrorConfig, nil
 }
 
 func (capture *activeMultisensorCapture) Arm(ctx context.Context) error {

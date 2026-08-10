@@ -108,7 +108,7 @@ func runDebugCaptureCaptureWithDependencies(
 	serialBase := flags.String("d2xx-serial", "", "D2XX serial-number base for the A/B interfaces")
 	descriptionBase := flags.String("d2xx-description", "", "D2XX description base for the A/B interfaces")
 	sop2Reset := flags.Bool("sop2-reset", false, "set SOP2 with D2XX C/D and pulse target reset before Enhanced COM")
-	streamOutput := flags.Bool("stream", false, "also emit capture-stream v1 on stdout")
+	streamOutput := flags.Bool("stream", false, "also emit the radar or aggregate stream on stdout")
 	multisensorPlanPath := flags.String("multisensor-plan", "", "external sensor plan JSON file")
 	var frameCount optionalFrameCount
 	flags.Var(&frameCount, "frame-count", "override frameCfg count (0 means until gracefully stopped)")
@@ -178,15 +178,13 @@ func runDebugCaptureCaptureWithDependencies(
 		return err
 	}
 	plan := prepared.plan
-	if plan.InfiniteFrames {
-		if !*stopOnStdinEOF {
-			return usageError{message: "an infinite capture requires --stop-on-stdin-eof for graceful publication"}
-		}
-		if *streamOutput {
-			return usageError{message: "--stream requires a finite frame count"}
-		}
-	} else if *stopOnStdinEOF {
-		return usageError{message: "--stop-on-stdin-eof is valid only when the effective frame count is 0"}
+	if err := validateCaptureDurationControls(
+		plan,
+		*stopOnStdinEOF,
+		*streamOutput,
+		*multisensorPlanPath,
+	); err != nil {
+		return err
 	}
 	linkPlan, err := dependencies.buildLinkPlan(device, plan)
 	if err != nil {
@@ -362,15 +360,8 @@ func preflightDebugCaptureBounds(
 			options.fpga.DataFormat,
 		)}
 	}
-	if plan.ExpectedBytes > 0 {
-		if options.receiver.MaxOutputBytes < plan.ExpectedBytes {
-			return usageError{message: fmt.Sprintf(
-				"--max-bytes=%d is smaller than the CFG-derived finite capture size %d",
-				options.receiver.MaxOutputBytes,
-				plan.ExpectedBytes,
-			)}
-		}
-		options.receiver.MaxOutputBytes = plan.ExpectedBytes
+	if err := constrainCaptureOutputBytes(plan, &options.receiver); err != nil {
+		return err
 	}
 	requiredIdleTimeout, err := session.MinimumReceiverIdleTimeout(plan)
 	if err != nil {
@@ -428,7 +419,8 @@ func runDebugCaptureHardware(
 	ctx, stopSignal := dependencies.context()
 	defer stopSignal()
 	output, aggregate, err := createCaptureDestination(
-		ctx, outputPath, multisensorPlanPath, prepared, producerStderr, streamStdout, stopSignal,
+		ctx, outputPath, multisensorPlanPath, prepared, dcaOptions.receiver.MaxOutputBytes,
+		producerStderr, streamStdout, stopSignal,
 	)
 	if err != nil {
 		return stats, err

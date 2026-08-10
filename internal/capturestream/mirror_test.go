@@ -152,6 +152,78 @@ func TestMirrorSplitsCrossFrameWriterAtFragments(t *testing.T) {
 	}
 }
 
+func TestOpenEndedMirrorSealsObservedWholeFrames(t *testing.T) {
+	output := newMirrorTestOutput(t)
+	var framesMu sync.Mutex
+	var frames [][]byte
+	mirror, err := NewMirror(
+		output,
+		frameSinkFunc(func(_ context.Context, _ uint64, payload []byte) error {
+			framesMu.Lock()
+			frames = append(frames, bytes.Clone(payload))
+			framesMu.Unlock()
+			return nil
+		}),
+		func() {},
+		BoundedOpenEndedMirrorConfig(4, 12),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mirror.Abort)
+
+	if _, err := mirror.WriteAt([]byte{0, 1, 2, 3, 4, 5, 6, 7}, 0); err != nil {
+		t.Fatal(err)
+	}
+	sealMirror(t, mirror)
+
+	framesMu.Lock()
+	defer framesMu.Unlock()
+	if len(frames) != 2 ||
+		!bytes.Equal(frames[0], []byte{0, 1, 2, 3}) ||
+		!bytes.Equal(frames[1], []byte{4, 5, 6, 7}) {
+		t.Fatalf("open-ended frames = %v", frames)
+	}
+}
+
+func TestOpenEndedMirrorRejectsEmptyPartialAndOverLimit(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		write  []byte
+		offset int64
+		seal   bool
+	}{
+		{name: "empty", seal: true},
+		{name: "partial", write: []byte{0, 1, 2, 3, 4, 5}, seal: true},
+		{name: "over limit", write: []byte{8, 9, 10, 11}, offset: 8},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output := newMirrorTestOutput(t)
+			mirror, err := NewMirror(
+				output,
+				frameSinkFunc(func(_ context.Context, _ uint64, _ []byte) error { return nil }),
+				func() {},
+				BoundedOpenEndedMirrorConfig(4, 8),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(mirror.Abort)
+			if len(test.write) != 0 {
+				_, err = mirror.WriteAt(test.write, test.offset)
+			}
+			if err == nil && test.seal {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				err = mirror.Seal(ctx)
+			}
+			if err == nil || !errors.Is(err, ErrMirrorIntegrity) {
+				t.Fatalf("open-ended %s error = %v", test.name, err)
+			}
+		})
+	}
+}
+
 func TestMirrorSlowSinkFailsFastAtBoundedBuffer(t *testing.T) {
 	output := newMirrorTestOutput(t)
 	entered := make(chan struct{})

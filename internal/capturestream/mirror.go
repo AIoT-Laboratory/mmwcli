@@ -32,9 +32,10 @@ type FrameSink interface {
 }
 
 type MirrorConfig struct {
-	FrameBytes  int64
-	FrameCount  uint64
-	BufferBytes int64
+	FrameBytes    int64
+	FrameCount    uint64
+	MaxFrameCount uint64
+	BufferBytes   int64
 }
 
 func DefaultMirrorConfig(frameBytes int64, frameCount uint64) MirrorConfig {
@@ -47,6 +48,16 @@ func DefaultMirrorConfig(frameBytes int64, frameCount uint64) MirrorConfig {
 		FrameCount:  frameCount,
 		BufferBytes: bufferBytes,
 	}
+}
+
+// BoundedOpenEndedMirrorConfig accepts an unknown final frame count while
+// retaining an exact whole-frame safety bound derived from maximumBytes.
+func BoundedOpenEndedMirrorConfig(frameBytes, maximumBytes int64) MirrorConfig {
+	config := DefaultMirrorConfig(frameBytes, 0)
+	if frameBytes > 0 && maximumBytes >= frameBytes {
+		config.MaxFrameCount = uint64(maximumBytes / frameBytes)
+	}
+	return config
 }
 
 type mirrorState uint8
@@ -82,10 +93,12 @@ type Mirror struct {
 	sinkContext context.Context
 	sinkCancel  context.CancelFunc
 
-	expectedBytes int64
-	maxSlots      int
-	queue         chan queuedFrame
-	done          chan struct{}
+	expectedBytes    int64
+	frameLimit       uint64
+	sealedFrameCount uint64
+	maxSlots         int
+	queue            chan queuedFrame
+	done             chan struct{}
 
 	mu          sync.Mutex
 	state       mirrorState
@@ -123,10 +136,16 @@ func NewMirror(
 			MaxFramePayloadBytes,
 		)
 	}
+	frameLimit := config.FrameCount
 	if config.FrameCount == 0 {
-		return nil, errors.New("capture stream mirror frame count must be positive")
+		frameLimit = config.MaxFrameCount
+		if frameLimit == 0 {
+			return nil, errors.New("open-ended capture stream mirror frame limit must be positive")
+		}
+	} else if config.MaxFrameCount != 0 {
+		return nil, errors.New("finite capture stream mirror must not set a separate frame limit")
 	}
-	if config.FrameCount > uint64(math.MaxInt64/config.FrameBytes) {
+	if frameLimit > uint64(math.MaxInt64/config.FrameBytes) {
 		return nil, errors.New("capture stream mirror expected byte count exceeds int64")
 	}
 	if config.BufferBytes < config.FrameBytes {
@@ -148,8 +167,8 @@ func NewMirror(
 	if maxSlots > maxMirrorFrameSlots {
 		maxSlots = maxMirrorFrameSlots
 	}
-	if maxSlots > int64(config.FrameCount) {
-		maxSlots = int64(config.FrameCount)
+	if maxSlots > int64(frameLimit) {
+		maxSlots = int64(frameLimit)
 	}
 	if maxSlots <= 0 {
 		return nil, errors.New("capture stream mirror has no frame slots")
@@ -162,7 +181,8 @@ func NewMirror(
 		config:        config,
 		sinkContext:   sinkContext,
 		sinkCancel:    sinkCancel,
-		expectedBytes: int64(config.FrameCount) * config.FrameBytes,
+		expectedBytes: int64(frameLimit) * config.FrameBytes,
+		frameLimit:    frameLimit,
 		maxSlots:      int(maxSlots),
 		queue:         make(chan queuedFrame, int(maxSlots)),
 		done:          make(chan struct{}),
@@ -271,12 +291,16 @@ func (mirror *Mirror) Seal(ctx context.Context) error {
 			mirror.cancelCapture()
 			return err
 		}
-		if mirror.nextEmit != mirror.config.FrameCount || len(mirror.slots) != 0 {
+		sealedFrameCount := mirror.config.FrameCount
+		if sealedFrameCount == 0 {
+			sealedFrameCount = mirror.nextEmit
+		}
+		if sealedFrameCount == 0 || mirror.nextEmit != sealedFrameCount || len(mirror.slots) != 0 {
 			err := fmt.Errorf(
 				"%w: emitted=%d expected=%d incompleteFrames=%d",
 				ErrMirrorIntegrity,
 				mirror.nextEmit,
-				mirror.config.FrameCount,
+				sealedFrameCount,
 				len(mirror.slots),
 			)
 			mirror.failLocked(err)
@@ -285,6 +309,7 @@ func (mirror *Mirror) Seal(ctx context.Context) error {
 			mirror.cancelCapture()
 			return err
 		}
+		mirror.sealedFrameCount = sealedFrameCount
 		mirror.state = mirrorSealing
 		mirror.closeQueueLocked()
 	case mirrorSealing:
@@ -320,12 +345,12 @@ func (mirror *Mirror) Seal(ctx context.Context) error {
 			mirror.sinkCancel()
 			return err
 		}
-		if mirror.delivered != mirror.config.FrameCount || mirror.allocated != 0 {
+		if mirror.delivered != mirror.sealedFrameCount || mirror.allocated != 0 {
 			err := fmt.Errorf(
 				"%w: delivered=%d expected=%d allocated=%d",
 				ErrMirrorIntegrity,
 				mirror.delivered,
-				mirror.config.FrameCount,
+				mirror.sealedFrameCount,
 				mirror.allocated,
 			)
 			mirror.failLocked(err)
@@ -482,7 +507,7 @@ func (mirror *Mirror) planWriteLocked(
 }
 
 func (mirror *Mirror) enqueueCompleteLocked() error {
-	for mirror.nextEmit < mirror.config.FrameCount {
+	for mirror.nextEmit < mirror.frameLimit {
 		frame := mirror.slots[mirror.nextEmit]
 		if frame == nil || !frame.complete() {
 			return nil

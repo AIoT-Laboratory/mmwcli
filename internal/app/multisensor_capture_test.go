@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -65,7 +66,8 @@ func TestActiveMultisensorStreamPublishesRadarAndCameraItems(t *testing.T) {
 	}
 	readResult := readAggregateStream(reader)
 	stream, err := startMultisensorStream(
-		context.Background(), writer, radarDirectory, prepared, plan, sessionID, func() {},
+		context.Background(), writer, radarDirectory, prepared, prepared.plan.ExpectedBytes,
+		plan, sessionID, func() {},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -174,6 +176,131 @@ func TestActiveMultisensorStreamPublishesRadarAndCameraItems(t *testing.T) {
 	}
 }
 
+func TestOpenEndedMultisensorStreamEndsAtObservedRadarFrameCount(t *testing.T) {
+	count := uint16(0)
+	prepared, err := loadCaptureOutputPlanWithFrameCount(
+		radar.StudioCLI,
+		writeValidConfig(t),
+		&count,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, radarDirectory, _ := createAggregateTestDirectories(t, prepared)
+	sessionID, err := multisensor.NewSessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readResult := readAggregateStream(reader)
+	stream, err := startMultisensorStream(
+		context.Background(),
+		writer,
+		radarDirectory,
+		prepared,
+		3*prepared.plan.BytesPerFrame,
+		aggregateStreamTestPlan(),
+		sessionID,
+		func() {},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.adapter.WriteRadarStart(context.Background(), multisensorstream.RadarStart{
+		SourceID: aggregateRadarSourceID, HostLowerNS: 1, HostUpperNS: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.radarSink.ReleaseRadarStart(); err != nil {
+		t.Fatal(err)
+	}
+	payload := make([]byte, 2*int(prepared.plan.BytesPerFrame))
+	if written, err := stream.mirror.WriteAt(payload, 0); err != nil || written != len(payload) {
+		t.Fatalf("write open-ended radar mirror = %d, %v", written, err)
+	}
+	sealCtx, cancelSeal := context.WithTimeout(context.Background(), time.Second)
+	if err := stream.mirror.Seal(sealCtx); err != nil {
+		cancelSeal()
+		t.Fatal(err)
+	}
+	cancelSeal()
+	if err := stream.adapter.EndSource(
+		context.Background(),
+		aggregateRadarSourceID,
+		multisensorstream.OutcomeComplete,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.adapter.EndSource(
+		context.Background(),
+		"camera-0",
+		multisensorstream.OutcomeOmitted,
+	); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("published-session"))
+	if err := stream.adapter.Commit(context.Background(), multisensorstream.SessionArtifact{
+		SizeBytes: uint64(len("published-session")), SHA256: digest,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := awaitAggregateStream(t, readResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var radarItems int
+	var radarEnd struct {
+		SourceID  string `json:"source_id"`
+		ItemCount uint64 `json:"item_count"`
+	}
+	var session struct {
+		Sources []multisensorstream.Source `json:"sources"`
+	}
+	for _, record := range records {
+		switch record.Type {
+		case multisensorstream.RecordSession:
+			if err := json.Unmarshal(record.Metadata, &session); err != nil {
+				t.Fatal(err)
+			}
+		case multisensorstream.RecordItem:
+			var item struct {
+				SourceID string `json:"source_id"`
+			}
+			if err := json.Unmarshal(record.Metadata, &item); err != nil {
+				t.Fatal(err)
+			}
+			if item.SourceID == aggregateRadarSourceID {
+				radarItems++
+			}
+		case multisensorstream.RecordEnd:
+			var end struct {
+				SourceID  string `json:"source_id"`
+				ItemCount uint64 `json:"item_count"`
+			}
+			if err := json.Unmarshal(record.Metadata, &end); err != nil {
+				t.Fatal(err)
+			}
+			if end.SourceID == aggregateRadarSourceID {
+				radarEnd = end
+			}
+		}
+	}
+	if len(session.Sources) == 0 || session.Sources[0].Limits.MaxItems != 3 ||
+		session.Sources[0].Limits.MaxPayloadBytes != uint64(3*prepared.plan.BytesPerFrame) {
+		t.Fatalf("open-ended radar SESSION limits = %+v", session.Sources)
+	}
+	if radarItems != 2 || radarEnd.SourceID != aggregateRadarSourceID || radarEnd.ItemCount != 2 {
+		t.Fatalf("open-ended radar items=%d END=%+v", radarItems, radarEnd)
+	}
+}
+
 func TestActiveMultisensorStreamRequiredFailureEmitsAbortAndEOF(t *testing.T) {
 	prepared, err := loadCaptureOutputPlan(radar.StudioCLI, writeValidConfig(t))
 	if err != nil {
@@ -190,7 +317,8 @@ func TestActiveMultisensorStreamRequiredFailureEmitsAbortAndEOF(t *testing.T) {
 	}
 	readResult := readAggregateStream(reader)
 	stream, err := startMultisensorStream(
-		context.Background(), writer, radarDirectory, prepared, aggregateStreamTestPlan(), sessionID, func() {},
+		context.Background(), writer, radarDirectory, prepared, prepared.plan.ExpectedBytes,
+		aggregateStreamTestPlan(), sessionID, func() {},
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"mmwcli/internal/dca"
 	"mmwcli/internal/radar"
 )
 
@@ -91,5 +92,83 @@ func TestLoadCaptureOutputPlanArchivesOverriddenFrameCount(t *testing.T) {
 		"frameCfg 0 0 1 0 10 1 0",
 	) {
 		t.Fatalf("effective capture plan was not archived:\n%s", prepared.configSnapshot)
+	}
+}
+
+func TestCaptureDurationControlsAllowOnlyOpenEndedAggregateStream(t *testing.T) {
+	config := writeValidConfig(t)
+	finite, err := loadCaptureOutputPlan(radar.StudioCLI, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := uint16(0)
+	openEnded, err := loadCaptureOutputPlanWithFrameCount(radar.StudioCLI, config, &count)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name        string
+		plan        radar.CapturePlan
+		stop        bool
+		stream      bool
+		multisensor string
+		match       string
+	}{
+		{name: "missing stop", plan: openEnded.plan, match: "requires --stop-on-stdin-eof"},
+		{
+			name: "radar-only stream", plan: openEnded.plan, stop: true, stream: true,
+			match: "requires --multisensor-plan",
+		},
+		{
+			name: "aggregate stream", plan: openEnded.plan, stop: true, stream: true,
+			multisensor: "camera.json",
+		},
+		{name: "finite stop", plan: finite.plan, stop: true, match: "valid only"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateCaptureDurationControls(test.plan, test.stop, test.stream, test.multisensor)
+			if test.match == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.match) {
+				t.Fatalf("duration control error = %v, want %q", err, test.match)
+			}
+		})
+	}
+}
+
+func TestConstrainCaptureOutputBytesUsesExactFiniteAndWholeFrameOpenEndedBounds(t *testing.T) {
+	config := writeValidConfig(t)
+	finite, err := loadCaptureOutputPlan(radar.StudioCLI, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finiteReceiver := dca.ReceiverConfig{MaxOutputBytes: finite.plan.ExpectedBytes + 1}
+	if err := constrainCaptureOutputBytes(finite.plan, &finiteReceiver); err != nil {
+		t.Fatal(err)
+	}
+	if finiteReceiver.MaxOutputBytes != finite.plan.ExpectedBytes {
+		t.Fatalf("finite maximum bytes = %d", finiteReceiver.MaxOutputBytes)
+	}
+
+	count := uint16(0)
+	openEnded, err := loadCaptureOutputPlanWithFrameCount(radar.StudioCLI, config, &count)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tooSmall := dca.ReceiverConfig{MaxOutputBytes: openEnded.plan.BytesPerFrame - 1}
+	if err := constrainCaptureOutputBytes(openEnded.plan, &tooSmall); err == nil ||
+		!strings.Contains(err.Error(), "smaller than one CFG-derived radar frame") {
+		t.Fatalf("open-ended byte bound error = %v", err)
+	}
+	wholeFrames := dca.ReceiverConfig{MaxOutputBytes: 3 * openEnded.plan.BytesPerFrame}
+	if err := constrainCaptureOutputBytes(openEnded.plan, &wholeFrames); err != nil {
+		t.Fatal(err)
+	}
+	if wholeFrames.MaxOutputBytes != 3*openEnded.plan.BytesPerFrame {
+		t.Fatalf("open-ended maximum bytes = %d", wholeFrames.MaxOutputBytes)
 	}
 }
