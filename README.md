@@ -1,7 +1,7 @@
 # mmwcli
 
 `mmwcli` captures raw ADC data from TI xWR16xx, xWR18xx, and xWR68xx devices through
-DCA1000. It publishes finite radar or synchronized radar-plus-camera sessions and can mirror both
+DCA1000. It publishes bounded radar or synchronized radar-plus-camera sessions and can mirror both
 forms as live streams for inference. It has no GUI, MATLAB, Lua host, mmWave Studio runtime, or
 signal-processing pipeline.
 
@@ -106,7 +106,8 @@ mmwcli studio-cli capture CFG OUTDIR --port PORT --frame-count 0 --stop-on-stdin
 
 Closing stdin is a graceful stop request: mmwcli stops the radar, drains and stops DCA1000, validates
 whole ADC frames and any required sensor source, then publishes. Interrupting or killing the process
-still aborts publication. The finite capture-stream protocol (`--stream`) is unavailable in this mode.
+still aborts publication. Radar-only capture-stream v1 remains finite; an open-ended `--stream`
+capture therefore also requires `--multisensor-plan`.
 
 ### xWR16xx, xWR18xx, and xWR68xx debug mode
 
@@ -155,9 +156,9 @@ mmwcli debug-cli capture CFG OUTDIR --family xwr68xx ... \
 ```
 
 Closing stdin requests a normal frame stop, bounded DCA drain, whole-frame validation, and
-transactional publication. Interrupting or killing the process remains an abort. The current
-`capture-stream v1` and aggregate live-stream encoder require a finite radar frame count, so
-`--stream` is rejected for open-ended captures.
+transactional publication. Interrupting or killing the process remains an abort. Radar-only
+capture-stream v1 requires a finite radar frame count. Open-ended streaming uses the bounded
+aggregate multi-sensor stream and therefore requires `--multisensor-plan`.
 
 ### `studio_cli` REPL
 
@@ -188,6 +189,17 @@ programs therefore do not need to implement the control/data protocol.
 `--stream` may be combined with `--multisensor-plan`: stdout then carries the aggregate radar and
 camera stream, while `OUTDIR` remains the authoritative training capture.
 
+For an open-ended synchronized stream, combine the aggregate plan with stdin EOF control:
+
+```text
+mmwcli studio-cli capture CFG OUTDIR --port PORT --frame-count 0 \
+  --stop-on-stdin-eof --multisensor-plan camera.json --stream
+```
+
+The aggregate SESSION records finite source safety maxima derived from `--max-bytes`. Complete radar
+ITEM records are emitted as capture proceeds; radar END binds their actual count after graceful stop.
+Zero-frame, partial-frame, limit-exceeding, aborted, or uncommitted streams are invalid.
+
 Use [`mmwcore.open_multisensor_capture`](https://github.com/AIoT-Laboratory/mmwcore) for lazy
 offline training data and `mmwcore.open_multisensor_stream` for a caller-owned live stream.
 Radar-only directories and streams use `mmwcore.open_capture` and `mmwcore.open_capture_stream`.
@@ -206,7 +218,9 @@ radar-start interval so radar and delivery-observed camera items share one host-
   positive whole number of frames. Gaps, overlaps, partial frames, short finite data, and extra finite
   data fail.
 - Both capture routes stage `OUTDIR.part` and publish a strict capture-session v1 directory as `OUTDIR` without overwrite only after capture and cleanup succeed. It contains `adc.bin`, the exact `radar.cfg`, and `capture.json`; failure retains the partial directory.
-- `--stream` additionally mirrors provisional capture-stream v1 records on binary stdout while diagnostics remain on stderr. The published session directory remains authoritative.
+- Radar-only `--stream` mirrors provisional finite capture-stream v1 records on binary stdout while
+  diagnostics remain on stderr. Open-ended streaming requires the aggregate multi-sensor contract.
+  The published session directory remains authoritative.
 - `--multisensor-plan` adds bounded external sources to the same transaction. With `--stream`,
   provisional radar and sensor items become trustworthy only after source outcomes, global COMMIT,
   and EOF.

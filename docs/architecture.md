@@ -127,14 +127,18 @@ binary capture-stream v1 records. Diagnostics remain on stderr, stream failure c
 capture context, and terminal COMMIT or ABORT is followed by EOF. The published session directory
 remains the authoritative artifact; this does not move hardware ownership out of mmwcli.
 Capture-stream v1 declares an exact positive frame count in SESSION and is therefore intentionally
-finite; an open-ended capture requires a later stream contract rather than treating zero as an
-unknown count.
+finite. An open-ended radar-only stream is rejected rather than treating zero as an unknown count.
 
 Multi-sensor capture is implemented as a separate aggregate contract; see
 [multi-sensor synchronization](multisensor-sync.md). `--multisensor-plan` launches bounded external
 producers behind the radar lifecycle, publishes one no-overwrite aggregate directory, and may use
 `--stream` to emit `mmwcli.multisensor_stream.v1`. This does not extend capture-stream v1 or move
 device/process ownership into mmwcore.
+The aggregate SESSION source limits are finite safety maxima derived from the DCA output byte limit,
+not an exact-count promise. Its bounded
+Mirror can emit complete radar ITEM records during an open-ended capture; radar END records the
+actual whole-frame count after graceful stop. Empty, partial, over-limit, aborted, or uncommitted
+streams remain invalid.
 
 ## Multi-sensor lifecycle
 

@@ -1,6 +1,6 @@
 # Multi-sensor synchronization
 
-Status: implemented for finite software-barrier radar-plus-camera capture. mmwcli provides the
+Status: implemented for bounded software-barrier radar-plus-camera capture. mmwcli provides the
 coordinator, transactional directory, fixed index, controlled producer protocol, fixed-frame
 camera adapter, and aggregate live stream. mmwcore provides caller-owned offline and live readers.
 External-trigger and PTP grades remain planned. This contract does not change
@@ -8,7 +8,7 @@ External-trigger and PTP grades remain planned. This contract does not change
 
 ## Boundaries
 
-`mmwcli` is the acquisition coordinator. It owns the radar lifecycle, the finite session
+`mmwcli` is the acquisition coordinator. It owns the radar lifecycle, the bounded session
 transaction, cancellation, bounded buffering, and controlled external producer processes. The
 built-in camera integration is a strict external producer contract over caller-selected inherited
 handles. The repository does not embed a camera SDK, enumerate cameras, add a camera-specific CGo
@@ -163,9 +163,11 @@ its upper bound; uncertainty includes observation width, fit residual, drift all
 latency, and quantization.
 
 DCA1000 packet arrival time and camera pipe arrival time are transport observations, never radar
-sample or camera exposure time. Software-triggered radar frame times are derived from the bounded
-host trigger interval and declared frame period, so their uncertainty cannot be smaller than that
-start interval.
+sample or camera exposure time. For `debug-cli`, the host intervals around its validated RF
+frame-start event and the DCA first packet are conservatively intersected; `studio-cli` retains the
+command-to-first-packet interval. Software-triggered later frame times use that bounded start
+interval and the declared frame period, so their uncertainty cannot be smaller than the available
+start evidence.
 
 An ordinary camera may use `delivery_observed`. Its producer sends zero clock fields and mmwcli
 assigns a host-relative nanosecond tick only after the complete ITEM arrives. This is a delivery
@@ -239,6 +241,11 @@ and prints either plan without starting a process or hardware. Either radar capt
 `--multisensor-plan PLAN`; adding `--stream` emits the aggregate stream on binary stdout. The
 generated adapters work with ffmpeg, GStreamer, or a vendor CLI that writes exact-size raw frames or
 concatenated complete JPEG images.
+
+An open-ended radar capture combines `--frame-count 0 --stop-on-stdin-eof` with
+`--multisensor-plan PLAN --stream`. Aggregate SESSION limits remain finite safety maxima, while
+radar END binds the actual whole-frame count observed at graceful stop. Radar-only capture-stream
+v1 remains finite.
 
 mmwcore opens published training data with `open_multisensor_capture`, opens the nested radar
 capture through `source.open_radar_capture`, and pairs conservative intervals with `causal_pairs`.
