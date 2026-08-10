@@ -71,6 +71,34 @@ type fakeFiniteFrameRadar struct {
 	awaitHook  func(context.Context) error
 }
 
+type fakeRadarFrameStartInterval struct {
+	*fakeRadar
+	lower time.Time
+	upper time.Time
+	err   error
+}
+
+func (f *fakeRadarFrameStartInterval) RadarFrameStartInterval() (time.Time, time.Time, error) {
+	return f.lower, f.upper, f.err
+}
+
+type fakeObservedFrameStartRadar struct {
+	*fakeFiniteFrameRadar
+	lower time.Time
+	upper time.Time
+}
+
+func (f *fakeObservedFrameStartRadar) StartContext(ctx context.Context) (string, error) {
+	f.lower = time.Now()
+	response, err := f.fakeFiniteFrameRadar.fakeRadar.StartContext(ctx)
+	f.upper = time.Now()
+	return response, err
+}
+
+func (f *fakeObservedFrameStartRadar) RadarFrameStartInterval() (time.Time, time.Time, error) {
+	return f.lower, f.upper, nil
+}
+
 func (f *fakeFiniteFrameRadar) AwaitFiniteFrameEndContext(ctx context.Context) (string, error) {
 	*f.events = append(*f.events, "frameEnd")
 	f.awaitCalls++
@@ -863,6 +891,108 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 	}
 	if _, err := os.Stat(finalPath); err != nil {
 		t.Fatalf("participant capture was not committed: %v", err)
+	}
+}
+
+func TestParticipantUsesControllerObservedRadarFrameStartInterval(t *testing.T) {
+	plan := sessionTestPlan(t)
+	output, err := capturefile.Create(filepath.Join(t.TempDir(), "participant-event.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	participant := &fakeObservedParticipant{fakeParticipant: &fakeParticipant{events: &events}}
+	radarControl := &fakeObservedFrameStartRadar{fakeFiniteFrameRadar: &fakeFiniteFrameRadar{
+		fakeRadar: &fakeRadar{events: &events},
+	}}
+	receiver := &fakeReceiver{
+		events: &events,
+		stats: dca.CaptureStats{
+			PacketsReceived: 1,
+			OutputBytes:     plan.ExpectedBytes,
+		},
+	}
+	options := DefaultOptions()
+	options.Participant = participant
+
+	if _, err := Run(
+		context.Background(),
+		radarControl,
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		plan,
+		output,
+		options,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(participant.windows) != 1 ||
+		!participant.windows[0].lower.Equal(radarControl.lower) ||
+		!participant.windows[0].upper.Equal(radarControl.upper) {
+		t.Fatalf(
+			"participant frame-start window = %#v, controller = [%v,%v]",
+			participant.windows,
+			radarControl.lower,
+			radarControl.upper,
+		)
+	}
+	if participant.windows[0].upper.After(receiver.stats.FirstPacketAt) {
+		t.Fatalf(
+			"controller event did not tighten first-packet upper bound: event=%v packet=%v",
+			participant.windows[0].upper,
+			receiver.stats.FirstPacketAt,
+		)
+	}
+}
+
+func TestResolveRadarFrameStartIntervalUsesControllerEventIntersection(t *testing.T) {
+	events := []string{}
+	commandLower := time.Now()
+	eventLower := commandLower.Add(time.Millisecond)
+	eventUpper := commandLower.Add(2 * time.Millisecond)
+	firstPacketUpper := commandLower.Add(3 * time.Millisecond)
+	fallbackLower, fallbackUpper, err := resolveRadarFrameStartInterval(
+		&fakeRadar{events: &events},
+		commandLower,
+		firstPacketUpper,
+	)
+	if err != nil || !fallbackLower.Equal(commandLower) ||
+		!fallbackUpper.Equal(firstPacketUpper) {
+		t.Fatalf("fallback frame-start interval = [%v,%v], %v", fallbackLower, fallbackUpper, err)
+	}
+	radarControl := &fakeRadarFrameStartInterval{
+		fakeRadar: &fakeRadar{events: &events},
+		lower:     eventLower,
+		upper:     eventUpper,
+	}
+	lower, upper, err := resolveRadarFrameStartInterval(
+		radarControl,
+		commandLower,
+		firstPacketUpper,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lower.Equal(eventLower) || !upper.Equal(eventUpper) {
+		t.Fatalf("resolved frame-start interval = [%v,%v]", lower, upper)
+	}
+}
+
+func TestResolveRadarFrameStartIntervalRejectsDisjointEvidence(t *testing.T) {
+	events := []string{}
+	commandLower := time.Now()
+	firstPacketUpper := commandLower.Add(time.Millisecond)
+	radarControl := &fakeRadarFrameStartInterval{
+		fakeRadar: &fakeRadar{events: &events},
+		lower:     firstPacketUpper.Add(time.Millisecond),
+		upper:     firstPacketUpper.Add(2 * time.Millisecond),
+	}
+	if _, _, err := resolveRadarFrameStartInterval(
+		radarControl,
+		commandLower,
+		firstPacketUpper,
+	); err == nil || !strings.Contains(err.Error(), "do not overlap") {
+		t.Fatalf("disjoint frame-start interval error = %v", err)
 	}
 }
 

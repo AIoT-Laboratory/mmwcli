@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"mmwcli/internal/d2xx"
 	"mmwcli/internal/radar"
@@ -15,6 +16,7 @@ import (
 )
 
 var _ session.Radar = (*Controller)(nil)
+var _ session.RadarFrameStartIntervalProvider = (*Controller)(nil)
 
 func TestOpenControllerUsesFixedTransportOrder(t *testing.T) {
 	var calls []string
@@ -332,6 +334,10 @@ func TestControllerStartAndStopUseSingleFrameTriggers(t *testing.T) {
 	if _, err := controller.StartContext(context.Background()); err != nil {
 		t.Fatalf("StartContext: %v", err)
 	}
+	lower, upper, err := controller.RadarFrameStartInterval()
+	if err != nil || lower.IsZero() || upper.Before(lower) || time.Since(upper) < 0 {
+		t.Fatalf("frame-start interval = [%v,%v], %v", lower, upper, err)
+	}
 	if _, err := controller.StopContext(context.Background()); err != nil {
 		t.Fatalf("StopContext: %v", err)
 	}
@@ -346,6 +352,23 @@ func TestControllerStartAndStopUseSingleFrameTriggers(t *testing.T) {
 	}
 	if !reflect.DeepEqual(link.events, wantEvents) {
 		t.Fatalf("frame events = %v, want %v", link.events, wantEvents)
+	}
+}
+
+func TestControllerFrameStartIntervalUnavailableBeforeSuccessfulStart(t *testing.T) {
+	controller := newFakeController(mustDebugControllerPlan(t), &fakeControllerLink{})
+	controller.state = controllerStateConfigured
+	if _, _, err := controller.RadarFrameStartInterval(); err == nil {
+		t.Fatal("frame-start interval unexpectedly available before start")
+	}
+	controller.link = &fakeControllerLink{executeHook: func(mmWaveLinkCommand) (mmWaveLinkMessage, error) {
+		return mmWaveLinkMessage{}, errors.New("injected trigger failure")
+	}}
+	if _, err := controller.StartContext(context.Background()); err == nil {
+		t.Fatal("StartContext unexpectedly succeeded")
+	}
+	if _, _, err := controller.RadarFrameStartInterval(); err == nil {
+		t.Fatal("frame-start interval unexpectedly available after failed start")
 	}
 }
 

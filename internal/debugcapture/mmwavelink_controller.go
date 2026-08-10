@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"mmwcli/internal/radar"
 )
@@ -83,14 +84,17 @@ const (
 // Controller implements the radar lifecycle used by a capture session. It is
 // bound to the immutable Plan supplied to OpenController.
 type Controller struct {
-	mu          sync.Mutex
-	link        controllerLink
-	transport   controllerTransport
-	plan        Plan
-	diagnostics mmWaveLinkDeviceDiagnostics
-	state       controllerState
-	closed      bool
-	closeErr    error
+	mu                 sync.Mutex
+	link               controllerLink
+	transport          controllerTransport
+	plan               Plan
+	diagnostics        mmWaveLinkDeviceDiagnostics
+	state              controllerState
+	frameStartLower    time.Time
+	frameStartUpper    time.Time
+	frameStartObserved bool
+	closed             bool
+	closeErr           error
 }
 
 // OpenController optionally performs one explicit SOP2 target reset, submits
@@ -323,11 +327,38 @@ func (controller *Controller) StartContext(ctx context.Context) (string, error) 
 		return "", fmt.Errorf("debug-cli start requires an applied, stopped configuration; state=%d", controller.state)
 	}
 	controller.state = controllerStateUnknown
+	controller.frameStartLower = time.Time{}
+	controller.frameStartUpper = time.Time{}
+	controller.frameStartObserved = false
+	frameStartLower := time.Now()
 	if err := controller.frameTriggerLocked(ctx, true, mmWaveLinkRFFrameStartEventID); err != nil {
 		return "", targetStateFailure(fmt.Errorf("start debug-cli frame: %w", err))
 	}
+	controller.frameStartLower = frameStartLower
+	controller.frameStartUpper = time.Now()
+	controller.frameStartObserved = true
 	controller.state = controllerStateRunning
 	return "debug-cli frame started", nil
+}
+
+// RadarFrameStartInterval returns the host interval that brackets the
+// validated mmWaveLink RF frame-start event from trigger issue to event receipt.
+func (controller *Controller) RadarFrameStartInterval() (time.Time, time.Time, error) {
+	if controller == nil {
+		return time.Time{}, time.Time{}, errors.New(
+			"debug-cli RF frame-start interval is unavailable",
+		)
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if !controller.frameStartObserved ||
+		controller.frameStartLower.IsZero() ||
+		controller.frameStartUpper.Before(controller.frameStartLower) {
+		return time.Time{}, time.Time{}, errors.New(
+			"debug-cli RF frame-start interval is unavailable",
+		)
+	}
+	return controller.frameStartLower, controller.frameStartUpper, nil
 }
 
 func (controller *Controller) StartWithoutReconfigurationContext(ctx context.Context) (string, error) {

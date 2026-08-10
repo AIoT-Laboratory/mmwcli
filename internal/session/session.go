@@ -62,11 +62,18 @@ type Participant interface {
 	Finish(context.Context, bool) error
 }
 
-// RadarFrameStartObserver is an optional Participant capability. The lower
-// host timestamp precedes the radar start command; the upper timestamp is the
-// first received ADC packet. Together they conservatively bracket frame start.
+// RadarFrameStartObserver is an optional Participant capability. The host
+// interval conservatively brackets radar frame start using the strongest
+// controller and DCA evidence available to the session.
 type RadarFrameStartObserver interface {
 	RadarFrameStartObserved(lower, upper time.Time)
+}
+
+// RadarFrameStartIntervalProvider optionally supplies a controller-observed
+// interval around the physical frame-start event. Session intersects it with
+// the command-to-first-packet interval instead of treating either as exact.
+type RadarFrameStartIntervalProvider interface {
+	RadarFrameStartInterval() (lower, upper time.Time, err error)
 }
 
 // CleanupError marks a failure that occurred while converging hardware or
@@ -495,7 +502,15 @@ func Run(
 	}
 	firstPacketAt := receiver.Stats().FirstPacketAt
 	if observer, ok := participant.(RadarFrameStartObserver); ok && !firstPacketAt.IsZero() {
-		observer.RadarFrameStartObserved(radarStartIssuedAt, firstPacketAt)
+		lower, upper, intervalErr := resolveRadarFrameStartInterval(
+			radarControl,
+			radarStartIssuedAt,
+			firstPacketAt,
+		)
+		if intervalErr != nil {
+			return stats, intervalErr
+		}
+		observer.RadarFrameStartObserved(lower, upper)
 	}
 	if plan.InfiniteFrames {
 		if options.StopRequested == nil {
@@ -550,6 +565,41 @@ func Run(
 		return stats, &finiteCaptureDeadlineError{maximum: maximumStreamingDuration}
 	}
 	return stats, err
+}
+
+func resolveRadarFrameStartInterval(
+	radarControl Radar,
+	commandLower time.Time,
+	firstPacketUpper time.Time,
+) (time.Time, time.Time, error) {
+	if commandLower.IsZero() || firstPacketUpper.IsZero() || firstPacketUpper.Before(commandLower) {
+		return time.Time{}, time.Time{}, errors.New("radar frame-start fallback interval is invalid")
+	}
+	lower := commandLower
+	upper := firstPacketUpper
+	provider, ok := radarControl.(RadarFrameStartIntervalProvider)
+	if !ok {
+		return lower, upper, nil
+	}
+	eventLower, eventUpper, err := provider.RadarFrameStartInterval()
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("read radar frame-start event interval: %w", err)
+	}
+	if eventLower.IsZero() || eventUpper.IsZero() || eventUpper.Before(eventLower) {
+		return time.Time{}, time.Time{}, errors.New("radar frame-start event interval is invalid")
+	}
+	if eventLower.After(lower) {
+		lower = eventLower
+	}
+	if eventUpper.Before(upper) {
+		upper = eventUpper
+	}
+	if upper.Before(lower) {
+		return time.Time{}, time.Time{}, errors.New(
+			"radar frame-start event and DCA first-packet intervals do not overlap",
+		)
+	}
+	return lower, upper, nil
 }
 
 func cleanup(
