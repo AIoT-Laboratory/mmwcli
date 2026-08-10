@@ -233,7 +233,21 @@ func TestRunJPEGReadsRealFFmpegImage2Pipe(t *testing.T) {
 	if err := harness.client.Stop(harness.ctx); err != nil {
 		t.Fatal(err)
 	}
-	nextRecord(t, harness, sensorproducer.FrameEnd)
+	for {
+		record, err := harness.client.Next(harness.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.Type == sensorproducer.FrameEnd {
+			break
+		}
+		if record.Type != sensorproducer.FrameItem {
+			t.Fatalf("record type after STOP = %d, want ITEM or END", record.Type)
+		}
+		if _, err := jpeg.Decode(bytes.NewReader(record.Payload)); err != nil {
+			t.Fatalf("queued FFmpeg ITEM is not a complete JPEG: %v", err)
+		}
+	}
 	nextRecord(t, harness, sensorproducer.FrameEOF)
 	if err := harness.client.Wait(harness.ctx); err != nil {
 		t.Fatal(err)
