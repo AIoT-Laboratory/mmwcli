@@ -35,6 +35,76 @@ lowPower 0 0
 lvdsStreamCfg -1 0 1 0
 `
 
+func TestLoadDebugCaptureOutputPlanAcceptsInfiniteFrames(t *testing.T) {
+	config := writeDebugCaptureConfig(t, strings.Replace(
+		debugCaptureTestConfig,
+		"frameCfg 0 1 32 100 100 1 0",
+		"frameCfg 0 1 32 0 100 1 0",
+		1,
+	))
+	family, err := radar.ParseDeviceFamily("xwr68xx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := loadDebugCaptureOutputPlan(family, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prepared.plan.InfiniteFrames || prepared.plan.NumberOfFrames != 0 ||
+		prepared.plan.ExpectedBytes != 0 {
+		t.Fatalf("infinite debug capture plan = %+v", prepared.plan)
+	}
+}
+
+func TestDebugCaptureInfiniteRequiresGracefulStopControlWithoutHardware(t *testing.T) {
+	config := writeDebugCaptureConfig(t, strings.Replace(
+		debugCaptureTestConfig,
+		"frameCfg 0 1 32 100 100 1 0",
+		"frameCfg 0 1 32 0 100 1 0",
+		1,
+	))
+	output := filepath.Join(t.TempDir(), "capture-session")
+	var hardwareCalls int
+	dependencies := preflightOnlyDebugCaptureDependencies(&hardwareCalls)
+
+	err := runDebugCaptureCaptureWithDependencies(
+		debugCaptureArguments(config, output),
+		io.Discard,
+		io.Discard,
+		dependencies,
+	)
+	if err == nil || !strings.Contains(err.Error(), "requires --stop-on-stdin-eof") {
+		t.Fatalf("infinite debug capture error = %v", err)
+	}
+	if hardwareCalls != 0 {
+		t.Fatalf("infinite preflight made %d hardware call(s)", hardwareCalls)
+	}
+	assertPathDoesNotExist(t, output)
+	assertPathDoesNotExist(t, output+".part")
+}
+
+func TestDebugCaptureFiniteRejectsGracefulStopControlWithoutHardware(t *testing.T) {
+	config := writeDebugCaptureConfig(t, debugCaptureTestConfig)
+	output := filepath.Join(t.TempDir(), "capture-session")
+	var hardwareCalls int
+	dependencies := preflightOnlyDebugCaptureDependencies(&hardwareCalls)
+
+	err := runDebugCaptureCaptureWithDependencies(
+		append(debugCaptureArguments(config, output), "--stop-on-stdin-eof"),
+		io.Discard,
+		io.Discard,
+		dependencies,
+	)
+	if err == nil || !strings.Contains(err.Error(), "valid only when the effective frame count is 0") {
+		t.Fatalf("finite debug capture error = %v", err)
+	}
+	if hardwareCalls != 0 {
+		t.Fatalf("finite preflight made %d hardware call(s)", hardwareCalls)
+	}
+	assertPathDoesNotExist(t, output)
+	assertPathDoesNotExist(t, output+".part")
+}
+
 func TestDebugCaptureCapturePreflightFailureDoesNotCreatePartOrTouchHardware(t *testing.T) {
 	validConfig := writeDebugCaptureConfig(t, debugCaptureTestConfig)
 	invalidConfig := writeDebugCaptureConfig(t, "sensorStart\n")
@@ -352,13 +422,19 @@ func TestDebugCaptureCaptureReportsJoinedPostCommitCloseFailures(t *testing.T) {
 }
 
 func TestDebugCapturePublishesV1FromConfigSnapshot(t *testing.T) {
-	configContents := strings.Replace(
+	sourceConfigContents := strings.Replace(
 		debugCaptureTestConfig,
 		"frameCfg 0 1 32 100 100 1 0",
 		"frameCfg 0 1 1 1 10 1 0",
 		1,
 	)
-	config := writeDebugCaptureConfig(t, configContents)
+	effectiveConfigContents := strings.Replace(
+		sourceConfigContents,
+		"frameCfg 0 1 1 1 10 1 0",
+		"frameCfg 0 1 1 0 10 1 0",
+		1,
+	)
+	config := writeDebugCaptureConfig(t, sourceConfigContents)
 	outputPath := filepath.Join(t.TempDir(), "capture-session")
 	var events []string
 	dcaClient := &fakeDebugCaptureDCA{events: &events}
@@ -394,10 +470,21 @@ func TestDebugCapturePublishesV1FromConfigSnapshot(t *testing.T) {
 		_ session.ReceiverFactory,
 		plan radar.CapturePlan,
 		output capturefile.Output,
-		_ session.Options,
+		options session.Options,
 	) (dca.CaptureStats, error) {
 		events = append(events, "session")
-		adcBytes = make([]byte, int(plan.ExpectedBytes))
+		if !plan.InfiniteFrames || plan.NumberOfFrames != 0 || plan.ExpectedBytes != 0 {
+			t.Fatalf("session plan is not open-ended: %+v", plan)
+		}
+		if options.StopRequested == nil {
+			t.Fatal("open-ended debug capture has no requested-stop control")
+		}
+		select {
+		case <-options.StopRequested:
+		case <-time.After(time.Second):
+			t.Fatal("stdin EOF did not request a graceful stop")
+		}
+		adcBytes = make([]byte, int(plan.BytesPerFrame))
 		for index := range adcBytes {
 			adcBytes[index] = byte(index % 251)
 		}
@@ -418,7 +505,11 @@ func TestDebugCapturePublishesV1FromConfigSnapshot(t *testing.T) {
 	}
 
 	if err := runDebugCaptureCaptureWithDependencies(
-		debugCaptureArguments(config, outputPath),
+		append(
+			debugCaptureArguments(config, outputPath),
+			"--frame-count", "0",
+			"--stop-on-stdin-eof",
+		),
 		io.Discard,
 		io.Discard,
 		dependencies,
@@ -444,7 +535,7 @@ func TestDebugCapturePublishesV1FromConfigSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(archivedConfig) != configContents {
+	if string(archivedConfig) != effectiveConfigContents {
 		t.Fatal("archived radar.cfg did not preserve the preflight snapshot")
 	}
 	archivedADC, err := os.ReadFile(filepath.Join(outputPath, "adc.bin"))
@@ -490,7 +581,8 @@ func TestDebugCaptureCaptureHelpHasNoTextCLIRouteFlags(t *testing.T) {
 	for _, expected := range []string{
 		"--family", "xwr16xx", "xwr18xx", "xwr68xx", "-device string",
 		"--enhanced-port", "--bss-fw", "--mss-fw", "--d2xx-serial",
-		"--d2xx-description", "--sop2-reset", "stream",
+		"--d2xx-description", "--sop2-reset", "-frame-count",
+		"-stop-on-stdin-eof", "stream",
 	} {
 		if !strings.Contains(help, expected) {
 			t.Errorf("help does not contain %s: %s", expected, help)
@@ -544,6 +636,7 @@ func debugCaptureArgumentsForFamily(config, output, family string) []string {
 
 func preflightOnlyDebugCaptureDependencies(hardwareCalls *int) debugCaptureDependencies {
 	return debugCaptureDependencies{
+		stdin: strings.NewReader(""),
 		checkAssets: func(radar.DeviceFamily, string, string) (debugcapture.Assets, error) {
 			return debugcapture.Assets{}, nil
 		},

@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +19,7 @@ import (
 	"mmwcli/internal/session"
 )
 
-func runRadar(command string, arguments []string, stdout, stderr io.Writer) error {
+func runRadar(command string, arguments []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	dialect := radar.StudioCLI
 	if len(arguments) == 0 {
 		return usageError{message: command + " requires check, version, apply, start, stop, or capture"}
@@ -31,7 +33,7 @@ func runRadar(command string, arguments []string, stdout, stderr io.Writer) erro
 	case "check":
 		return checkRadarConfig(dialect, arguments[1:], stdout, stderr)
 	case "capture":
-		return captureRadar(dialect, arguments[1:], stdout, stderr)
+		return captureRadar(dialect, arguments[1:], stdin, stdout, stderr)
 	case "version", "apply", "start", "stop":
 		return controlRadar(dialect, action, arguments[1:], stdout, stderr)
 	default:
@@ -41,6 +43,8 @@ func runRadar(command string, arguments []string, stdout, stderr io.Writer) erro
 
 func checkRadarConfig(dialect radar.Dialect, arguments []string, stdout, stderr io.Writer) error {
 	flags := newCommandFlagSet(dialect.Name()+" check", stderr, "mmwcli "+dialect.Name()+" check CFG")
+	var frameCount optionalFrameCount
+	flags.Var(&frameCount, "frame-count", "override frameCfg count (0 means until gracefully stopped)")
 	if len(arguments) != 0 && isHelp(arguments[0]) {
 		return parseCommandFlags(flags, arguments)
 	}
@@ -53,7 +57,12 @@ func checkRadarConfig(dialect radar.Dialect, arguments []string, stdout, stderr 
 	if flags.NArg() != 0 {
 		return usageError{message: "unexpected check arguments: " + strings.Join(flags.Args(), " ")}
 	}
-	plan, err := loadCapturePlan(dialect, arguments[0], radar.FullConfiguration)
+	plan, err := loadCapturePlanWithFrameCount(
+		dialect,
+		arguments[0],
+		radar.FullConfiguration,
+		frameCount.pointer(),
+	)
 	if err != nil {
 		return err
 	}
@@ -163,7 +172,12 @@ func controlRadar(dialect radar.Dialect, action string, arguments []string, stdo
 	}
 }
 
-func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.Writer) (resultErr error) {
+func captureRadar(
+	dialect radar.Dialect,
+	arguments []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) (resultErr error) {
 	flags := newCommandFlagSet(
 		dialect.Name()+" capture",
 		stderr,
@@ -175,6 +189,13 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	streamOutput := false
 	flags.BoolVar(&streamOutput, "stream", false, "also emit capture-stream v1 on stdout")
 	multisensorPlanPath := flags.String("multisensor-plan", "", "external sensor plan JSON file")
+	var frameCount optionalFrameCount
+	flags.Var(&frameCount, "frame-count", "override frameCfg count (0 means until gracefully stopped)")
+	stopOnStdinEOF := flags.Bool(
+		"stop-on-stdin-eof",
+		false,
+		"gracefully stop an infinite capture when stdin closes",
+	)
 	dcaValues := addDCAFlags(flags, "dca-timeout-ms", dcaConfigurationFlags|dcaReceiverFlags)
 	if len(arguments) != 0 && isHelp(arguments[0]) {
 		return parseCommandFlags(flags, arguments)
@@ -202,11 +223,21 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	prepared, err := loadCaptureOutputPlan(dialect, configPath)
+	prepared, err := loadCaptureOutputPlanWithFrameCount(dialect, configPath, frameCount.pointer())
 	if err != nil {
 		return err
 	}
 	plan := prepared.plan
+	if plan.InfiniteFrames {
+		if !*stopOnStdinEOF {
+			return usageError{message: "an infinite capture requires --stop-on-stdin-eof for graceful publication"}
+		}
+		if streamOutput {
+			return usageError{message: "--stream requires a finite frame count"}
+		}
+	} else if *stopOnStdinEOF {
+		return usageError{message: "--stop-on-stdin-eof is valid only when the effective frame count is 0"}
+	}
 	diagnostics := stdout
 	if streamOutput {
 		diagnostics = stderr
@@ -349,6 +380,9 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 	if aggregate != nil {
 		sessionOptions.Participant = aggregate
 	}
+	if *stopOnStdinEOF {
+		sessionOptions.StopRequested = stopWhenReaderEnds(stdin)
+	}
 	sessionOptions.Log = func(message string) { fmt.Fprintln(diagnostics, "[capture] "+message) }
 	stats, err = session.Run(
 		ctx,
@@ -371,11 +405,76 @@ func captureRadar(dialect radar.Dialect, arguments []string, stdout, stderr io.W
 }
 
 func loadCapturePlan(dialect radar.Dialect, path string, mode radar.ConfigurationMode) (radar.CapturePlan, error) {
-	commands, err := radar.ParseConfigFile(path)
+	return loadCapturePlanWithFrameCount(dialect, path, mode, nil)
+}
+
+func loadCapturePlanWithFrameCount(
+	dialect radar.Dialect,
+	path string,
+	mode radar.ConfigurationMode,
+	frameCount *uint16,
+) (radar.CapturePlan, error) {
+	if frameCount == nil {
+		commands, err := radar.ParseConfigFile(path)
+		if err != nil {
+			return radar.CapturePlan{}, err
+		}
+		return radar.BuildCapturePlan(dialect, commands, mode)
+	}
+	snapshot, err := readCaptureSessionConfig(path)
+	if err != nil {
+		return radar.CapturePlan{}, err
+	}
+	effective, err := radar.OverrideCaptureSessionV1FrameCount(snapshot, *frameCount)
+	if err != nil {
+		return radar.CapturePlan{}, err
+	}
+	commands, err := radar.ParseConfig(bytes.NewReader(effective))
 	if err != nil {
 		return radar.CapturePlan{}, err
 	}
 	return radar.BuildCapturePlan(dialect, commands, mode)
+}
+
+type optionalFrameCount struct {
+	set   bool
+	value uint16
+}
+
+func (value *optionalFrameCount) Set(raw string) error {
+	parsed, err := strconv.ParseUint(raw, 10, 16)
+	if err != nil {
+		return errors.New("frame count must be an integer in 0..65535")
+	}
+	value.set = true
+	value.value = uint16(parsed)
+	return nil
+}
+
+func (value *optionalFrameCount) String() string {
+	if value == nil || !value.set {
+		return ""
+	}
+	return strconv.FormatUint(uint64(value.value), 10)
+}
+
+func (value *optionalFrameCount) pointer() *uint16 {
+	if value == nil || !value.set {
+		return nil
+	}
+	result := value.value
+	return &result
+}
+
+func stopWhenReaderEnds(reader io.Reader) <-chan struct{} {
+	stopped := make(chan struct{})
+	go func() {
+		if reader != nil {
+			_, _ = io.Copy(io.Discard, reader)
+		}
+		close(stopped)
+	}()
+	return stopped
 }
 
 const captureSessionMaxConfigBytes = 4 << 20
@@ -387,12 +486,26 @@ type preparedCaptureOutput struct {
 }
 
 func loadCaptureOutputPlan(dialect radar.Dialect, path string) (preparedCaptureOutput, error) {
+	return loadCaptureOutputPlanWithFrameCount(dialect, path, nil)
+}
+
+func loadCaptureOutputPlanWithFrameCount(
+	dialect radar.Dialect,
+	path string,
+	frameCount *uint16,
+) (preparedCaptureOutput, error) {
 	if dialect != radar.StudioCLI {
 		return preparedCaptureOutput{}, errors.New("capture session directories require the studio-cli dialect")
 	}
 	snapshot, err := readCaptureSessionConfig(path)
 	if err != nil {
 		return preparedCaptureOutput{}, err
+	}
+	if frameCount != nil {
+		snapshot, err = radar.OverrideCaptureSessionV1FrameCount(snapshot, *frameCount)
+		if err != nil {
+			return preparedCaptureOutput{}, err
+		}
 	}
 	plan, err := radar.BuildCaptureSessionV1Plan(snapshot, radar.FullConfiguration)
 	if err != nil {

@@ -594,7 +594,7 @@ func TestIntegratedCaptureRaisesRawTailGuardBeforeOutputOrHardware(t *testing.T)
 	}
 }
 
-func TestIntegratedInfiniteCaptureIsRejectedByStrictSessionContract(t *testing.T) {
+func TestIntegratedInfiniteCaptureRequiresGracefulStopControl(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "small-frames.cfg")
 	content := strings.Join([]string{
 		"flushCfg",
@@ -618,11 +618,11 @@ func TestIntegratedInfiniteCaptureIsRejectedByStrictSessionContract(t *testing.T
 
 	var stdout, stderr bytes.Buffer
 	arguments := []string{"studio-cli", "capture", config, output, "--port", "COM3"}
-	if code := Run(arguments, &stdout, &stderr); code != 4 {
+	if code := Run(arguments, &stdout, &stderr); code != 2 {
 		t.Fatalf("exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "requires a finite frame count") {
-		t.Fatalf("missing strict finite-session rejection: %s", stderr.String())
+	if !strings.Contains(stderr.String(), "requires --stop-on-stdin-eof") {
+		t.Fatalf("missing graceful-stop requirement: %s", stderr.String())
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("rejected infinite capture wrote stdout: %s", stdout.String())
@@ -630,6 +630,16 @@ func TestIntegratedInfiniteCaptureIsRejectedByStrictSessionContract(t *testing.T
 	data, err := os.ReadFile(output)
 	if err != nil || string(data) != "keep" {
 		t.Fatalf("existing output changed: %q, %v", data, err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	arguments = append(arguments, "--stop-on-stdin-eof")
+	if code := Run(arguments, &stdout, &stderr); code != 4 {
+		t.Fatalf("controlled infinite capture exit code = %d, stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "already exists") {
+		t.Fatalf("controlled infinite capture did not reach output reservation: %s", stderr.String())
 	}
 }
 

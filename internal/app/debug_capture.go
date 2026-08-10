@@ -40,6 +40,7 @@ type debugCaptureSessionRunner func(
 ) (dca.CaptureStats, error)
 
 type debugCaptureDependencies struct {
+	stdin          io.Reader
 	checkAssets    func(radar.DeviceFamily, string, string) (debugcapture.Assets, error)
 	validateFPGA   func(radar.DeviceFamily, dca.FPGAConfig) error
 	buildLinkPlan  func(radar.DeviceFamily, radar.CapturePlan) (debugcapture.Plan, error)
@@ -53,6 +54,7 @@ type debugCaptureDependencies struct {
 
 func productionDebugCaptureDependencies() debugCaptureDependencies {
 	return debugCaptureDependencies{
+		stdin:         os.Stdin,
 		checkAssets:   debugcapture.CheckAssetsForFamily,
 		validateFPGA:  debugcapture.ValidateRawCaptureFPGAConfigForFamily,
 		buildLinkPlan: debugcapture.BuildPlanForFamily,
@@ -108,6 +110,13 @@ func runDebugCaptureCaptureWithDependencies(
 	sop2Reset := flags.Bool("sop2-reset", false, "set SOP2 with D2XX C/D and pulse target reset before Enhanced COM")
 	streamOutput := flags.Bool("stream", false, "also emit capture-stream v1 on stdout")
 	multisensorPlanPath := flags.String("multisensor-plan", "", "external sensor plan JSON file")
+	var frameCount optionalFrameCount
+	flags.Var(&frameCount, "frame-count", "override frameCfg count (0 means until gracefully stopped)")
+	stopOnStdinEOF := flags.Bool(
+		"stop-on-stdin-eof",
+		false,
+		"gracefully stop an infinite capture when stdin closes",
+	)
 	dcaValues := addDCAFlags(flags, "dca-timeout-ms", dcaConfigurationFlags|dcaReceiverFlags)
 
 	if len(arguments) != 0 && isHelp(arguments[0]) {
@@ -160,11 +169,25 @@ func runDebugCaptureCaptureWithDependencies(
 		return usageError{message: err.Error()}
 	}
 
-	prepared, err := loadDebugCaptureOutputPlan(device, configPath)
+	prepared, err := loadDebugCaptureOutputPlanWithFrameCount(
+		device,
+		configPath,
+		frameCount.pointer(),
+	)
 	if err != nil {
 		return err
 	}
 	plan := prepared.plan
+	if plan.InfiniteFrames {
+		if !*stopOnStdinEOF {
+			return usageError{message: "an infinite capture requires --stop-on-stdin-eof for graceful publication"}
+		}
+		if *streamOutput {
+			return usageError{message: "--stream requires a finite frame count"}
+		}
+	} else if *stopOnStdinEOF {
+		return usageError{message: "--stop-on-stdin-eof is valid only when the effective frame count is 0"}
+	}
 	linkPlan, err := dependencies.buildLinkPlan(device, plan)
 	if err != nil {
 		return err
@@ -197,6 +220,7 @@ func runDebugCaptureCaptureWithDependencies(
 		linkPlan,
 		dcaOptions,
 		*multisensorPlanPath,
+		*stopOnStdinEOF,
 		dependencies,
 	)
 	if err != nil {
@@ -211,7 +235,7 @@ func validateDebugCaptureDependencies(dependencies debugCaptureDependencies) err
 		dependencies.buildLinkPlan == nil || dependencies.checkNative == nil ||
 		dependencies.dialDCA == nil || dependencies.openController == nil ||
 		dependencies.newReceiver == nil || dependencies.runSession == nil ||
-		dependencies.context == nil {
+		dependencies.context == nil || dependencies.stdin == nil {
 		return errors.New("debug-cli dependencies are incomplete")
 	}
 	return nil
@@ -234,9 +258,23 @@ func loadDebugCaptureOutputPlan(
 	device radar.DeviceFamily,
 	path string,
 ) (preparedCaptureOutput, error) {
+	return loadDebugCaptureOutputPlanWithFrameCount(device, path, nil)
+}
+
+func loadDebugCaptureOutputPlanWithFrameCount(
+	device radar.DeviceFamily,
+	path string,
+	frameCount *uint16,
+) (preparedCaptureOutput, error) {
 	snapshot, err := readCaptureSessionConfig(path)
 	if err != nil {
 		return preparedCaptureOutput{}, err
+	}
+	if frameCount != nil {
+		snapshot, err = radar.OverrideCaptureSessionV1FrameCount(snapshot, *frameCount)
+		if err != nil {
+			return preparedCaptureOutput{}, err
+		}
 	}
 	plan, err := radar.BuildCaptureSessionV1PlanForFamily(device, snapshot)
 	if err != nil {
@@ -381,6 +419,7 @@ func runDebugCaptureHardware(
 	linkPlan debugcapture.Plan,
 	dcaOptions dcaCommandOptions,
 	multisensorPlanPath string,
+	stopOnStdinEOF bool,
 	dependencies debugCaptureDependencies,
 ) (stats dca.CaptureStats, resultErr error) {
 	plan := prepared.plan
@@ -461,6 +500,9 @@ func runDebugCaptureHardware(
 	}
 	if aggregate != nil {
 		sessionOptions.Participant = aggregate
+	}
+	if stopOnStdinEOF {
+		sessionOptions.StopRequested = stopWhenReaderEnds(dependencies.stdin)
 	}
 	sessionOptions.Log = func(message string) { fmt.Fprintln(stdout, "[capture] "+message) }
 	stats, err = dependencies.runSession(

@@ -46,7 +46,8 @@ Integrated capture constructs an immutable plan before creating output or openin
 - complex16 ADC, hardware ADC LVDS, no LVDS header, and two-lane DCA raw mode;
 - a profile, channel mask, frequency, Tx selection, low-power mode, and ADCBuf size valid for the
   explicitly selected xWR16xx, xWR18xx, or xWR68xx contract;
-- enough Rx, sample, chirp, loop, and frame information to derive the exact finite byte count;
+- enough Rx, sample, chirp, loop, and frame information to derive exact bytes per frame and, for a
+  finite plan, the exact total byte count;
 - valid ADCBuf and CBUFF sizes.
 
 Advanced frames, continuous capture, monitor streams, loopback, software LVDS, and LVDS headers are rejected. A full `studio_cli` configuration begins with one exact `flushCfg`. `sensorStart`, when present, must be unique and last; the coordinator removes it before applying the configuration.
@@ -88,14 +89,14 @@ preflight
   -> StartRecord once
   -> start radar once
   -> receive and validate exact data
-  -> radar stop or verified natural frame-end
+  -> requested radar stop or verified natural frame-end
   -> bounded data/control drain
   -> StopRecord
   -> sync and close
   -> publish without overwrite
 ```
 
-The text and debug transports implement this lifecycle without being opened or mixed together. An indeterminate StartRecord is never resent. Cleanup permits one independent, bounded StopRecord. A finite debug capture consumes the natural frame-end event; incomplete and cancelled paths explicitly stop the radar.
+The text and debug transports implement this lifecycle without being opened or mixed together. An indeterminate StartRecord is never resent. Cleanup permits one independent, bounded StopRecord. A finite debug capture consumes the natural frame-end event; incomplete and cancelled paths explicitly stop the radar. For either capture route, `--frame-count 0 --stop-on-stdin-eof` keeps acquisition open until stdin closes. That EOF is a requested stop and follows normal cleanup, validation, and publication; context cancellation remains an abort.
 
 `sensorStop` stops sensing only. It does not power off the radar or DCA1000.
 
@@ -105,7 +106,7 @@ Capture does not automatically run SystemAlive/`ping` or reset the FPGA. Low-lev
 
 Control responses must be exactly eight bytes with the expected header, trailer, and command code. For TI CLI compatibility, mmwcli accepts matching responses from any IPv4 source address; the DCA control protocol does not authenticate the sender. Data packets remain restricted to the configured DCA address.
 
-Raw data is placed by its 48-bit byte offset. Out-of-order packets are supported, while overlaps, missing prefixes, malformed payloads, and output-limit violations fail. Coverage range tracking has a fixed bound; excessive sparsity fails before writing the rejected packet. Finite capture succeeds only after exact byte coverage and the bounded post-target quiet interval.
+Raw data is placed by its 48-bit byte offset. Out-of-order packets are supported, while overlaps, missing prefixes, malformed payloads, and output-limit violations fail. Coverage range tracking has a fixed bound; excessive sparsity fails before writing the rejected packet. Finite capture succeeds only after exact byte coverage and the bounded post-target quiet interval. A requested open-ended stop succeeds only when the drained payload is non-empty and divisible by the CFG-derived bytes per frame.
 
 Payload bytes are written unchanged. mmwcli does not reorder samples, parse ADC values, or repair gaps.
 
@@ -125,6 +126,9 @@ application also connects the exact session output to the bounded Mirror and res
 binary capture-stream v1 records. Diagnostics remain on stderr, stream failure cancels the shared
 capture context, and terminal COMMIT or ABORT is followed by EOF. The published session directory
 remains the authoritative artifact; this does not move hardware ownership out of mmwcli.
+Capture-stream v1 declares an exact positive frame count in SESSION and is therefore intentionally
+finite; an open-ended capture requires a later stream contract rather than treating zero as an
+unknown count.
 
 Multi-sensor capture is implemented as a separate aggregate contract; see
 [multi-sensor synchronization](multisensor-sync.md). `--multisensor-plan` launches bounded external
@@ -159,10 +163,12 @@ host-relative axis. External-trigger and PTP evidence grades remain future exten
 
 Output exists only as `OUTDIR.part` during capture. Existing final or partial output fails before hardware access. Publication never overwrites `OUTDIR` and occurs only after reception, radar cleanup, DCA cleanup, status checks, synchronization, and close succeed.
 
-`studio-cli capture` and `debug-cli capture` always stage `adc.bin`, the exact `radar.cfg`, and
-versioned `capture.json`, then publish the capture-session v1 directory through the same
-no-overwrite transaction. Capture requires a finite, mmwcore-representable CFG for its declared
-family with `adcCfg 2 1`; there is no bare-file output mode.
+`studio-cli capture` and `debug-cli capture` always stage `adc.bin`, the exact effective `radar.cfg`,
+and versioned `capture.json`, then publish the capture-session v1 directory through the same
+no-overwrite transaction. Capture requires a mmwcore-representable CFG for its declared family with
+`adcCfg 2 1`; there is no bare-file output mode. A finalized `frameCfg` count of zero carries no
+invented planned length: readers derive the actual positive frame count from the complete ADC file,
+and aggregate publication binds that count to `index.bin`.
 
 The output parent is a cooperative namespace. These guarantees cover runtime atomic visibility and no-overwrite publication; they do not claim power-loss durability or protection from a same-user process mutating the staging directory.
 

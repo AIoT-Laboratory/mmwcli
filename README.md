@@ -95,6 +95,19 @@ mmwcli studio-cli capture hardware/studio-cli-iwr6843-actions-3tx.cfg capture-se
 
 Every `studio-cli capture` performs full preflight and applies the complete configuration; capture does not reuse a prior radar configuration.
 
+`--frame-count N` overrides the sole legacy `frameCfg` count in the effective configuration. The
+overridden bytes are both applied to the radar and archived as `radar.cfg`. Counts `1..65535` are
+finite. Count `0` runs until the controlling process closes stdin and therefore also requires
+`--stop-on-stdin-eof`:
+
+```text
+mmwcli studio-cli capture CFG OUTDIR --port PORT --frame-count 0 --stop-on-stdin-eof
+```
+
+Closing stdin is a graceful stop request: mmwcli stops the radar, drains and stops DCA1000, validates
+whole ADC frames and any required sensor source, then publishes. Interrupting or killing the process
+still aborts publication. The finite capture-stream protocol (`--stream`) is unavailable in this mode.
+
 ### xWR16xx, xWR18xx, and xWR68xx debug mode
 
 Use an `ftd2xx` build and select the device family explicitly. There is no default family and no
@@ -131,6 +144,20 @@ domain and retains the validated IWR6843 ES2 cold-start path.
 Enhanced COM downloads firmware; D2XX A/B carries mmWaveLink control. D/C is opened only for
 explicit `--sop2-reset`. The exact asset hashes, accepted device IDs, and validation tiers are in
 the [TI reference map](docs/ti-reference-map.md) and [hardware support matrix](docs/hardware-support.md).
+
+`debug-cli capture` uses the same explicit duration control as `studio-cli capture`.
+`--frame-count N` rewrites the effective `frameCfg` snapshot before both the mmWaveLink plan and
+the archived `radar.cfg` are built. Count `0` requires `--stop-on-stdin-eof`:
+
+```text
+mmwcli debug-cli capture CFG OUTDIR --family xwr68xx ... \
+  --frame-count 0 --stop-on-stdin-eof
+```
+
+Closing stdin requests a normal frame stop, bounded DCA drain, whole-frame validation, and
+transactional publication. Interrupting or killing the process remains an abort. The current
+`capture-stream v1` and aggregate live-stream encoder require a finite radar frame count, so
+`--stream` is rejected for open-ended captures.
 
 ### `studio_cli` REPL
 
@@ -175,7 +202,9 @@ radar-start interval so radar and delivery-observed camera items share one host-
 
 - CFG, mode, size, and output checks complete before hardware access.
 - StartRecord is sent once; an indeterminate result is never retried.
-- Finite captures require exact byte coverage. Gaps, overlaps, short data, and extra data fail.
+- Finite captures require exact byte coverage. Gracefully stopped open-ended captures require a
+  positive whole number of frames. Gaps, overlaps, partial frames, short finite data, and extra finite
+  data fail.
 - Both capture routes stage `OUTDIR.part` and publish a strict capture-session v1 directory as `OUTDIR` without overwrite only after capture and cleanup succeed. It contains `adc.bin`, the exact `radar.cfg`, and `capture.json`; failure retains the partial directory.
 - `--stream` additionally mirrors provisional capture-stream v1 records on binary stdout while diagnostics remain on stderr. The published session directory remains authoritative.
 - `--multisensor-plan` adds bounded external sources to the same transaction. With `--stream`,

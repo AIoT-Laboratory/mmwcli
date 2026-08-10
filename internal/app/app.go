@@ -48,7 +48,7 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 	case "repl":
 		err = runREPL(arguments[1:], os.Stdin, stdout, stderr, openStudioREPLClient)
 	case "studio-cli":
-		err = runRadar(arguments[0], arguments[1:], stdout, stderr)
+		err = runRadar(arguments[0], arguments[1:], os.Stdin, stdout, stderr)
 	case "dca":
 		err = runDCA(arguments[1:], stdout, stderr)
 	default:
