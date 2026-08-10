@@ -584,9 +584,9 @@ func parseMMWaveLinkProfile(
 	if err != nil {
 		return result, err
 	}
-	if encoding.requireEven && slope&1 != 0 {
-		return result, fmt.Errorf("%s profileCfg converted frequency slope %d must be even", encoding.label, slope)
-	}
+	// mmWave Studio 2.1.1's xWR68xx reference script converts its
+	// 60.012 MHz/us slope to code 1657 and submits that value directly.
+	// The start-frequency parity rule therefore does not apply here.
 	result.frequencySlope = int16(slope)
 
 	txStart, err := parseStudioFloatTimeSigned(fields[9], -4096, 4095, "profileCfg TX start time")

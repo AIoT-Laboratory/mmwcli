@@ -141,7 +141,6 @@ func TestBuildPlanRejectsInvalidWireConfiguration(t *testing.T) {
 		{name: "profile idle range", mutate: replaceDebugCommand("profileCfg", strings.Replace(profile, " 7 3 ", " 5242.9 3 ", 1)), match: "overflows"},
 		{name: "profile power range", mutate: replaceDebugCommand("profileCfg", strings.Replace(profile, " 0 0 166 ", " 27 0 166 ", 1)), match: "above 26"},
 		{name: "profile phase reserved", mutate: replaceDebugCommand("profileCfg", strings.Replace(profile, " 0 0 166 ", " 0 1 166 ", 1)), match: "reserved"},
-		{name: "profile slope odd", mutate: replaceDebugCommand("profileCfg", strings.Replace(profile, " 166 ", " 166.04 ", 1)), match: "must be even"},
 		{name: "profile TX time range", mutate: replaceDebugCommand("profileCfg", strings.Replace(profile, " 166 1 256 ", " 166 41 256 ", 1)), match: "overflows"},
 		{name: "profile rate range", mutate: replaceDebugCommand("profileCfg", strings.Replace(profile, " 12500 ", " 1999 ", 1)), match: "2000..25000"},
 		{name: "profile HPF range", mutate: replaceDebugCommand("profileCfg", strings.Replace(profile, " 0 0 158", " 4 0 158", 1)), match: "exceeds"},
@@ -173,6 +172,23 @@ func TestBuildPlanRejectsInvalidWireConfiguration(t *testing.T) {
 				t.Fatalf("error = %q, want substring %q", err, test.match)
 			}
 		})
+	}
+}
+
+func TestBuildPlanEncodesXWR68xxReferenceSlope(t *testing.T) {
+	source := goldenDebugCaptureSource(t)
+	source = replaceDebugCommand(
+		"profileCfg",
+		"profileCfg 0 60 7 6 65 0 0 60.012 0 256 4400 0 0 30",
+	)(source)
+	plan, err := buildPlanForFamily(debugFamilyIWR6843ES2, source)
+	if err != nil {
+		t.Fatalf("buildPlanForFamily: %v", err)
+	}
+	operations := plan.operationsCopy()
+	got := int16(binary.LittleEndian.Uint16(operations[10].command.subblocks[0].data[28:30]))
+	if got != 1657 {
+		t.Fatalf("converted reference slope = %d, want 1657", got)
 	}
 }
 
