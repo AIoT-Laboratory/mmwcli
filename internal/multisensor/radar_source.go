@@ -61,11 +61,6 @@ func FinalizeRadarSource(
 	if err := radar.ValidateCaptureSessionV1Plan(configSnapshot, plan); err != nil {
 		return Source{}, fmt.Errorf("validate radar source plan: %w", err)
 	}
-	frameCount, frameBytes, payloadBytes, periodNS, endTick, err := radarSourceGeometry(plan)
-	if err != nil {
-		return Source{}, err
-	}
-
 	initial, err := inspectRadarSourceFiles(directoryPath, []string{
 		capturefile.SessionADCFileName,
 		capturemanifest.RadarConfigFileName,
@@ -74,12 +69,12 @@ func FinalizeRadarSource(
 	if err != nil {
 		return Source{}, err
 	}
-	if initial[capturefile.SessionADCFileName] != payloadBytes {
-		return Source{}, fmt.Errorf(
-			"radar ADC size is %d bytes; finite plan requires exactly %d",
-			initial[capturefile.SessionADCFileName],
-			payloadBytes,
-		)
+	frameCount, frameBytes, payloadBytes, periodNS, endTick, err := radarSourceGeometry(
+		plan,
+		initial[capturefile.SessionADCFileName],
+	)
+	if err != nil {
+		return Source{}, err
 	}
 	if initial[capturemanifest.RadarConfigFileName] != uint64(len(configSnapshot)) {
 		return Source{}, errors.New("published radar.cfg size differs from the exact configuration snapshot")
@@ -197,7 +192,7 @@ func FinalizeRadarSource(
 	return source, nil
 }
 
-func radarSourceGeometry(plan radar.CapturePlan) (
+func radarSourceGeometry(plan radar.CapturePlan, actualPayloadBytes uint64) (
 	frameCount uint64,
 	frameBytes uint64,
 	payloadBytes uint64,
@@ -205,19 +200,42 @@ func radarSourceGeometry(plan radar.CapturePlan) (
 	endTick uint64,
 	err error,
 ) {
-	if plan.InfiniteFrames || plan.NumberOfFrames == 0 || plan.BytesPerFrame <= 0 ||
-		plan.ExpectedBytes <= 0 || plan.FramePeriod <= 0 || !plan.RawCapture.Valid() {
-		return 0, 0, 0, 0, 0, errors.New("radar aggregate source requires a valid finite capture plan")
+	if plan.BytesPerFrame <= 0 || plan.FramePeriod <= 0 || !plan.RawCapture.Valid() {
+		return 0, 0, 0, 0, 0, errors.New("radar aggregate source requires valid frame geometry")
 	}
-	frameCount = uint64(plan.NumberOfFrames)
 	frameBytes = uint64(plan.BytesPerFrame)
-	payloadBytes = uint64(plan.ExpectedBytes)
-	periodNS = uint64(plan.FramePeriod)
-	computedPayload, ok := checkedMulU64(frameCount, frameBytes)
-	if !ok || computedPayload != payloadBytes {
-		return 0, 0, 0, 0, 0, errors.New("radar finite plan frame geometry does not equal ExpectedBytes")
+	if actualPayloadBytes == 0 || actualPayloadBytes%frameBytes != 0 {
+		return 0, 0, 0, 0, 0, fmt.Errorf(
+			"radar ADC size %d does not contain a positive whole number of %d-byte frames",
+			actualPayloadBytes,
+			frameBytes,
+		)
 	}
-	endTick, ok = checkedMulU64(frameCount, periodNS)
+	frameCount = actualPayloadBytes / frameBytes
+	if frameCount > MaximumIndexItems {
+		return 0, 0, 0, 0, 0, fmt.Errorf(
+			"radar ADC frame count %d exceeds index limit %d",
+			frameCount,
+			MaximumIndexItems,
+		)
+	}
+	payloadBytes = actualPayloadBytes
+	periodNS = uint64(plan.FramePeriod)
+	if !plan.InfiniteFrames {
+		if plan.NumberOfFrames == 0 || plan.ExpectedBytes <= 0 {
+			return 0, 0, 0, 0, 0, errors.New("radar finite plan has invalid frame accounting")
+		}
+		if frameCount != uint64(plan.NumberOfFrames) || payloadBytes != uint64(plan.ExpectedBytes) {
+			return 0, 0, 0, 0, 0, fmt.Errorf(
+				"radar ADC size is %d bytes; finite plan requires exactly %d",
+				payloadBytes,
+				plan.ExpectedBytes,
+			)
+		}
+	} else if plan.NumberOfFrames != 0 || plan.ExpectedBytes != 0 {
+		return 0, 0, 0, 0, 0, errors.New("radar infinite plan has invalid frame accounting")
+	}
+	endTick, ok := checkedMulU64(frameCount, periodNS)
 	if !ok || endTick == 0 {
 		return 0, 0, 0, 0, 0, errors.New("radar finite plan frame clock range overflows")
 	}

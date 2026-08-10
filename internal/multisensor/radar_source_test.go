@@ -83,6 +83,58 @@ func TestFinalizeRadarSourcePublishesExactFrameIndexAndArtifacts(t *testing.T) {
 	}
 }
 
+func TestFinalizeRadarSourceDerivesCompletedInfiniteFrameCount(t *testing.T) {
+	config, _ := radarSourceTestPlan(t)
+	config = bytes.Replace(config, []byte("frameCfg 0 0 1 3 10 1 0"), []byte("frameCfg 0 0 1 0 10 1 0"), 1)
+	plan, err := radar.BuildCaptureSessionV1Plan(config, radar.FullConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.InfiniteFrames || plan.BytesPerFrame != 64 {
+		t.Fatalf("infinite test plan = %+v", plan)
+	}
+
+	directory := committedRadarSourceDirectory(t, config, plan, 4*plan.BytesPerFrame)
+	source, err := FinalizeRadarSource(
+		context.Background(),
+		directory.FinalPath(),
+		config,
+		plan,
+		"1.2.3",
+		FrameStartBracket{LowerNS: 1, UpperNS: 2},
+		"radar-0",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.ItemCount != 4 || source.PayloadBytes != 4*uint64(plan.BytesPerFrame) {
+		t.Fatalf("finalized infinite source = %+v", source)
+	}
+}
+
+func TestFinalizeRadarSourceRejectsPartialInfiniteFrame(t *testing.T) {
+	config, _ := radarSourceTestPlan(t)
+	config = bytes.Replace(config, []byte("frameCfg 0 0 1 3 10 1 0"), []byte("frameCfg 0 0 1 0 10 1 0"), 1)
+	plan, err := radar.BuildCaptureSessionV1Plan(config, radar.FullConfiguration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := committedRadarSourceDirectory(t, config, plan, 3*plan.BytesPerFrame+2)
+
+	_, err = FinalizeRadarSource(
+		context.Background(),
+		directory.FinalPath(),
+		config,
+		plan,
+		"1.2.3",
+		FrameStartBracket{LowerNS: 1, UpperNS: 2},
+		"radar-0",
+	)
+	if err == nil || !strings.Contains(err.Error(), "whole number") {
+		t.Fatalf("partial-frame error = %v", err)
+	}
+}
+
 func TestFinalizeRadarSourceRejectsUncommittedSizeMismatchAndBadInterval(t *testing.T) {
 	config, plan := radarSourceTestPlan(t)
 	t.Run("uncommitted", func(t *testing.T) {

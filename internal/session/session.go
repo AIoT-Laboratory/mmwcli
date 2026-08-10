@@ -102,7 +102,11 @@ type Options struct {
 	MirrorSealTimeout   time.Duration
 	Participant         Participant
 	ParticipantTimeout  time.Duration
-	Log                 func(string)
+	// StopRequested asks an infinite capture to stop acquisition and complete
+	// normal cleanup, validation, and publication. It is deliberately separate
+	// from ctx cancellation, which always aborts publication.
+	StopRequested <-chan struct{}
+	Log           func(string)
 }
 
 func DefaultOptions() Options {
@@ -190,6 +194,9 @@ func Run(
 		}
 	} else if plan.NumberOfFrames == 0 || plan.ExpectedBytes <= 0 {
 		return stats, errors.New("finite radar capture plan has inconsistent frame accounting")
+	}
+	if options.StopRequested != nil && !plan.InfiniteFrames {
+		return stats, errors.New("requested-stop control is valid only for an infinite radar capture")
 	}
 	if err := dca.ValidateRawCaptureFPGAConfig(options.FPGAConfig); err != nil {
 		return stats, err
@@ -491,7 +498,38 @@ func Run(
 		observer.RadarFrameStartObserved(radarStartIssuedAt, firstPacketAt)
 	}
 	if plan.InfiniteFrames {
-		stats, err = receiver.Wait(ctx)
+		if options.StopRequested == nil {
+			stats, err = receiver.Wait(ctx)
+			if err == nil && ctx.Err() == nil {
+				return stats, errors.New("infinite-frame capture became idle unexpectedly")
+			}
+			return stats, err
+		}
+
+		waitContext, cancelWait := context.WithCancel(ctx)
+		stopObserved := make(chan struct{})
+		go func() {
+			select {
+			case <-options.StopRequested:
+				close(stopObserved)
+				cancelWait()
+			case <-waitContext.Done():
+			}
+		}()
+		stats, err = receiver.Wait(waitContext)
+		cancelWait()
+		select {
+		case <-stopObserved:
+			if ctx.Err() != nil {
+				return stats, ctx.Err()
+			}
+			if err == nil || errors.Is(err, context.Canceled) {
+				log("graceful stop requested")
+				return stats, nil
+			}
+			return stats, err
+		default:
+		}
 		if err == nil && ctx.Err() == nil {
 			return stats, errors.New("infinite-frame capture became idle unexpectedly")
 		}
@@ -617,6 +655,18 @@ func validateResult(plan radar.CapturePlan, stats dca.CaptureStats, idle time.Du
 			plan.ExpectedBytes,
 			stats.OutputBytes,
 		)
+	}
+	if plan.InfiniteFrames {
+		if stats.OutputBytes <= 0 {
+			return errors.New("infinite-frame capture produced no ADC payload")
+		}
+		if stats.OutputBytes%plan.BytesPerFrame != 0 {
+			return fmt.Errorf(
+				"infinite-frame capture ended with a partial frame: bytes=%d bytesPerFrame=%d",
+				stats.OutputBytes,
+				plan.BytesPerFrame,
+			)
+		}
 	}
 	if !plan.InfiniteFrames {
 		if startIssuedAt.IsZero() {

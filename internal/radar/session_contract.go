@@ -165,9 +165,6 @@ func validateCaptureSessionV1Subset(
 	commands []string,
 	plan CapturePlan,
 ) error {
-	if plan.InfiniteFrames || plan.NumberOfFrames == 0 || plan.ExpectedBytes <= 0 {
-		return errors.New("mmwcli session publication currently requires a finite frame count")
-	}
 	adcFields, err := singleCaptureSessionCommand(commands, "adcCfg")
 	if err != nil {
 		return err

@@ -161,7 +161,6 @@ func TestBuildCaptureSessionV1PlanRejectsUnrepresentableConfigs(t *testing.T) {
 		{name: "short frame period", replacement: "frameCfg 0 1 32 100 1 1 0", match: "active chirp time"},
 		{name: "hex frame period", replacement: "frameCfg 0 1 32 100 0x1p7 1 0", match: "decimal floating-point"},
 		{name: "hex frame delay", replacement: "frameCfg 0 1 32 100 100 1 0x0p0", match: "decimal floating-point"},
-		{name: "infinite frame count", replacement: "frameCfg 0 1 32 0 100 1 0", match: "finite frame count"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
