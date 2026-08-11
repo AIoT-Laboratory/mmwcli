@@ -96,7 +96,7 @@ preflight
   -> publish without overwrite
 ```
 
-The text and debug transports implement this lifecycle without being opened or mixed together. An indeterminate StartRecord is never resent. Cleanup permits one independent, bounded StopRecord. A finite debug capture consumes the natural frame-end event; incomplete and cancelled paths explicitly stop the radar. For either capture route, `--frame-count 0 --stop-on-stdin-eof` keeps acquisition open until stdin closes. That EOF is a requested stop and follows normal cleanup, validation, and publication; context cancellation remains an abort.
+The text and debug transports implement this lifecycle without being opened or mixed together. An indeterminate StartRecord is never resent. Cleanup permits one independent, bounded StopRecord. A finite debug capture that reaches its planned terminal byte offset consumes the natural frame-end event even when later coverage validation rejects packet holes. Short, malformed, and cancelled paths explicitly stop the radar. For either capture route, `--frame-count 0 --stop-on-stdin-eof` keeps acquisition open until stdin closes. That EOF is a requested stop and follows normal cleanup, validation, and publication; context cancellation remains an abort.
 
 `sensorStop` stops sensing only. It does not power off the radar or DCA1000.
 
@@ -106,7 +106,7 @@ Capture does not automatically run SystemAlive/`ping` or reset the FPGA. Low-lev
 
 Control responses must be exactly eight bytes with the expected header, trailer, and command code. For TI CLI compatibility, mmwcli accepts matching responses from any IPv4 source address; the DCA control protocol does not authenticate the sender. Data packets remain restricted to the configured DCA address.
 
-Raw data is placed by its 48-bit byte offset. Out-of-order packets are supported, while overlaps, missing prefixes, malformed payloads, and output-limit violations fail. Coverage range tracking has a fixed bound; excessive sparsity fails before writing the rejected packet. Finite capture succeeds only after exact byte coverage and the bounded post-target quiet interval. A requested open-ended stop succeeds only when the drained payload is non-empty and divisible by the CFG-derived bytes per frame.
+Raw data is placed by its 48-bit byte offset. Out-of-order packets are supported, while overlaps, missing prefixes, malformed payloads, and output-limit violations fail. Coverage range tracking has a fixed bound; excessive sparsity fails before writing the rejected packet. A finite receiver settles after the planned terminal byte offset and bounded quiet interval; publication still requires exact byte coverage. A requested open-ended stop succeeds only when the drained payload is non-empty and divisible by the CFG-derived bytes per frame.
 
 Payload bytes are written unchanged. mmwcli does not reorder samples, parse ADC values, or repair gaps.
 

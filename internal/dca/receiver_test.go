@@ -167,7 +167,7 @@ func TestFirstPacketTimeoutStartsWhenCallerWaitsAfterArm(t *testing.T) {
 	}
 }
 
-func TestReceiverExpectedOutputWaitsPastIdleAndRequiresContiguousRange(t *testing.T) {
+func TestReceiverExpectedOutputWaitsPastIdleAndAcceptsLateCoverage(t *testing.T) {
 	config := DefaultReceiverConfig()
 	config.DataBindAddress = net.IPv4(127, 0, 0, 1)
 	config.DataBindPort = 0
@@ -211,14 +211,13 @@ func TestReceiverExpectedOutputWaitsPastIdleAndRequiresContiguousRange(t *testin
 		t.Fatalf("Wait before tail = %v, want caller deadline rather than idle completion", err)
 	}
 
-	// Reaching the expected high-water mark is not enough when a byte range is
-	// still missing.
+	// A missing range may still arrive out of order during the quiet window.
 	sendDataPacket(t, device, destination, 2, 104, []byte("ef"))
-	holeContext, cancelHole := context.WithTimeout(context.Background(), 2*config.IdleTimeout)
+	holeContext, cancelHole := context.WithTimeout(context.Background(), config.IdleTimeout/3)
 	_, err = receiver.Wait(holeContext)
 	cancelHole()
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Wait with a hole = %v, want caller deadline", err)
+		t.Fatalf("Wait before hole quiet window = %v, want caller deadline", err)
 	}
 
 	sendDataPacket(t, device, destination, 3, 102, []byte("cd"))
@@ -240,6 +239,48 @@ func TestReceiverExpectedOutputWaitsPastIdleAndRequiresContiguousRange(t *testin
 	}
 	if !bytes.Equal(data, []byte("abcdef")) {
 		t.Fatalf("raw output = %q, want abcdef", data)
+	}
+}
+
+func TestReceiverExpectedOutputSettlesAfterQuietWindowWithUnresolvedHole(t *testing.T) {
+	config := DefaultReceiverConfig()
+	config.DataBindAddress = net.IPv4(127, 0, 0, 1)
+	config.DataBindPort = 0
+	config.DeviceIP = net.IPv4(127, 0, 0, 2)
+	config.FirstPacketTimeout = 100 * time.Millisecond
+	config.IdleTimeout = 20 * time.Millisecond
+	config.ReceiveBufferBytes = 64 * 1024
+	config.MaxOutputBytes = 6
+	config.ExpectedOutputBytes = 6
+	receiver, err := NewReceiver(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+
+	output, err := os.CreateTemp(t.TempDir(), "finite-hole-*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	if err := receiver.Start(context.Background(), output); err != nil {
+		t.Fatal(err)
+	}
+
+	device := listenUDP(t, config.DeviceIP)
+	defer device.Close()
+	destination := receiver.LocalEndpoint()
+	sendDataPacket(t, device, destination, 1, 100, []byte("ab"))
+	sendDataPacket(t, device, destination, 3, 104, []byte("ef"))
+
+	waitContext, cancelWait := context.WithTimeout(context.Background(), time.Second)
+	defer cancelWait()
+	stats, err := receiver.Wait(waitContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.OutputBytes != 6 || stats.MissingBytes != 2 || stats.SequenceGaps != 1 {
+		t.Fatalf("hole stats = %+v", stats)
 	}
 }
 

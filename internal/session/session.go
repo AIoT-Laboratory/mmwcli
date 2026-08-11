@@ -290,7 +290,7 @@ func Run(
 	dcaUsed := false
 	dcaRecording := false
 	radarMayBeRunning := false
-	finiteFrameCompleted := false
+	finiteFrameEndObserved := false
 	var radarStartIssuedAt time.Time
 	participant := options.Participant
 	participantActive := false
@@ -305,7 +305,7 @@ func Run(
 			receiverCancel,
 			receiverStarted,
 			radarMayBeRunning,
-			finiteFrameCompleted && ctx.Err() == nil,
+			finiteFrameEndObserved && ctx.Err() == nil,
 			dcaUsed,
 			dcaRecording,
 			options,
@@ -557,9 +557,9 @@ func Run(
 	waitContext, cancelWait := context.WithDeadline(ctx, firstPacketAt.Add(maximumStreamingDuration))
 	stats, err = receiver.Wait(waitContext)
 	cancelWait()
-	if err == nil && ctx.Err() == nil &&
-		validateResult(plan, stats, options.ReceiverConfig.IdleTimeout, radarStartIssuedAt) == nil {
-		finiteFrameCompleted = true
+	if err == nil && ctx.Err() == nil && stats.OutputBytes == plan.ExpectedBytes &&
+		validateFiniteFrameTiming(plan, stats, radarStartIssuedAt) == nil {
+		finiteFrameEndObserved = true
 	}
 	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 		return stats, &finiteCaptureDeadlineError{maximum: maximumStreamingDuration}
@@ -609,7 +609,7 @@ func cleanup(
 	receiverCancel context.CancelFunc,
 	receiverStarted bool,
 	radarMayBeRunning bool,
-	finiteFrameCompleted bool,
+	finiteFrameEndObserved bool,
 	dcaUsed bool,
 	dcaRecording bool,
 	options Options,
@@ -620,7 +620,7 @@ func cleanup(
 		stopContext, cancel := context.WithTimeout(context.Background(), options.RadarCleanupTimeout)
 		operation := "stop radar"
 		var err error
-		if awaiter, ok := radarControl.(finiteFrameEndAwaiter); ok && finiteFrameCompleted {
+		if awaiter, ok := radarControl.(finiteFrameEndAwaiter); ok && finiteFrameEndObserved {
 			operation = "wait for finite radar frame end"
 			_, err = awaiter.AwaitFiniteFrameEndContext(stopContext)
 		} else {
@@ -718,45 +718,8 @@ func validateResult(plan radar.CapturePlan, stats dca.CaptureStats, idle time.Du
 			)
 		}
 	}
-	if !plan.InfiniteFrames {
-		if startIssuedAt.IsZero() {
-			return errors.New("finite-frame capture has no sensorStart issue timestamp for timing validation")
-		}
-		if stats.EarliestImpliedStartAt.IsZero() || stats.CadenceAnchorAt.IsZero() ||
-			stats.CadenceAnchorEndOffset <= 0 {
-			return errors.New("finite-frame capture has no packet cadence anchor for timing validation")
-		}
-		if plan.BytesPerFrame <= 0 || stats.CadenceAnchorEndOffset > stats.OutputBytes {
-			return errors.New("finite-frame capture has inconsistent packet cadence metadata")
-		}
-		anchorFrame := uint64((stats.CadenceAnchorEndOffset - 1) / plan.BytesPerFrame)
-		if anchorFrame != stats.CadenceAnchorFrame || anchorFrame >= uint64(plan.NumberOfFrames) {
-			return errors.New("finite-frame capture cadence anchor falls outside the frame plan")
-		}
-		frameOffset, err := frameOffsetDuration(plan.FramePeriod, anchorFrame)
-		if err != nil {
-			return err
-		}
-		impliedStart := stats.CadenceAnchorAt.Add(-frameOffset)
-		if !impliedStart.Equal(stats.EarliestImpliedStartAt) {
-			return errors.New("finite-frame capture has inconsistent cadence anchor timestamps")
-		}
-		tolerance := time.Duration(0)
-		if anchorFrame > 0 {
-			tolerance, err = cadenceTolerance(plan.FramePeriod, frameOffset)
-			if err != nil {
-				return err
-			}
-		}
-		if impliedStart.Add(tolerance).Before(startIssuedAt) {
-			return fmt.Errorf(
-				"finite-frame data arrived too early: frame=%d endOffset=%d earlyBy=%s tolerance=%s",
-				anchorFrame,
-				stats.CadenceAnchorEndOffset,
-				startIssuedAt.Sub(impliedStart),
-				tolerance,
-			)
-		}
+	if err := validateFiniteFrameTiming(plan, stats, startIssuedAt); err != nil {
+		return err
 	}
 	if maximum, finite, err := plan.MaximumStreamingDuration(idle); err != nil {
 		return err
@@ -765,6 +728,55 @@ func validateResult(plan radar.CapturePlan, stats dca.CaptureStats, idle time.Du
 		if actual > maximum {
 			return fmt.Errorf("finite-frame data exceeded planned maximum duration: span=%s maximum=%s", actual, maximum)
 		}
+	}
+	return nil
+}
+
+func validateFiniteFrameTiming(
+	plan radar.CapturePlan,
+	stats dca.CaptureStats,
+	startIssuedAt time.Time,
+) error {
+	if plan.InfiniteFrames {
+		return nil
+	}
+	if startIssuedAt.IsZero() {
+		return errors.New("finite-frame capture has no sensorStart issue timestamp for timing validation")
+	}
+	if stats.EarliestImpliedStartAt.IsZero() || stats.CadenceAnchorAt.IsZero() ||
+		stats.CadenceAnchorEndOffset <= 0 {
+		return errors.New("finite-frame capture has no packet cadence anchor for timing validation")
+	}
+	if plan.BytesPerFrame <= 0 || stats.CadenceAnchorEndOffset > stats.OutputBytes {
+		return errors.New("finite-frame capture has inconsistent packet cadence metadata")
+	}
+	anchorFrame := uint64((stats.CadenceAnchorEndOffset - 1) / plan.BytesPerFrame)
+	if anchorFrame != stats.CadenceAnchorFrame || anchorFrame >= uint64(plan.NumberOfFrames) {
+		return errors.New("finite-frame capture cadence anchor falls outside the frame plan")
+	}
+	frameOffset, err := frameOffsetDuration(plan.FramePeriod, anchorFrame)
+	if err != nil {
+		return err
+	}
+	impliedStart := stats.CadenceAnchorAt.Add(-frameOffset)
+	if !impliedStart.Equal(stats.EarliestImpliedStartAt) {
+		return errors.New("finite-frame capture has inconsistent cadence anchor timestamps")
+	}
+	tolerance := time.Duration(0)
+	if anchorFrame > 0 {
+		tolerance, err = cadenceTolerance(plan.FramePeriod, frameOffset)
+		if err != nil {
+			return err
+		}
+	}
+	if impliedStart.Add(tolerance).Before(startIssuedAt) {
+		return fmt.Errorf(
+			"finite-frame data arrived too early: frame=%d endOffset=%d earlyBy=%s tolerance=%s",
+			anchorFrame,
+			stats.CadenceAnchorEndOffset,
+			startIssuedAt.Sub(impliedStart),
+			tolerance,
+		)
 	}
 	return nil
 }

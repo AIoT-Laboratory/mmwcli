@@ -1157,6 +1157,47 @@ func TestFiniteCaptureUsesNaturalFrameEndCapability(t *testing.T) {
 	}
 }
 
+func TestFiniteCaptureWithMissingCoverageUsesNaturalFrameEndAndFails(t *testing.T) {
+	plan := sessionTestPlan(t)
+	finalPath := filepath.Join(t.TempDir(), "finite-hole-natural-end.bin")
+	output, err := capturefile.Create(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	radarControl := &fakeFiniteFrameRadar{fakeRadar: &fakeRadar{events: &events}}
+	receiver := &fakeReceiver{
+		events: &events,
+		stats: dca.CaptureStats{
+			PacketsReceived:      1,
+			PayloadBytesReceived: 1,
+			OutputBytes:          plan.ExpectedBytes,
+			MissingBytes:         2,
+		},
+	}
+
+	_, err = Run(
+		context.Background(),
+		radarControl,
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		plan,
+		output,
+		DefaultOptions(),
+	)
+	if err == nil || !strings.Contains(err.Error(), "DCA1000 capture is incomplete: missingBytes=2") {
+		t.Fatalf("Run error = %v, want incomplete coverage", err)
+	}
+	if radarControl.stopCalls != 1 || radarControl.awaitCalls != 1 {
+		t.Fatalf(
+			"radar cleanup calls: stop=%d await=%d, want initial stop=1 and await=1",
+			radarControl.stopCalls,
+			radarControl.awaitCalls,
+		)
+	}
+	assertPartRetained(t, finalPath)
+}
+
 func TestFiniteCaptureErrorStillUsesExplicitStop(t *testing.T) {
 	plan := sessionTestPlan(t)
 	finalPath := filepath.Join(t.TempDir(), "finite-error-stop.bin")

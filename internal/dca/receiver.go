@@ -42,10 +42,10 @@ type ReceiverConfig struct {
 	IdleTimeout        time.Duration
 	ReceiveBufferBytes int
 	MaxOutputBytes     int64
-	// ExpectedOutputBytes makes a finite capture eligible to complete only after
-	// the exact contiguous range [0, ExpectedOutputBytes) has arrived and then
-	// remained quiet for IdleTimeout. Zero leaves completion controlled by the
-	// normal idle window.
+	// ExpectedOutputBytes makes a finite capture eligible to settle after its
+	// terminal byte offset has arrived and remained quiet for IdleTimeout.
+	// Coverage validation separately rejects holes. Zero leaves completion
+	// controlled by the normal idle window.
 	ExpectedOutputBytes int64
 	// CadenceFrameBytes and CadenceFramePeriod optionally describe the
 	// finite frame layout. When both are set, the receiver retains the packet
@@ -377,7 +377,7 @@ func (receiver *Receiver) receive(ctx context.Context, output io.WriterAt) (Capt
 	var highestOutputOffset int64
 	var lastSequence uint32
 	lastSequenceSet := false
-	expectedComplete := false
+	expectedSpanReached := false
 	var firstPacketDeadline time.Time
 	buffer := make([]byte, 65535)
 
@@ -398,7 +398,7 @@ func (receiver *Receiver) receive(ctx context.Context, output io.WriterAt) (Capt
 		var phaseDeadline time.Time
 		if stats.FirstPacketAt.IsZero() {
 			phaseDeadline = firstPacketDeadline
-		} else if (receiver.config.ExpectedOutputBytes == 0 || expectedComplete) && !stats.LastPacketAt.IsZero() {
+		} else if (receiver.config.ExpectedOutputBytes == 0 || expectedSpanReached) && !stats.LastPacketAt.IsZero() {
 			phaseDeadline = stats.LastPacketAt.Add(receiver.config.IdleTimeout)
 		}
 		if !phaseDeadline.IsZero() && !now.Before(phaseDeadline) {
@@ -546,8 +546,8 @@ func (receiver *Receiver) receive(ctx context.Context, output io.WriterAt) (Capt
 			receiver.firstOnce.Do(func() { close(receiver.first) })
 		}
 		if receiver.config.ExpectedOutputBytes > 0 &&
-			rangesComplete(ranges, receiver.config.ExpectedOutputBytes) {
-			expectedComplete = true
+			highestOutputOffset == receiver.config.ExpectedOutputBytes {
+			expectedSpanReached = true
 		}
 	}
 }
@@ -631,10 +631,6 @@ func preflightRangeAddition(ranges []byteRange, addition byteRange) error {
 		)
 	}
 	return nil
-}
-
-func rangesComplete(ranges []byteRange, expected int64) bool {
-	return expected > 0 && len(ranges) == 1 && ranges[0].start == 0 && ranges[0].end == expected
 }
 
 func finalizeStats(stats CaptureStats, ranges []byteRange, highestOutputOffset int64) CaptureStats {
