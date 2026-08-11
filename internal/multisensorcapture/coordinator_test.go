@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -607,6 +608,14 @@ type fakeProducer struct {
 	closeOnce  sync.Once
 	calls      []string
 	readyBlock bool
+	nextErr    error
+	readyErr   error
+	armErr     error
+	startErr   error
+	stopErr    error
+	cancelErr  error
+	waitErr    error
+	killErr    error
 }
 
 type itemSinkFunc func(context.Context, multisensorstream.Item) error
@@ -657,13 +666,21 @@ func newFakeProducer(records []sensorproducer.Record) *fakeProducer {
 }
 
 func fakeStarter(producer *fakeProducer) StartProducerFunc {
+	return fakeStarterBySource(map[string]*fakeProducer{"camera-0": producer})
+}
+
+func fakeStarterBySource(producers map[string]*fakeProducer) StartProducerFunc {
 	return func(
-		context.Context,
-		[]string,
-		string,
-		string,
-		sensorproducer.ProcessOptions,
+		_ context.Context,
+		_ []string,
+		_ string,
+		sourceID string,
+		_ sensorproducer.ProcessOptions,
 	) (ProducerProcess, error) {
+		producer, ok := producers[sourceID]
+		if !ok {
+			return nil, fmt.Errorf("unexpected source %q", sourceID)
+		}
 		return producer, nil
 	}
 }
@@ -674,21 +691,30 @@ func (producer *fakeProducer) Ready(ctx context.Context) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	return nil
+	return producer.readyErr
 }
-func (producer *fakeProducer) Arm(context.Context) error   { producer.call("ARM"); return nil }
-func (producer *fakeProducer) Start(context.Context) error { producer.call("START"); return nil }
+func (producer *fakeProducer) Arm(context.Context) error {
+	producer.call("ARM")
+	return producer.armErr
+}
+func (producer *fakeProducer) Start(context.Context) error {
+	producer.call("START")
+	return producer.startErr
+}
 func (producer *fakeProducer) Stop(context.Context) error {
 	producer.call("STOP")
 	producer.close()
-	return nil
+	return producer.stopErr
 }
 func (producer *fakeProducer) Cancel(context.Context) error {
 	producer.call("CANCEL")
 	producer.close()
-	return nil
+	return producer.cancelErr
 }
 func (producer *fakeProducer) Next(ctx context.Context) (sensorproducer.Record, error) {
+	if producer.nextErr != nil {
+		return sensorproducer.Record{}, producer.nextErr
+	}
 	select {
 	case item, ok := <-producer.records:
 		if !ok {
@@ -699,8 +725,15 @@ func (producer *fakeProducer) Next(ctx context.Context) (sensorproducer.Record, 
 		return sensorproducer.Record{}, ctx.Err()
 	}
 }
-func (producer *fakeProducer) Wait(context.Context) error { producer.call("WAIT"); return nil }
-func (producer *fakeProducer) Kill() error                { producer.call("KILL"); producer.close(); return nil }
+func (producer *fakeProducer) Wait(context.Context) error {
+	producer.call("WAIT")
+	return producer.waitErr
+}
+func (producer *fakeProducer) Kill() error {
+	producer.call("KILL")
+	producer.close()
+	return producer.killErr
+}
 
 func (producer *fakeProducer) call(name string) {
 	producer.mu.Lock()

@@ -28,6 +28,35 @@ type Process struct {
 	waitErr  error
 }
 
+// ConvergenceError means the caller's bound elapsed before Process could prove
+// that its child had exited and been reaped. It deliberately does not classify
+// a producer control or exit error: those remain ordinary source failures once
+// the process has converged.
+type ConvergenceError struct {
+	operation string
+	err       error
+}
+
+func (err *ConvergenceError) Error() string {
+	return fmt.Sprintf("sensor producer process did not converge during %s: %v", err.operation, err.err)
+}
+
+func (err *ConvergenceError) Unwrap() error { return err.err }
+
+func newConvergenceError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &ConvergenceError{operation: operation, err: err}
+}
+
+// IsConvergenceError reports whether err includes a failure to prove that the
+// child process was reaped within a caller-provided bound.
+func IsConvergenceError(err error) bool {
+	var convergence *ConvergenceError
+	return errors.As(err, &convergence)
+}
+
 func StartProcess(
 	ctx context.Context,
 	argv []string,
@@ -106,12 +135,19 @@ func (process *Process) Cancel(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	controlErr := process.client.Cancel(ctx)
-	if controlErr != nil {
-		process.client.abort(controlErr)
-		process.kill()
-	}
 	waitErr := process.Wait(ctx)
-	return errors.Join(controlErr, waitErr)
+	if !IsConvergenceError(waitErr) {
+		// A terminal client may reject CANCEL because it exited between the
+		// caller's intent and command dispatch. Its reaped result is authoritative.
+		return waitErr
+	}
+
+	// No terminal result was available within the bound. Closing the transport
+	// unblocks the protocol reader, then one best-effort kill asks the OS to reap
+	// the child. Do not wait again after the context has expired.
+	process.client.abort(controlErr)
+	killErr := process.kill()
+	return errors.Join(controlErr, killErr, waitErr)
 }
 
 func (process *Process) Wait(ctx context.Context) error {
@@ -123,14 +159,22 @@ func (process *Process) Wait(ctx context.Context) error {
 	}
 	select {
 	case <-process.done:
-		clientErr := process.client.Wait(ctx)
-		return errors.Join(process.processResult(), clientErr)
+		return errors.Join(process.processResult(), process.client.terminalResult())
+	default:
+	}
+	select {
+	case <-process.done:
+		return errors.Join(process.processResult(), process.client.terminalResult())
 	case <-ctx.Done():
-		process.client.abort(ctx.Err())
-		process.kill()
-		<-process.done
-		_ = process.client.Wait(context.Background())
-		return errors.Join(ctx.Err(), process.processResult(), process.client.terminalResult())
+		// If process completion raced the caller's deadline, completion is
+		// authoritative. Do not randomly report an already reaped child as
+		// unproven merely because both channels were ready in this select.
+		select {
+		case <-process.done:
+			return errors.Join(process.processResult(), process.client.terminalResult())
+		default:
+		}
+		return newConvergenceError("wait", ctx.Err())
 	}
 }
 

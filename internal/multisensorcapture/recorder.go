@@ -19,8 +19,11 @@ import (
 	"mmwcli/internal/sensorproducer"
 )
 
-const maximumRecordedItems = (multisensor.MaximumDirectoryIndexBytes - uint64(multisensor.SensorIndexHeaderBytes)) /
-	uint64(multisensor.SensorIndexEntryBytes)
+const (
+	maximumRecordedItems = (multisensor.MaximumDirectoryIndexBytes - uint64(multisensor.SensorIndexHeaderBytes)) /
+		uint64(multisensor.SensorIndexEntryBytes)
+	defaultCleanupTimeout = 5 * time.Second
+)
 
 type sourceWorker struct {
 	plan       SourcePlan
@@ -38,6 +41,73 @@ type sourceWorker struct {
 	err         error
 	metadata    *ProducerSessionMetadata
 	source      multisensor.Source
+}
+
+// CleanupFailure marks a failed lifecycle operation that leaves process
+// convergence unproven. Plain producer exit and stream errors are not cleanup
+// failures: optional sources may record those as failed while the aggregate
+// remains publishable.
+type CleanupFailure struct {
+	operation string
+	err       error
+}
+
+func (failure *CleanupFailure) Error() string {
+	return fmt.Sprintf("producer cleanup %s: %v", failure.operation, failure.err)
+}
+
+func (failure *CleanupFailure) Unwrap() error { return failure.err }
+
+// NewCleanupFailure marks an explicit producer cleanup or convergence failure.
+// It is intended for bounded producer implementations and offline lifecycle
+// fakes; a plain process exit error must be returned unchanged.
+func NewCleanupFailure(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &CleanupFailure{operation: operation, err: err}
+}
+
+func cleanupFailureOf(err error) error {
+	var failure *CleanupFailure
+	if errors.As(err, &failure) {
+		return failure
+	}
+	return nil
+}
+
+func boundedCleanupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil || parent.Err() != nil {
+		return context.WithTimeout(context.Background(), defaultCleanupTimeout)
+	}
+	if deadline, ok := parent.Deadline(); ok && time.Until(deadline) <= defaultCleanupTimeout {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, defaultCleanupTimeout)
+}
+
+func waitForDrain(worker *sourceWorker, ctx context.Context) error {
+	if workerDrained(worker) {
+		return nil
+	}
+	select {
+	case <-worker.done:
+		return nil
+	case <-ctx.Done():
+		if workerDrained(worker) {
+			return nil
+		}
+		return NewCleanupFailure("drain", ctx.Err())
+	}
+}
+
+func workerDrained(worker *sourceWorker) bool {
+	select {
+	case <-worker.done:
+		return true
+	default:
+		return false
+	}
 }
 
 func newSourceWorker(
@@ -352,12 +422,23 @@ func bindDeliveryObservedClock(
 }
 
 func (worker *sourceWorker) collect(ctx context.Context) (multisensor.Source, error) {
-	select {
-	case <-worker.done:
-	case <-ctx.Done():
-		_ = worker.process.Kill()
-		worker.drainCancel()
-		return multisensor.Source{}, ctx.Err()
+	if !workerDrained(worker) {
+		select {
+		case <-worker.done:
+		case <-ctx.Done():
+			if !workerDrained(worker) {
+				cleanupCtx, cancel := boundedCleanupContext(ctx)
+				defer cancel()
+				cancelErr := worker.process.Cancel(cleanupCtx)
+				worker.drainCancel()
+				drainErr := waitForDrain(worker, cleanupCtx)
+				return multisensor.Source{}, errors.Join(
+					NewCleanupFailure("collect context", ctx.Err()),
+					cancelErr,
+					drainErr,
+				)
+			}
+		}
 	}
 	waitErr := worker.process.Wait(ctx)
 	worker.mu.Lock()
@@ -366,21 +447,18 @@ func (worker *sourceWorker) collect(ctx context.Context) (multisensor.Source, er
 }
 
 func (worker *sourceWorker) abort(ctx context.Context) error {
+	cleanupCtx, cancel := boundedCleanupContext(ctx)
+	defer cancel()
 	worker.mu.Lock()
 	worker.intentional = true
 	worker.mu.Unlock()
-	cancelErr := worker.process.Cancel(ctx)
-	if cancelErr != nil {
-		_ = worker.process.Kill()
-	}
+	cancelErr := worker.process.Cancel(cleanupCtx)
 	worker.drainCancel()
-	select {
-	case <-worker.done:
-	case <-ctx.Done():
-		_ = worker.process.Kill()
-		return errors.Join(cancelErr, ctx.Err())
-	}
-	return cancelErr
+	drainErr := waitForDrain(worker, cleanupCtx)
+	return errors.Join(
+		cancelErr,
+		drainErr,
+	)
 }
 
 func failedSource(plan SourcePlan, worker *sourceWorker) (multisensor.Source, error) {

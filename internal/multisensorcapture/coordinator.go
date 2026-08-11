@@ -89,12 +89,13 @@ type sourceSlot struct {
 type Coordinator struct {
 	mu sync.Mutex
 
-	plan      Plan
-	sessionID string
-	directory *multisensor.Directory
-	slots     []sourceSlot
-	phase     coordinatorPhase
-	result    *Result
+	plan         Plan
+	sessionID    string
+	directory    *multisensor.Directory
+	slots        []sourceSlot
+	phase        coordinatorPhase
+	result       *Result
+	removeSource func(*multisensor.Directory, string) error
 
 	onRequiredFailure func(error)
 	failureOnce       sync.Once
@@ -154,7 +155,7 @@ func Start(
 	coordinator := &Coordinator{
 		plan: clonePlan(plan), sessionID: sessionID, directory: directory,
 		phase: phaseReady, onRequiredFailure: options.OnRequiredFailure,
-		slots: make([]sourceSlot, 0, len(plan.Sources)),
+		slots: make([]sourceSlot, 0, len(plan.Sources)), removeSource: removeSourceDirectory,
 	}
 	for _, sourcePlan := range plan.Sources {
 		slot := sourceSlot{plan: sourcePlan}
@@ -176,19 +177,21 @@ func Start(
 		}
 		if err != nil {
 			slot.failure = fmt.Errorf("source %q READY: %w", sourcePlan.SourceID, err)
+			var cleanupErr error
 			if slot.worker != nil {
-				_ = slot.worker.abort(context.Background())
+				cleanupErr = slot.worker.abort(context.Background())
 			} else if process != nil {
-				_ = process.Kill()
+				cleanupErr = stopUnownedProducer(process)
 			}
-			if removeErr := removeSourceDirectory(directory, sourcePlan.SourceID); removeErr != nil {
+			slot.failure = errors.Join(slot.failure, cleanupErr)
+			removeErr := coordinator.removeSource(directory, sourcePlan.SourceID)
+			if removeErr != nil {
 				slot.failure = errors.Join(slot.failure, removeErr)
 			}
 			coordinator.slots = append(coordinator.slots, slot)
-			if sourcePlan.Required {
+			if cleanupFailureOf(cleanupErr) != nil || removeErr != nil || sourcePlan.Required {
 				coordinator.phase = phaseFailed
-				_ = coordinator.abortAll(context.Background())
-				return nil, slot.failure
+				return nil, errors.Join(slot.failure, coordinator.abortAll(context.Background()))
 			}
 			continue
 		}
@@ -234,14 +237,15 @@ func (coordinator *Coordinator) transition(
 		}
 		if err := command(slot.worker); err != nil {
 			slot.failure = fmt.Errorf("source %q %s: %w", slot.plan.SourceID, operation, err)
-			_ = slot.worker.abort(ctx)
-			if removeErr := removeSourceDirectory(coordinator.directory, slot.plan.SourceID); removeErr != nil {
+			cleanupErr := slot.worker.abort(ctx)
+			slot.failure = errors.Join(slot.failure, cleanupErr)
+			removeErr := coordinator.removeSource(coordinator.directory, slot.plan.SourceID)
+			if removeErr != nil {
 				slot.failure = errors.Join(slot.failure, removeErr)
 			}
-			if slot.plan.Required {
+			if cleanupFailureOf(cleanupErr) != nil || removeErr != nil || slot.plan.Required {
 				coordinator.phase = phaseFailed
-				_ = coordinator.abortAllLocked(ctx)
-				return slot.failure
+				return errors.Join(slot.failure, coordinator.abortAllLocked(ctx))
 			}
 		}
 	}
@@ -281,8 +285,9 @@ func (coordinator *Coordinator) Finish(ctx context.Context, complete bool) error
 		}
 		if err := slot.worker.process.Stop(ctx); err != nil {
 			slot.failure = fmt.Errorf("source %q STOP: %w", slot.plan.SourceID, err)
-			_ = slot.worker.abort(ctx)
-			if slot.plan.Required {
+			cleanupErr := slot.worker.abort(ctx)
+			slot.failure = errors.Join(slot.failure, cleanupErr)
+			if cleanupFailureOf(cleanupErr) != nil || slot.plan.Required {
 				requiredErr = errors.Join(requiredErr, slot.failure)
 			}
 		}
@@ -294,26 +299,26 @@ func (coordinator *Coordinator) Finish(ctx context.Context, complete bool) error
 			if err == nil {
 				slot.worker.source = source
 			} else {
+				// collect has already observed the producer terminal path and called
+				// Wait. A second Cancel would turn a normal producer exit into a
+				// control-plane error, so only an explicit cleanup marker is fatal.
 				slot.failure = fmt.Errorf("source %q stream: %w", slot.plan.SourceID, err)
-				_ = slot.worker.abort(ctx)
-				if slot.plan.Required {
+				if cleanupFailureOf(err) != nil || slot.plan.Required {
 					requiredErr = errors.Join(requiredErr, slot.failure)
 				}
 			}
 		}
 		if slot.failure != nil {
-			if removeErr := removeSourceDirectory(coordinator.directory, slot.plan.SourceID); removeErr != nil {
+			if removeErr := coordinator.removeSource(coordinator.directory, slot.plan.SourceID); removeErr != nil {
 				slot.failure = errors.Join(slot.failure, removeErr)
-				if slot.plan.Required {
-					requiredErr = errors.Join(requiredErr, removeErr)
-				}
+				requiredErr = errors.Join(requiredErr, removeErr)
 			}
 		}
 	}
 	if requiredErr != nil {
-		_ = coordinator.abortAllLocked(ctx)
+		cleanupErr := coordinator.abortAllLocked(ctx)
 		coordinator.phase = phaseFailed
-		return requiredErr
+		return errors.Join(requiredErr, cleanupErr)
 	}
 
 	sources := make([]multisensor.Source, 0, len(coordinator.slots))
@@ -342,6 +347,12 @@ func (coordinator *Coordinator) Finish(ctx context.Context, complete bool) error
 	}
 	coordinator.phase = phaseFinished
 	return nil
+}
+
+func stopUnownedProducer(process ProducerProcess) error {
+	cleanupCtx, cancel := boundedCleanupContext(context.Background())
+	defer cancel()
+	return process.Cancel(cleanupCtx)
 }
 
 func (coordinator *Coordinator) Sources() ([]multisensor.Source, error) {
@@ -428,13 +439,23 @@ func (producer *processProducer) Stop(ctx context.Context) error {
 	return producer.process.Client().Stop(ctx)
 }
 func (producer *processProducer) Cancel(ctx context.Context) error {
-	return producer.process.Cancel(ctx)
+	err := producer.process.Cancel(ctx)
+	if sensorproducer.IsConvergenceError(err) {
+		return NewCleanupFailure("process convergence", err)
+	}
+	return err
 }
 func (producer *processProducer) Next(ctx context.Context) (sensorproducer.Record, error) {
 	return producer.process.Client().Next(ctx)
 }
-func (producer *processProducer) Wait(ctx context.Context) error { return producer.process.Wait(ctx) }
-func (producer *processProducer) Kill() error                    { return producer.process.Kill() }
+func (producer *processProducer) Wait(ctx context.Context) error {
+	err := producer.process.Wait(ctx)
+	if sensorproducer.IsConvergenceError(err) {
+		return NewCleanupFailure("process convergence", err)
+	}
+	return err
+}
+func (producer *processProducer) Kill() error { return producer.process.Kill() }
 
 func cloneResult(result Result) Result {
 	result.ApplicationMetadata = cloneMetadata(result.ApplicationMetadata)

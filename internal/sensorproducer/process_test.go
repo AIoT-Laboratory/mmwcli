@@ -88,6 +88,67 @@ func TestProcessAdapterCancelAndDeadlineCleanUpChild(t *testing.T) {
 		if process.Client().Phase() != PhaseComplete {
 			t.Fatalf("phase = %d", process.Client().Phase())
 		}
+		if err := process.Wait(ctx); err != nil {
+			t.Fatalf("first Wait: %v", err)
+		}
+		if err := process.Wait(ctx); err != nil {
+			t.Fatalf("repeated Wait: %v", err)
+		}
+	})
+
+	t.Run("already terminal CANCEL is not a convergence failure", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		process, err := StartProcess(ctx, helperCommand("happy"), "session-terminal", "camera.left", ProcessOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := process.Client()
+		for _, operation := range []func(context.Context) error{client.Ready, client.Arm, client.Start} {
+			if err := operation(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_ = nextRecord(t, ctx, client)
+		_ = nextRecord(t, ctx, client)
+		if err := client.Stop(ctx); err != nil {
+			t.Fatal(err)
+		}
+		_ = nextRecord(t, ctx, client)
+		_ = nextRecord(t, ctx, client)
+		if err := process.Wait(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := process.Cancel(ctx); err != nil {
+			t.Fatalf("Cancel after terminal exit: %v", err)
+		}
+		expired, expire := context.WithCancel(context.Background())
+		expire()
+		if err := process.Wait(expired); err != nil {
+			t.Fatalf("Wait with expired context after reap: %v", err)
+		}
+	})
+
+	t.Run("rejected CANCEL with a reaped child is an ordinary source failure", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		process, err := StartProcess(ctx, helperCommand("cancel-rejected"), "session-rejected", "camera.left", ProcessOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := process.Client().Ready(ctx); err != nil {
+			t.Fatal(err)
+		}
+		err = process.Cancel(ctx)
+		if err == nil || !strings.Contains(err.Error(), "reject cancellation") {
+			t.Fatalf("Cancel error = %v", err)
+		}
+		if IsConvergenceError(err) {
+			t.Fatalf("reaped cancellation rejection was misclassified: %v", err)
+		}
+		if err := process.Wait(ctx); err == nil || IsConvergenceError(err) {
+			t.Fatalf("repeated Wait error = %v", err)
+		}
 	})
 
 	t.Run("deadline interrupts blocked ACK", func(t *testing.T) {
@@ -104,6 +165,9 @@ func TestProcessAdapterCancelAndDeadlineCleanUpChild(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("Cancel error = %v", err)
 		}
+		if !IsConvergenceError(err) {
+			t.Fatalf("Cancel should preserve missed convergence deadline: %v", err)
+		}
 		if elapsed := time.Since(started); elapsed > 2*time.Second {
 			t.Fatalf("Cancel cleanup took %s", elapsed)
 		}
@@ -112,7 +176,37 @@ func TestProcessAdapterCancelAndDeadlineCleanUpChild(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("child was not reaped after cancellation")
 		}
+		if reapedErr := process.Wait(context.Background()); IsConvergenceError(reapedErr) {
+			t.Fatalf("reaped child retained convergence failure: %v", reapedErr)
+		}
 	})
+}
+
+func TestProcessWaitDeadlineReportsUnprovenConvergence(t *testing.T) {
+	lifetime, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	process, err := StartProcess(lifetime, helperCommand("noack"), "session-wait-timeout", "camera.left", ProcessOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = process.Wait(deadline)
+	if !errors.Is(err, context.DeadlineExceeded) || !IsConvergenceError(err) {
+		t.Fatalf("Wait error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Wait exceeded its deadline: %s", elapsed)
+	}
+	// Windows may report access denied when the child exits between Kill and
+	// TerminateProcess. Reaping within the next bounded wait is authoritative.
+	_ = process.Kill()
+	reaped, reapedCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer reapedCancel()
+	if err := process.Wait(reaped); IsConvergenceError(err) {
+		t.Fatalf("killed child was not reaped: %v", err)
+	}
 }
 
 func TestProcessAdapterRejectsTransportEOFWithoutEOFRecord(t *testing.T) {
@@ -190,7 +284,12 @@ func runSensorProducerHelper(mode string) error {
 			_, err := controls.Read()
 			return err
 		}
-		ack, err := NewACKRecord(control, true, "")
+		accepted := !(mode == "cancel-rejected" && control.Command == CommandCancel)
+		message := ""
+		if !accepted {
+			message = "reject cancellation"
+		}
+		ack, err := NewACKRecord(control, accepted, message)
 		if err != nil {
 			return err
 		}
@@ -219,6 +318,9 @@ func runSensorProducerHelper(mode string) error {
 			dataSeq++
 			return frames.Write(helperRecord(FrameEOF, sessionID, sourceID, dataSeq, `{}`, nil))
 		case CommandCancel:
+			if mode == "cancel-rejected" {
+				return nil
+			}
 			dataSeq++
 			return frames.Write(helperRecord(FrameEOF, sessionID, sourceID, dataSeq, `{}`, nil))
 		}
