@@ -40,7 +40,7 @@ Invoke-WebRequest https://raw.githubusercontent.com/AIoT-Laboratory/mmwcli/main/
 
 Linux defaults to `$HOME/.local/bin`; Windows defaults to
 `%LOCALAPPDATA%\Programs\mmwcli`. Select an exact release or directory with
-`--version 0.2 --install-dir DIR` on Linux and `-Version 0.2 -InstallDir DIR` on Windows.
+`--version 0.3 --install-dir DIR` on Linux and `-Version 0.3 -InstallDir DIR` on Windows.
 Windows amd64 users who need the native D2XX route can also pass `-Ftd2xx`; the FTDI DLL remains
 user-installed. See the [release guide](docs/releasing.md) for the exact asset contract.
 
