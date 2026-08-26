@@ -16,18 +16,15 @@ import (
 )
 
 const (
-	PlanSchema                  = "mmwcli.multisensor_plan.v1"
-	ProducerSessionSchema       = "mmwcli.sensor_producer_session.v1"
-	ProducerItemSchema          = "mmwcli.sensor_producer_item.v1"
-	ProducerEndSchema           = "mmwcli.sensor_producer_end.v1"
-	ProducerEOFSchema           = "mmwcli.sensor_producer_eof.v1"
-	SyncEventSemanticsNone      = "none"
-	MaximumPlanBytes            = 1 << 20
-	maximumPlanDepth            = 32
-	maximumCommandArguments     = 64
-	maximumCommandArgumentBytes = 4096
-	maximumCommandTotalBytes    = 64 << 10
-	validationSessionID         = "123e4567-e89b-42d3-a456-426614174000"
+	PlanSchema             = "mmwcli.multisensor_plan.v1"
+	ProducerSessionSchema  = "mmwcli.sensor_producer_session.v1"
+	ProducerItemSchema     = "mmwcli.sensor_producer_item.v1"
+	ProducerEndSchema      = "mmwcli.sensor_producer_end.v1"
+	ProducerEOFSchema      = "mmwcli.sensor_producer_eof.v1"
+	SyncEventSemanticsNone = "none"
+	MaximumPlanBytes       = 1 << 20
+	maximumPlanDepth       = 32
+	validationSessionID    = "123e4567-e89b-42d3-a456-426614174000"
 )
 
 type Plan struct {
@@ -280,18 +277,12 @@ func validationSession(
 }
 
 func validateCommand(argv []string) error {
-	if argv == nil || len(argv) == 0 || len(argv) > maximumCommandArguments {
-		return fmt.Errorf("argv count must be in 1..%d", maximumCommandArguments)
+	if len(argv) == 0 || argv[0] == "" {
+		return errors.New("argv must name an executable")
 	}
-	total := 0
 	for index, argument := range argv {
-		if (index == 0 && argument == "") || len(argument) > maximumCommandArgumentBytes ||
-			strings.IndexByte(argument, 0) >= 0 {
-			return fmt.Errorf("argv[%d] is empty, too large, or contains NUL", index)
-		}
-		total += len(argument)
-		if total > maximumCommandTotalBytes {
-			return fmt.Errorf("argv exceeds %d total bytes", maximumCommandTotalBytes)
+		if strings.IndexByte(argument, 0) >= 0 {
+			return fmt.Errorf("argv[%d] contains NUL", index)
 		}
 	}
 	return nil

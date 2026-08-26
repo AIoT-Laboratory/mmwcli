@@ -95,7 +95,7 @@ func TestPlanRejectsRadarAliasAndBounds(t *testing.T) {
 			mutate: func(plan *Plan) {
 				plan.Sources[0].Argv = nil
 			},
-			match: "argv count",
+			match: "argv must name an executable",
 		},
 	}
 	for _, test := range tests {

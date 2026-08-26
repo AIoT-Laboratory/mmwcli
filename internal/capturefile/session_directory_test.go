@@ -106,24 +106,35 @@ func entryNames(entries []os.DirEntry) []string {
 	return names
 }
 
-func TestSessionDirectoryCloseRetainsStage(t *testing.T) {
+func TestSessionDirectoryRetryReplacesStaleStage(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "capture-session")
 	session, err := CreateSessionDirectory(output, testSessionFinalizer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.WriteAt([]byte("adc"), 0); err != nil {
+	if _, err := session.WriteAt([]byte("old"), 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.Close(); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(output+".part", SessionADCFileName+".part"))
-	if err != nil || string(data) != "adc" {
+	if err != nil || string(data) != "old" {
 		t.Fatalf("retained ADC part = %q, %v", data, err)
 	}
-	if _, err := CreateSessionDirectory(output, testSessionFinalizer); err == nil {
-		t.Fatal("CreateSessionDirectory reused an existing stage")
+	retry, err := CreateSessionDirectory(output, testSessionFinalizer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retry.WriteAt([]byte("adc"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := retry.CommitContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(output, SessionADCFileName)); err != nil ||
+		string(data) != "adc" {
+		t.Fatalf("retried session ADC = %q, %v", data, err)
 	}
 }
 
@@ -332,17 +343,25 @@ func TestCreateSessionDirectoryRejectsExistingPaths(t *testing.T) {
 					occupied += ".part"
 				}
 				createOccupiedPath(t, occupied, kind)
-				if session, err := CreateSessionDirectory(output, testSessionFinalizer); err == nil {
+				session, err := CreateSessionDirectory(output, testSessionFinalizer)
+				if target == "part" {
+					if err != nil {
+						t.Fatal(err)
+					}
+					_ = session.Close()
+					info, statErr := os.Lstat(output + ".part")
+					if statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+						t.Fatalf("replacement stage = %+v, %v", info, statErr)
+					}
+					return
+				}
+				if err == nil {
 					_ = session.Close()
 					t.Fatal("CreateSessionDirectory accepted an existing path")
 				}
 				assertOccupiedPathUnchanged(t, occupied, kind)
-				if target == "final" {
-					if _, err := os.Lstat(output + ".part"); !errors.Is(err, os.ErrNotExist) {
-						t.Fatalf("CreateSessionDirectory made a stage before rejecting final: %v", err)
-					}
-				} else if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
-					t.Fatalf("CreateSessionDirectory made a final output while rejecting stage: %v", err)
+				if _, err := os.Lstat(output + ".part"); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("CreateSessionDirectory made a stage before rejecting final: %v", err)
 				}
 			})
 		}

@@ -5,6 +5,13 @@ defined by `README.md` and `docs/`.
 
 ## Project boundaries
 
+- mmwcli is a research acquisition tool. Deliver working, diagnosable capture paths before
+  speculative hardening. Do not add authentication, hostile-input defenses, arbitrary quotas,
+  duplicate post-capture audits, or compatibility layers without an observed failure and explicit
+  user approval.
+- Hardware state, firmware identity, protocol framing, exact finite byte coverage, and raw-session
+  publication remain strict because mistakes can damage equipment or invalidate irreplaceable data.
+  These checks are correctness constraints, not a general security program.
 - `mmwcli` is a cross-platform command-line controller and DCA1000 raw-ADC acquisition tool for
   explicitly documented TI routes. Device-family support is tiered and must not be inferred from a
   shared source tree, RF band, lane count, or similar part number.
@@ -75,28 +82,11 @@ defined by `README.md` and `docs/`.
   and repository coverage pins the proven identity, assets, stages, and failure behavior. A report
   for one board, ES, or host library does not promote adjacent combinations.
 
-## Mandatory small batches
+## Work batches
 
-Large tasks must be split before implementation. Do not combine implementation, whole-repository
-audits, documentation rewrites, and releases into one batch.
-
-Before editing, define multiple independently verifiable batches when any of these conditions apply:
-
-- more than two packages or eight repository files are affected;
-- more than one public behavior changes;
-- implementation is combined with repository-wide documentation, a release, or migration work;
-- continuous work is expected to exceed 30 minutes.
-
-Each batch must follow these rules:
-
-1. Give the batch one primary objective and a clear exit condition.
-2. Modify only the files required for that objective; add the narrowest relevant tests for behavior changes.
-3. Run narrow validation and inspect the diff before reporting the checkpoint. When commits are authorized, commit each batch separately.
-4. If a new issue crosses another package, exceeds the file limit, or changes the agreed design, stop expanding the batch and split again.
-5. Sub-agents may perform bounded, non-overlapping read-only audits or small implementations. They must not recombine split work into one large change.
-
-Exceptions to these limits require explicit user approval before editing. Mechanically generated files
-must not be used to evade the limits.
+Keep changes cohesive and independently testable. Split work when objectives or hardware effects
+differ, not because an arbitrary file or package count was crossed. Do not let process ceremony,
+extra checkpoints, or artificial micro-commits delay the active acquisition path.
 
 ## Starting work
 
@@ -135,8 +125,9 @@ must not be used to evade the limits.
   successful finite debug capture consumes the firmware's natural frame-end event. Other paths stop
   the radar explicitly, perform bounded draining, stop DCA, and drain control status within a bound.
 - Never retry an indeterminate start. Cleanup uses an independent, bounded context.
-- Create output exclusively as `OUT.part`. Publish without overwrite as `OUT` only after capture and
-  cleanup both succeed. Retain `.part` on failure.
+- Create output exclusively as `OUT.part` and publish without replacing `OUT`. A new attempt
+  removes its exact stale sibling `OUT.part` when `OUT` does not exist. Complete ADC may be
+  published when hardware cleanup fails; report the cleanup error and do not continue hardware I/O.
 - A finite frame sequence must match the exact byte count derived from its CFG. Gaps, overlaps,
   missing prefixes, short streams, and long streams all fail.
 - Validate DCA response structure and command codes. Preserve TI CLI-compatible handling of

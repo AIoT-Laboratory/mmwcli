@@ -30,11 +30,26 @@ func Create(finalPath string) (*File, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("check capture output %s: %w", abs, err)
 	}
+	if err := removeStalePart(abs, part); err != nil {
+		return nil, err
+	}
 	file, err := os.OpenFile(part, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("create capture part file %s: %w", part, err)
 	}
 	return &File{finalPath: abs, partPath: part, file: file}, nil
+}
+
+func removeStalePart(finalPath, partPath string) error {
+	expected := finalPath + ".part"
+	if filepath.Clean(partPath) != filepath.Clean(expected) ||
+		filepath.Dir(partPath) != filepath.Dir(finalPath) {
+		return errors.New("capture part path does not match its destination")
+	}
+	if err := os.RemoveAll(partPath); err != nil {
+		return fmt.Errorf("remove stale capture stage %s: %w", partPath, err)
+	}
+	return nil
 }
 
 func (f *File) Write(data []byte) (int, error) {

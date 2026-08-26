@@ -93,10 +93,10 @@ preflight
   -> bounded data/control drain
   -> StopRecord
   -> sync and close
-  -> publish without overwrite
+  -> publish without replacing a completed session
 ```
 
-The text and debug transports implement this lifecycle without being opened or mixed together. An indeterminate StartRecord is never resent. Cleanup permits one independent, bounded StopRecord. A finite debug capture that reaches its planned terminal byte offset consumes the natural frame-end event even when later coverage validation rejects packet holes. Short, malformed, and cancelled paths explicitly stop the radar. For either capture route, `--frame-count 0 --stop-on-stdin-eof` keeps acquisition open until stdin closes. That EOF is a requested stop and follows normal cleanup, validation, and publication; context cancellation remains an abort.
+The text and debug transports implement this lifecycle without being opened or mixed together. An indeterminate StartRecord is never resent. Cleanup permits one independent, bounded StopRecord. Cleanup failure is reported after complete ADC has been published and never authorizes more hardware I/O. A finite debug capture that reaches its planned terminal byte offset consumes the natural frame-end event even when later coverage validation rejects packet holes. Short, malformed, and cancelled paths explicitly stop the radar. For either capture route, `--frame-count 0 --stop-on-stdin-eof` keeps acquisition open until stdin closes. That EOF is a requested stop and follows normal cleanup, validation, and publication; context cancellation remains an abort.
 
 `sensorStop` stops sensing only. It does not power off the radar or DCA1000.
 

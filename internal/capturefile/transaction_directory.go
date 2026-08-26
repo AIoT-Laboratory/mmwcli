@@ -11,7 +11,6 @@ import (
 // TransactionDirectory stages an arbitrary directory at DEST.part and
 // publishes it as DEST without replacing an existing destination. Callers own
 // all files below PartPath and must finish and validate them before Commit.
-// Failed transactions deliberately retain the .part directory for diagnosis.
 type TransactionDirectory struct {
 	finalPath string
 	partPath  string
@@ -31,6 +30,9 @@ func CreateTransactionDirectory(finalPath string) (*TransactionDirectory, error)
 		return nil, fmt.Errorf("transaction directory output already exists: %s", abs)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("check transaction directory output %s: %w", abs, err)
+	}
+	if err := removeStalePart(abs, part); err != nil {
+		return nil, err
 	}
 	if err := os.Mkdir(part, 0o755); err != nil {
 		return nil, fmt.Errorf("create transaction directory stage %s: %w", part, err)

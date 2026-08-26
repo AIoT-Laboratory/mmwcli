@@ -613,7 +613,7 @@ func TestRunMirrorSealTimeoutPreventsCommit(t *testing.T) {
 	assertPartBytes(t, finalPath, "data")
 }
 
-func TestRunAbortsMirrorOnSessionFailure(t *testing.T) {
+func TestRunReportsCleanupFailureAfterPublishingCompleteData(t *testing.T) {
 	t.Run("cleanup failure", func(t *testing.T) {
 		plan := mirrorSessionPlan(t)
 		finalPath := filepath.Join(t.TempDir(), "cleanup.bin")
@@ -656,10 +656,10 @@ func TestRunAbortsMirrorOnSessionFailure(t *testing.T) {
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("Run error = %v, want cleanup failure %v", err, wantErr)
 		}
-		if mirrorErr := mirror.Err(); !errors.Is(mirrorErr, capturestream.ErrMirrorAborted) {
-			t.Fatalf("Mirror error = %v, want aborted", mirrorErr)
+		if mirrorErr := mirror.Err(); mirrorErr != nil {
+			t.Fatalf("Mirror error = %v, want nil", mirrorErr)
 		}
-		assertPartBytes(t, finalPath, "data")
+		assertPublishedBytes(t, finalPath, "data")
 	})
 
 	t.Run("cancellation", func(t *testing.T) {
@@ -1474,7 +1474,7 @@ func TestRadarCleanupDeadlineStillStopsDCA(t *testing.T) {
 	if dcaControl.stopCalls != 2 {
 		t.Fatalf("DCA StopRecord calls = %d, want final stop despite radar timeout", dcaControl.stopCalls)
 	}
-	assertPartRetained(t, finalPath)
+	assertPublishedBytes(t, finalPath, "adc")
 }
 
 func TestStartRecordFailureSkipsEmptyDataDrainAndExtraStop(t *testing.T) {
@@ -1610,7 +1610,7 @@ func TestRunRejectsFatalAsyncStatusDrainedAfterStop(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "fatal async status") {
 		t.Fatalf("Run error = %v, want fatal async cleanup failure", err)
 	}
-	assertPartRetained(t, finalPath)
+	assertPublishedBytes(t, finalPath, "adc")
 }
 
 func TestValidateResultUsesPacketOffsetsAcrossDCAAggregation(t *testing.T) {
@@ -1992,6 +1992,20 @@ func assertPartBytes(t *testing.T, finalPath, want string) {
 	}
 	if string(got) != want {
 		t.Fatalf("part bytes = %q, want %q", got, want)
+	}
+}
+
+func assertPublishedBytes(t *testing.T, finalPath, want string) {
+	t.Helper()
+	got, err := os.ReadFile(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Fatalf("published bytes = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(finalPath + ".part"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("published capture retained stage: %v", err)
 	}
 }
 

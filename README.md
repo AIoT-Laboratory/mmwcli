@@ -217,7 +217,10 @@ radar-start interval so radar and delivery-observed camera items share one host-
 - Finite captures require exact byte coverage. Gracefully stopped open-ended captures require a
   positive whole number of frames. Gaps, overlaps, partial frames, short finite data, and extra finite
   data fail.
-- Both capture routes stage `OUTDIR.part` and publish a strict capture-session v1 directory as `OUTDIR` without overwrite only after capture and cleanup succeed. It contains `adc.bin`, the exact `radar.cfg`, and `capture.json`; failure retains the partial directory.
+- Both capture routes stage `OUTDIR.part` and publish a strict capture-session v1 directory as
+  `OUTDIR` without replacing an existing completed session. A new attempt removes its exact stale
+  `OUTDIR.part`. Complete ADC is still published when hardware cleanup reports an error; the
+  command returns that error and performs no further hardware operation.
 - Radar-only `--stream` mirrors provisional finite capture-stream v1 records on binary stdout while
   diagnostics remain on stderr. Open-ended streaming requires the aggregate multi-sensor contract.
   The published session directory remains authoritative.

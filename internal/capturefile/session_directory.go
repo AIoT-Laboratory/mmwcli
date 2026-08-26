@@ -141,6 +141,9 @@ func CreateSessionDirectory(finalPath string, finalize SessionFinalizer) (*Sessi
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("check capture session output %s: %w", abs, err)
 	}
+	if err := removeStalePart(abs, part); err != nil {
+		return nil, err
+	}
 	if err := os.Mkdir(part, 0o755); err != nil {
 		return nil, fmt.Errorf("create capture session part directory %s: %w", part, err)
 	}

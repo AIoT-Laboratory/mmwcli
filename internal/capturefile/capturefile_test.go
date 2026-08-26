@@ -35,10 +35,13 @@ func TestCommitPublishesPart(t *testing.T) {
 	}
 }
 
-func TestCloseKeepsPartAndRefusesOverwrite(t *testing.T) {
+func TestCreateReplacesStalePart(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "capture.bin")
 	file, err := Create(output)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte("stale")); err != nil {
 		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
@@ -47,8 +50,18 @@ func TestCloseKeepsPartAndRefusesOverwrite(t *testing.T) {
 	if _, err := os.Stat(output + ".part"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Create(output); err == nil {
-		t.Fatal("Create overwrote an existing part file")
+	retry, err := Create(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retry.Write([]byte("fresh")); err != nil {
+		t.Fatal(err)
+	}
+	if err := retry.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(output); err != nil || string(data) != "fresh" {
+		t.Fatalf("retried capture = %q, %v", data, err)
 	}
 }
 

@@ -326,14 +326,6 @@ func Run(
 				stats.DiscardedBeforeBasePackets,
 			)
 		}
-		if cleanupErr != nil {
-			marked := &CleanupError{Err: cleanupErr}
-			if resultErr == nil {
-				resultErr = marked
-			} else {
-				resultErr = errors.Join(resultErr, marked)
-			}
-		}
 		if cancellationErr := ctx.Err(); cancellationErr != nil {
 			resultErr = errors.Join(resultErr, cancellationErr)
 		}
@@ -380,6 +372,9 @@ func Run(
 			if closeErr := output.Close(); closeErr != nil {
 				resultErr = errors.Join(resultErr, &CleanupError{Err: closeErr})
 			}
+		}
+		if cleanupErr != nil {
+			resultErr = errors.Join(resultErr, &CleanupError{Err: cleanupErr})
 		}
 	}()
 
