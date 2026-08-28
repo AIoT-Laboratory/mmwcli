@@ -28,20 +28,27 @@ func TestParseConfigComments(t *testing.T) {
 	}
 }
 
-func TestBuildFullCapturePlan(t *testing.T) {
-	plan, err := BuildCapturePlan(StudioCLI, validCommands(), FullConfiguration)
+func validCommands() []string {
+	return []string{
+		"flushCfg",
+		"dfeDataOutputMode 1",
+		"channelCfg 15 7 0",
+		"adcCfg 2 1",
+		"adcbufCfg -1 0 1 1 1",
+		"profileCfg 0 60 7 3 24 0 0 166 1 256 12500 0 0 158",
+		"chirpCfg 0 0 0 0 0 0 0 1",
+		"chirpCfg 1 1 0 0 0 0 0 4",
+		"frameCfg 0 1 32 100 100 1 0",
+		"lowPower 0 0",
+		"lvdsStreamCfg -1 0 1 0",
+		"sensorStart",
+	}
+}
+
+func TestCommandPlan(t *testing.T) {
+	plan, err := CommandPlan(validCommands())
 	if err != nil {
 		t.Fatal(err)
-	}
-	contract := plan.RawCapture
-	if !contract.Valid() || contract != StudioCLI.DeviceFamily().RawCaptureContract() ||
-		contract.Vendor() != "ti" || contract.Family() != "xwr68xx" ||
-		contract.Model() != "" || contract.Revision() != "" ||
-		contract.IdentitySource() != "route_declaration" ||
-		contract.ConfigFormat() != "ti_mmwave_legacy_cli.v1" ||
-		contract.DataType() != "int16" || contract.ByteOrder() != "little" ||
-		contract.LaneCount() != 2 || contract.Layout() != "group2_i_then_q" {
-		t.Fatalf("unexpected raw capture contract: %+v", contract)
 	}
 	if plan.StartCommand != "sensorStart" || plan.DeclaredStartCommand != "sensorStart" || plan.StartWasSynthesized {
 		t.Fatalf("unexpected start plan: %+v", plan)
@@ -55,73 +62,47 @@ func TestBuildFullCapturePlan(t *testing.T) {
 	if plan.BytesPerFrame != 262_144 || plan.ExpectedBytes != 26_214_400 {
 		t.Fatalf("frame/total bytes = %d/%d, want 262144/26214400", plan.BytesPerFrame, plan.ExpectedBytes)
 	}
-	if plan.InfiniteFrames || plan.NumberOfFrames != 100 || plan.FramePeriod != 100*time.Millisecond {
+	if plan.NumberOfFrames != 100 || plan.FramePeriod != 100*time.Millisecond {
 		t.Fatalf("unexpected frame plan: %+v", plan)
 	}
-	span, finite := plan.ExpectedFrameSpan()
-	if !finite || span != 9900*time.Millisecond {
-		t.Fatalf("ExpectedFrameSpan = %s/%v", span, finite)
+	span, err := plan.FrameSpan()
+	if err != nil || span != 9900*time.Millisecond {
+		t.Fatalf("FrameSpan = %s/%v", span, err)
 	}
-	maximum, finite, err := plan.MaximumStreamingDuration(1500 * time.Millisecond)
-	if err != nil || !finite || maximum != 13900*time.Millisecond {
-		t.Fatalf("MaximumStreamingDuration = %s/%v/%v", maximum, finite, err)
+	maximum, err := plan.MaxDuration(1500 * time.Millisecond)
+	if err != nil || maximum != 13900*time.Millisecond {
+		t.Fatalf("MaxDuration = %s/%v", maximum, err)
 	}
-	maximum, finite, err = plan.MaximumStreamingDuration(2500 * time.Millisecond)
-	if err != nil || !finite || maximum != 15900*time.Millisecond {
-		t.Fatalf("tail-plus-quiet MaximumStreamingDuration = %s/%v/%v", maximum, finite, err)
+	maximum, err = plan.MaxDuration(2500 * time.Millisecond)
+	if err != nil || maximum != 15900*time.Millisecond {
+		t.Fatalf("tail-plus-quiet MaxDuration = %s/%v", maximum, err)
 	}
 }
 
 func TestBuildPlanSynthesizesAndSeparatesStart(t *testing.T) {
 	withoutStart := validCommands()[:len(validCommands())-1]
-	plan, err := BuildCapturePlan(StudioCLI, withoutStart, FullConfiguration)
+	plan, err := CommandPlan(withoutStart)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plan.StartCommand != "sensorStart" || !plan.StartWasSynthesized || plan.DeclaredStartCommand != "" {
 		t.Fatalf("unexpected synthesized start: %+v", plan)
 	}
-
-	reuse, err := BuildCapturePlan(StudioCLI, validCommands(), ReuseConfiguration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reuse.StartCommand != "sensorStart 0" || reuse.DeclaredStartCommand != "sensorStart" {
-		t.Fatalf("unexpected reuse start: %+v", reuse)
-	}
-	if reuse.ExpectedBytes != 26_214_400 {
-		t.Fatalf("reuse ExpectedBytes = %d, want 26214400", reuse.ExpectedBytes)
-	}
 }
 
-func TestFullPlanRejectsNoReconfigureStart(t *testing.T) {
+func TestPlanRejectsNoReconfigureStart(t *testing.T) {
 	commands := validCommands()
 	commands[len(commands)-1] = "sensorStart 0"
-	if _, err := BuildCapturePlan(StudioCLI, commands, FullConfiguration); err == nil {
-		t.Fatal("full plan accepted sensorStart 0")
-	}
-	if _, err := BuildCapturePlan(StudioCLI, commands, ReuseConfiguration); err != nil {
-		t.Fatalf("reuse plan rejected sensorStart 0: %v", err)
+	if _, err := CommandPlan(commands); err == nil {
+		t.Fatal("plan accepted sensorStart 0")
 	}
 }
 
-func TestInfiniteFramePlan(t *testing.T) {
+func TestZeroFramePlanIsRejected(t *testing.T) {
 	commands := replaceCommand(validCommands(), "frameCfg", "frameCfg 0 1 32 0 100 1 0")
-	plan, err := BuildCapturePlan(StudioCLI, commands, FullConfiguration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !plan.InfiniteFrames || plan.NumberOfFrames != 0 {
-		t.Fatalf("not infinite: %+v", plan)
-	}
-	if plan.BytesPerFrame != 262_144 || plan.ExpectedBytes != 0 {
-		t.Fatalf("infinite frame/total bytes = %d/%d, want 262144/0", plan.BytesPerFrame, plan.ExpectedBytes)
-	}
-	if _, finite := plan.ExpectedFrameSpan(); finite {
-		t.Fatal("infinite plan reported finite span")
-	}
-	if _, finite, err := plan.MaximumStreamingDuration(time.Second); err != nil || finite {
-		t.Fatalf("infinite maximum = finite:%v err:%v", finite, err)
+	if _, err := CommandPlan(commands); err == nil ||
+		!strings.Contains(err.Error(), "frame count") {
+		t.Fatalf("zero-frame error = %v", err)
 	}
 }
 
@@ -130,7 +111,7 @@ func TestExpectedBytesSingleReceiverSingleChirp(t *testing.T) {
 	commands = replaceCommandsByName(commands, "chirpCfg", "chirpCfg 0 0 0 0 0 0 0 1")
 	commands = replaceCommand(commands, "frameCfg", "frameCfg 0 0 1 1 100 1 0")
 
-	plan, err := BuildCapturePlan(StudioCLI, commands, FullConfiguration)
+	plan, err := CommandPlan(commands)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +226,7 @@ func TestExpectedBytesRejectsAmbiguousOrIncompleteMapping(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			commands := test.mutate(append([]string(nil), validCommands()...))
-			_, err := BuildCapturePlan(StudioCLI, commands, FullConfiguration)
+			_, err := CommandPlan(commands)
 			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(test.match)) {
 				t.Fatalf("error = %v, want substring %q", err, test.match)
 			}
@@ -262,7 +243,7 @@ func TestExpectedBytesSupportsMaximumHardwareFeasibleSamples(t *testing.T) {
 	commands = replaceCommandsByName(commands, "chirpCfg", "chirpCfg 0 31 0 0 0 0 0 1")
 	commands = replaceCommand(commands, "frameCfg", "frameCfg 0 31 255 65535 100 1 0")
 
-	plan, err := BuildCapturePlan(StudioCLI, commands, FullConfiguration)
+	plan, err := CommandPlan(commands)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +274,7 @@ func TestRawBufferHardwareBounds(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			commands := replaceCommand(validCommands(), "profileCfg", profile(test.samples))
 			commands = replaceCommand(commands, "channelCfg", fmt.Sprintf("channelCfg %d 7 0", test.rxMask))
-			_, err := BuildCapturePlan(StudioCLI, commands, FullConfiguration)
+			_, err := CommandPlan(commands)
 			if test.wantError == "" {
 				if err != nil {
 					t.Fatal(err)
@@ -329,17 +310,17 @@ func TestExpectedByteArithmeticBoundaries(t *testing.T) {
 	}
 }
 
-func TestMaximumStreamingDurationRejectsGuardOverflow(t *testing.T) {
-	plan := CapturePlan{
+func TestMaxDurationRejectsGuardOverflow(t *testing.T) {
+	plan := Plan{
 		NumberOfFrames: 1,
 		FramePeriod:    time.Duration(math.MaxInt64),
 	}
-	if _, finite, err := plan.MaximumStreamingDuration(time.Second); !finite || err == nil {
-		t.Fatalf("MaximumStreamingDuration() finite=%v err=%v, want finite overflow error", finite, err)
+	if _, err := plan.MaxDuration(time.Second); err == nil {
+		t.Fatal("MaxDuration accepted an overflow")
 	}
 }
 
-func TestCapturePlanRejectsInvalidContracts(t *testing.T) {
+func TestPlanRejectsInvalidContracts(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func([]string) []string
@@ -401,7 +382,7 @@ func TestCapturePlanRejectsInvalidContracts(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			commands := test.mutate(append([]string(nil), validCommands()...))
-			_, err := BuildCapturePlan(StudioCLI, commands, FullConfiguration)
+			_, err := CommandPlan(commands)
 			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(test.match)) {
 				t.Fatalf("error = %v, want substring %q", err, test.match)
 			}

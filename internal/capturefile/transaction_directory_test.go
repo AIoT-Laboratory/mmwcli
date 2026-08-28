@@ -21,9 +21,6 @@ func TestTransactionDirectoryPublishesWithoutOverwrite(t *testing.T) {
 	if err := directory.CommitContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !directory.Committed() {
-		t.Fatal("transaction directory did not report committed")
-	}
 	data, err := os.ReadFile(filepath.Join(finalPath, "session.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -79,5 +76,23 @@ func TestTransactionDirectoryCancellationKeepsStage(t *testing.T) {
 	}
 	if _, err := os.Stat(directory.PartPath()); err != nil {
 		t.Fatalf("cancelled transaction did not retain stage: %v", err)
+	}
+}
+
+func TestTransactionDirectoryRejectsAndPreservesExistingStage(t *testing.T) {
+	finalPath := filepath.Join(t.TempDir(), "session")
+	stagePath := finalPath + ".part"
+	if err := os.Mkdir(stagePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	evidence := filepath.Join(stagePath, "adc.bin")
+	if err := os.WriteFile(evidence, []byte("diagnostic ADC"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateTransactionDirectory(finalPath); err == nil {
+		t.Fatal("existing diagnostic stage was accepted")
+	}
+	if data, err := os.ReadFile(evidence); err != nil || string(data) != "diagnostic ADC" {
+		t.Fatalf("diagnostic stage changed: %q, %v", data, err)
 	}
 }

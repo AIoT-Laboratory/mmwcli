@@ -6,8 +6,7 @@ import (
 )
 
 // Output is the transaction boundary used by the capture session. An output
-// remains staged until CommitContext publishes it after hardware cleanup and
-// capture validation both succeed.
+// is committed only after hardware cleanup and capture validation both succeed.
 type Output interface {
 	io.WriterAt
 	Truncate(int64) error
@@ -17,8 +16,7 @@ type Output interface {
 	captureOutput()
 }
 
-func (*File) captureOutput()             {}
-func (*SessionDirectory) captureOutput() {}
+func (*File) captureOutput() {}
 
 // IsUsableOutput rejects nil interfaces, typed nils, and outputs whose ADC
 // staging handle has already been closed. Output is sealed to this package, so
@@ -27,12 +25,9 @@ func IsUsableOutput(output Output) bool {
 	switch output := output.(type) {
 	case *File:
 		return output != nil && output.file != nil
-	case *SessionDirectory:
-		return output != nil && output.file != nil
 	default:
 		return false
 	}
 }
 
 var _ Output = (*File)(nil)
-var _ Output = (*SessionDirectory)(nil)

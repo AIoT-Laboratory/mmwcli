@@ -7,18 +7,13 @@ import (
 	"testing"
 )
 
-func TestBuildCaptureSessionV1PlanAcceptsRepositoryConfigs(t *testing.T) {
+func TestBuildPlanAcceptsRepositoryConfig(t *testing.T) {
 	tests := []struct {
 		name          string
-		family        string
 		bytesPerFrame int64
 		expectedBytes int64
 	}{
-		{name: "studio-cli-xwr6843-raw.cfg", family: "xwr68xx", bytesPerFrame: 262_144, expectedBytes: 26_214_400},
-		{name: "studio-cli-iwr6843-actions-3tx.cfg", family: "xwr68xx", bytesPerFrame: 1_572_864, expectedBytes: 943_718_400},
-		{name: "debug-cli-xwr6843-raw.cfg", family: "xwr68xx", bytesPerFrame: 1_572_864, expectedBytes: 943_718_400},
-		{name: "debug-cli-xwr16xx-raw.cfg", family: "xwr16xx", bytesPerFrame: 262_144, expectedBytes: 26_214_400},
-		{name: "debug-cli-xwr18xx-raw.cfg", family: "xwr18xx", bytesPerFrame: 393_216, expectedBytes: 39_321_600},
+		{name: "iwr6843.cfg", bytesPerFrame: 1_572_864, expectedBytes: 943_718_400},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -26,45 +21,31 @@ func TestBuildCaptureSessionV1PlanAcceptsRepositoryConfigs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			family, err := ParseDeviceFamily(test.family)
+			plan, err := BuildPlan(snapshot)
 			if err != nil {
 				t.Fatal(err)
 			}
-			plan, err := BuildCaptureSessionV1PlanForFamily(family, snapshot)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if plan.DeviceFamily() != family ||
-				plan.ExpectedBytes != test.expectedBytes || plan.BytesPerFrame != test.bytesPerFrame {
+			if plan.ExpectedBytes != test.expectedBytes || plan.BytesPerFrame != test.bytesPerFrame {
 				t.Fatalf("plan sizes = frame %d total %d", plan.BytesPerFrame, plan.ExpectedBytes)
 			}
 		})
 	}
 }
 
-func TestBuildCaptureSessionV1PlanRejectsReuse(t *testing.T) {
-	if _, err := BuildCaptureSessionV1Plan(
-		renderSessionConfig(validCommands()[1:]),
-		ReuseConfiguration,
-	); err == nil || !strings.Contains(err.Error(), "full radar configuration") {
-		t.Fatalf("reuse error = %v", err)
-	}
-}
-
-func TestValidateCaptureSessionV1PlanBindsExactSemantics(t *testing.T) {
+func TestValidatePlanBindsExactSemantics(t *testing.T) {
 	snapshot := renderSessionConfig(validCommands())
-	plan, err := BuildCaptureSessionV1Plan(snapshot, FullConfiguration)
+	plan, err := BuildPlan(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateCaptureSessionV1Plan(snapshot, plan); err != nil {
+	if err := ValidatePlan(snapshot, plan); err != nil {
 		t.Fatalf("validate exact plan: %v", err)
 	}
 
 	t.Run("tampered plan geometry", func(t *testing.T) {
 		tampered := plan
 		tampered.BytesPerFrame--
-		if err := ValidateCaptureSessionV1Plan(snapshot, tampered); err == nil {
+		if err := ValidatePlan(snapshot, tampered); err == nil {
 			t.Fatal("tampered capture plan was accepted")
 		}
 	})
@@ -76,19 +57,8 @@ func TestValidateCaptureSessionV1PlanBindsExactSemantics(t *testing.T) {
 			"profileCfg",
 			"profileCfg 0 61 7 3 24 0 0 166 1 256 12500 0 0 158",
 		)
-		if err := ValidateCaptureSessionV1Plan(snapshot, tampered); err == nil {
+		if err := ValidatePlan(snapshot, tampered); err == nil {
 			t.Fatal("capture plan with different physical commands was accepted")
-		}
-	})
-
-	t.Run("tampered raw capture contract", func(t *testing.T) {
-		tampered := plan
-		tampered.RawCapture.model = "iwr6843"
-		if sameCaptureGeometry(plan, tampered) {
-			t.Fatal("capture geometry ignored the raw capture contract")
-		}
-		if err := ValidateCaptureSessionV1Plan(snapshot, tampered); err == nil {
-			t.Fatal("capture plan with a different raw capture contract was accepted")
 		}
 	})
 
@@ -99,41 +69,41 @@ func TestValidateCaptureSessionV1PlanBindsExactSemantics(t *testing.T) {
 			"profileCfg 0 61 7 3 24 0 0 166 1 256 12500 0 0 158",
 		)
 		alternateSnapshot := renderSessionConfig(alternate)
-		alternatePlan, err := BuildCaptureSessionV1Plan(alternateSnapshot, FullConfiguration)
+		alternatePlan, err := BuildPlan(alternateSnapshot)
 		if err != nil {
 			t.Fatalf("build alternate capture plan: %v", err)
 		}
-		if !sameCaptureGeometry(alternatePlan, plan) {
+		if !sameGeometry(alternatePlan, plan) {
 			t.Fatal("alternate capture plan did not preserve byte geometry")
 		}
-		if err := ValidateCaptureSessionV1Plan(alternateSnapshot, plan); err == nil {
+		if err := ValidatePlan(alternateSnapshot, plan); err == nil {
 			t.Fatal("different physical CFG with equal byte geometry was accepted")
 		}
 	})
 }
 
-func TestBuildCaptureSessionV1PlanUsesMmwcoreCommentBoundary(t *testing.T) {
+func TestBuildPlanUsesMmwcoreCommentBoundary(t *testing.T) {
 	commands := append([]string{"// ignored by the offline contract parser"}, validCommands()...)
-	if _, err := BuildCaptureSessionV1Plan(renderSessionConfig(commands), FullConfiguration); err != nil {
+	if _, err := BuildPlan(renderSessionConfig(commands)); err != nil {
 		t.Fatal(err)
 	}
 	commands = replaceCommand(commands[1:], "adcCfg", "adcCfg 2 1 // not an mmwcore inline comment")
-	if _, err := BuildCaptureSessionV1Plan(renderSessionConfig(commands), FullConfiguration); err == nil {
+	if _, err := BuildPlan(renderSessionConfig(commands)); err == nil {
 		t.Fatal("inline // produced a session CFG that mmwcore cannot parse")
 	}
 }
 
-func TestBuildCaptureSessionV1PlanRejectsInvalidUTF8(t *testing.T) {
+func TestBuildPlanRejectsInvalidUTF8(t *testing.T) {
 	snapshot := append([]byte("% ignored comment "), 0xff)
 	snapshot = append(snapshot, '\n')
 	snapshot = append(snapshot, renderSessionConfig(validCommands())...)
-	if _, err := BuildCaptureSessionV1Plan(snapshot, FullConfiguration); err == nil ||
+	if _, err := BuildPlan(snapshot); err == nil ||
 		!strings.Contains(err.Error(), "UTF-8") {
 		t.Fatalf("error = %v, want UTF-8 rejection", err)
 	}
 }
 
-func TestBuildCaptureSessionV1PlanRejectsUnrepresentableConfigs(t *testing.T) {
+func TestBuildPlanRejectsUnrepresentableConfigs(t *testing.T) {
 	tests := []struct {
 		name        string
 		replacement string
@@ -176,7 +146,7 @@ func TestBuildCaptureSessionV1PlanRejectsUnrepresentableConfigs(t *testing.T) {
 				command := strings.Fields(test.replacement)[0]
 				commands = replaceCommand(commands, command, test.replacement)
 			}
-			_, err := BuildCaptureSessionV1Plan(renderSessionConfig(commands), FullConfiguration)
+			_, err := BuildPlan(renderSessionConfig(commands))
 			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(test.match)) {
 				t.Fatalf("error = %v, want substring %q", err, test.match)
 			}

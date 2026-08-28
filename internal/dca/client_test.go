@@ -75,11 +75,7 @@ func TestClientAcceptsMatchingResponseFromAlternateSource(t *testing.T) {
 	if !response.Source.IP.Equal(wantSource.IP) || response.Source.Port != wantSource.Port {
 		t.Fatalf("response source = %v, want %v", response.Source, wantSource)
 	}
-	last := client.LastResponseEndpoint()
-	if last == nil || !last.IP.Equal(wantSource.IP) || last.Port != wantSource.Port {
-		t.Fatalf("last response source = %v, want %v", last, wantSource)
-	}
-	statuses := client.TakeAsyncStatuses()
+	statuses := client.TakeStatuses()
 	if len(statuses) != 1 || statuses[0].Status != 0x1234 || statuses[0].Command != CommandAsyncStatus {
 		t.Fatalf("async statuses = %+v", statuses)
 	}
@@ -138,13 +134,13 @@ func TestClientDrainsAsyncStatusesToQuietWindow(t *testing.T) {
 	server := listenUDP(t, net.IPv4(127, 0, 0, 1))
 	client := dialTestClient(t, server, time.Second)
 	defer client.Close()
-	destination := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: client.LocalEndpoint().Port}
+	destination := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: clientEndpoint(client).Port}
 	if _, err := sender.WriteToUDP(testResponse(CommandAsyncStatus, SystemStatusRecordCompleted), destination); err != nil {
 		t.Fatal(err)
 	}
 	contextWithLimit, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	statuses, err := client.DrainAsyncStatuses(contextWithLimit, 30*time.Millisecond)
+	statuses, err := client.DrainStatuses(contextWithLimit, 30*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +150,7 @@ func TestClientDrainsAsyncStatusesToQuietWindow(t *testing.T) {
 	if statuses[0].Source.Port != sender.LocalAddr().(*net.UDPAddr).Port {
 		t.Fatalf("async source = %v, want %v", statuses[0].Source, sender.LocalAddr())
 	}
-	if remaining := client.TakeAsyncStatuses(); len(remaining) != 0 {
+	if remaining := client.TakeStatuses(); len(remaining) != 0 {
 		t.Fatalf("drain did not clear queue: %+v", remaining)
 	}
 }
@@ -195,7 +191,7 @@ func TestClientExecutePoisonsOnAsyncStatusQueueOverflow(t *testing.T) {
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
 	}
-	statuses := client.TakeAsyncStatuses()
+	statuses := client.TakeStatuses()
 	if len(statuses) != asyncStatusQueueLimit {
 		t.Fatalf("queued statuses = %d, want %d", len(statuses), asyncStatusQueueLimit)
 	}
@@ -215,7 +211,7 @@ func TestClientDrainPoisonsOnAsyncStatusQueueOverflow(t *testing.T) {
 	server := listenUDP(t, net.IPv4(127, 0, 0, 1))
 	client := dialTestClient(t, server, time.Second)
 	defer client.Close()
-	destination := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: client.LocalEndpoint().Port}
+	destination := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: clientEndpoint(client).Port}
 	for index := 0; index <= asyncStatusQueueLimit; index++ {
 		if _, err := sender.WriteToUDP(testResponse(CommandAsyncStatus, uint16(index)), destination); err != nil {
 			t.Fatal(err)
@@ -224,7 +220,7 @@ func TestClientDrainPoisonsOnAsyncStatusQueueOverflow(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	statuses, err := client.DrainAsyncStatuses(ctx, 100*time.Millisecond)
+	statuses, err := client.DrainStatuses(ctx, 100*time.Millisecond)
 	if !errors.Is(err, ErrClientPoisoned) || !errors.Is(err, ErrAsyncStatusQueueOverflow) {
 		t.Fatalf("overflow error = %v", err)
 	}
@@ -236,7 +232,7 @@ func TestClientDrainPoisonsOnAsyncStatusQueueOverflow(t *testing.T) {
 			t.Fatalf("status[%d] = %#04x, want %#04x", index, status.Status, index)
 		}
 	}
-	if remaining := client.TakeAsyncStatuses(); len(remaining) != 0 {
+	if remaining := client.TakeStatuses(); len(remaining) != 0 {
 		t.Fatalf("overflow drain did not clear queue: %+v", remaining)
 	}
 	if _, err := client.Ping(context.Background()); !errors.Is(err, ErrClientPoisoned) || !errors.Is(err, ErrAsyncStatusQueueOverflow) {
@@ -287,9 +283,9 @@ func TestStartTimeoutSendsOneStopAndNeverRetriesStart(t *testing.T) {
 
 	client := dialTestClient(t, server, 80*time.Millisecond)
 	defer client.Close()
-	_, err := client.StartRecordConvergent(context.Background())
+	_, err := client.Start(context.Background())
 	if err == nil {
-		t.Fatal("StartRecordConvergent succeeded despite a dropped start reply")
+		t.Fatal("Start succeeded despite a dropped start reply")
 	}
 	if !errors.Is(err, ErrCommandTimeout) {
 		t.Fatalf("error = %v, want ErrCommandTimeout", err)
@@ -330,6 +326,10 @@ func dialTestClient(t *testing.T, server *net.UDPConn, timeout time.Duration) *C
 		t.Fatal(err)
 	}
 	return client
+}
+
+func clientEndpoint(client *Client) *net.UDPAddr {
+	return client.conn.LocalAddr().(*net.UDPAddr)
 }
 
 func assertNoUDPRequest(t *testing.T, server *net.UDPConn) {

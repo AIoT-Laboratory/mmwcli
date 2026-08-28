@@ -51,7 +51,7 @@ func TestReceiverBindsBeforeStartAndReassemblesRawOffsets(t *testing.T) {
 
 	firstContext, cancelFirst := context.WithTimeout(context.Background(), time.Second)
 	defer cancelFirst()
-	if err := receiver.WaitForFirst(firstContext); err != nil {
+	if err := receiver.WaitFirst(firstContext); err != nil {
 		t.Fatal(err)
 	}
 	waitContext, cancelWait := context.WithTimeout(context.Background(), 2*time.Second)
@@ -159,11 +159,11 @@ func TestFirstPacketTimeoutStartsWhenCallerWaitsAfterArm(t *testing.T) {
 	sendDataPacket(t, device, receiver.LocalEndpoint(), 1, 0, []byte{1, 2, 3, 4})
 	waitContext, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := receiver.WaitForFirst(waitContext); err != nil {
+	if err := receiver.WaitFirst(waitContext); err != nil {
 		t.Fatalf("packet after a long arm interval was rejected: %v", err)
 	}
 	if receiver.Stats().FirstPacketAt.IsZero() {
-		t.Fatal("WaitForFirst returned before first-packet stats were published")
+		t.Fatal("WaitFirst returned before first-packet stats were published")
 	}
 }
 
@@ -198,7 +198,7 @@ func TestReceiverExpectedOutputWaitsPastIdleAndAcceptsLateCoverage(t *testing.T)
 	sendDataPacket(t, device, destination, 1, 100, []byte("ab"))
 	firstContext, cancelFirst := context.WithTimeout(context.Background(), time.Second)
 	defer cancelFirst()
-	if err := receiver.WaitForFirst(firstContext); err != nil {
+	if err := receiver.WaitFirst(firstContext); err != nil {
 		t.Fatal(err)
 	}
 
@@ -361,7 +361,7 @@ func TestFiniteReceiverKeepsWatchingForDataBeyondExactTarget(t *testing.T) {
 	defer device.Close()
 	destination := receiver.LocalEndpoint()
 	sendDataPacket(t, device, destination, 1, 100, []byte("abcd"))
-	if err := receiver.WaitForFirst(context.Background()); err != nil {
+	if err := receiver.WaitFirst(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 

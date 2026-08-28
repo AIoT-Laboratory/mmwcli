@@ -2,42 +2,20 @@ name: CI
 
 on:
   push:
-    branches:
-      - dev
-      - main
+    branches: [dev, main]
   pull_request:
-    branches:
-      - dev
-      - main
+    branches: [dev, main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  quality:
-    runs-on: ubuntu-latest
-    env:
-      CGO_ENABLED: '0'
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Install FFmpeg image2pipe integration fixture
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes ffmpeg
-          ffmpeg -version
-      - run: make check
-
-  windows-test:
+  offline:
     runs-on: windows-latest
+    timeout-minutes: 15
     env:
-      CGO_ENABLED: '0'
+      CGO_ENABLED: "0"
       GOARCH: amd64
     steps:
       - uses: actions/checkout@v6
@@ -47,31 +25,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Check formatting
+        shell: pwsh
+        run: |
+          $files = gofmt -l cmd internal
+          if ($files) {
+            $files
+            exit 1
+          }
       - run: go test -count=1 ./...
-      - run: go test -count=1 -tags ftd2xx ./...
-      - run: go build -trimpath -tags ftd2xx ./cmd/mmwcli
-
-  build:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        goos:
-          - windows
-          - linux
-        goarch:
-          - amd64
-          - arm64
-    env:
-      CGO_ENABLED: '0'
-      GOOS: ${{ matrix.goos }}
-      GOARCH: ${{ matrix.goarch }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: false
-      - run: make build
+      - run: go vet ./...
+      - run: go build -trimpath -tags ftd2xx -o bin\mmwcli.exe .\cmd\mmwcli

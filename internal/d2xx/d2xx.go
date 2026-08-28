@@ -1,5 +1,5 @@
 // Package d2xx provides the narrow native FTDI D2XX boundary used by
-// debug-cli builds. Loading the library does not enumerate or open devices.
+// IWR6843 capture builds. Loading the library does not enumerate or open devices.
 package d2xx
 
 import (
@@ -79,70 +79,21 @@ func (err *StatusError) Error() string {
 	return fmt.Sprintf("D2XX %s: %s", err.Operation, err.Status)
 }
 
-type Version uint32
-
-func (version Version) String() string {
-	raw := uint32(version)
-	if raw>>24 != 0 {
-		return fmt.Sprintf("0x%08X", raw)
-	}
-	major, majorOK := decodeBCD(byte(raw >> 16))
-	minor, minorOK := decodeBCD(byte(raw >> 8))
-	build, buildOK := decodeBCD(byte(raw))
-	if !majorOK || !minorOK || !buildOK {
-		return fmt.Sprintf("0x%08X", raw)
-	}
-	return fmt.Sprintf("%d.%d.%d", major, minor, build)
-}
-
-func decodeBCD(value byte) (int, bool) {
-	high := value >> 4
-	low := value & 0x0F
-	if high > 9 || low > 9 {
-		return 0, false
-	}
-	return int(high)*10 + int(low), true
-}
-
-type Info struct {
-	Library      string
-	Version      Version
-	VersionKnown bool
-}
-
-type Selection uint32
-
-const (
-	SelectBySerialNumber Selection = 1
-	SelectByDescription  Selection = 2
-)
-
 type Selector struct {
-	By    Selection
-	Value string
+	Description string
 }
 
 func (selector Selector) Validate() error {
-	if selector.By != SelectBySerialNumber && selector.By != SelectByDescription {
-		return fmt.Errorf("invalid D2XX selection method %d", selector.By)
+	if selector.Description == "" {
+		return errors.New("D2XX description is empty")
 	}
-	if selector.Value == "" {
-		return errors.New("D2XX selector value is empty")
-	}
-	if strings.ContainsRune(selector.Value, 0) {
-		return errors.New("D2XX selector contains NUL")
+	if strings.ContainsRune(selector.Description, 0) {
+		return errors.New("D2XX description contains NUL")
 	}
 	return nil
 }
 
-type nativeInfo struct {
-	library      string
-	version      Version
-	versionKnown bool
-}
-
 type nativeLibrary interface {
-	info() (nativeInfo, error)
 	open(Selector) (nativeDevice, error)
 	close() error
 }
@@ -150,7 +101,6 @@ type nativeLibrary interface {
 type Library struct {
 	mu     sync.Mutex
 	native nativeLibrary
-	info   Info
 	open   int
 }
 
@@ -159,29 +109,7 @@ func Load() (*Library, error) {
 	if err != nil {
 		return nil, err
 	}
-	return finishLoad(native)
-}
-
-func finishLoad(native nativeLibrary) (*Library, error) {
-	info, err := native.info()
-	if err != nil {
-		return nil, errors.Join(err, native.close())
-	}
-	return &Library{
-		native: native,
-		info: Info{
-			Library:      info.library,
-			Version:      info.version,
-			VersionKnown: info.versionKnown,
-		},
-	}, nil
-}
-
-func (library *Library) Info() Info {
-	if library == nil {
-		return Info{}
-	}
-	return library.info
+	return &Library{native: native}, nil
 }
 
 func (library *Library) Open(selector Selector) (*Device, error) {

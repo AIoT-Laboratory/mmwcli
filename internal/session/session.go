@@ -11,44 +11,35 @@ import (
 	"time"
 
 	"mmwcli/internal/capturefile"
-	"mmwcli/internal/capturestream"
 	"mmwcli/internal/dca"
 	"mmwcli/internal/radar"
 )
 
 type Radar interface {
-	VerifyPlatformContext(context.Context) (string, error)
-	StopContext(context.Context) (string, error)
-	ApplyContext(context.Context, radar.CapturePlan) error
-	StartContext(context.Context) (string, error)
-	StartWithoutReconfigurationContext(context.Context) (string, error)
+	Verify(context.Context) (string, error)
+	Stop(context.Context) (string, error)
+	Apply(context.Context, radar.Plan) error
+	Start(context.Context) (string, error)
+	AwaitEnd(context.Context) (string, error)
+	StartInterval() (lower, upper time.Time, err error)
 }
 
-// finiteFrameEndAwaiter is an optional capability for radar controllers whose
-// finite frame schedule emits a trustworthy natural-completion event. Text CLI
-// controllers intentionally fall back to the normal explicit stop path.
-type finiteFrameEndAwaiter interface {
-	AwaitFiniteFrameEndContext(context.Context) (string, error)
-}
-
-type DCAControl interface {
+type DCA interface {
 	Execute(context.Context, dca.Command, []byte) (dca.Response, error)
 	Configure(context.Context, dca.FPGAConfig, int) (dca.ConfigurationResponses, error)
-	StartRecordConvergent(context.Context) (dca.Response, error)
-	StopRecord(context.Context) (dca.Response, error)
-	TakeAsyncStatuses() []dca.Response
-	DrainAsyncStatuses(context.Context, time.Duration) ([]dca.Response, error)
+	Start(context.Context) (dca.Response, error)
+	Stop(context.Context) (dca.Response, error)
+	TakeStatuses() []dca.Response
+	DrainStatuses(context.Context, time.Duration) ([]dca.Response, error)
 }
 
-type DataReceiver interface {
+type Receiver interface {
 	Start(context.Context, io.WriterAt) error
-	WaitForFirst(context.Context) error
+	WaitFirst(context.Context) error
 	Wait(context.Context) (dca.CaptureStats, error)
 	Stats() dca.CaptureStats
 	Close() error
 }
-
-type ReceiverFactory func(dca.ReceiverConfig) (DataReceiver, error)
 
 // Participant coordinates one already-created auxiliary sensor with the
 // radar/DCA lifecycle. Ready/process setup belongs to the caller. Arm runs
@@ -60,20 +51,7 @@ type Participant interface {
 	Arm(context.Context) error
 	Start(context.Context) error
 	Finish(context.Context, bool) error
-}
-
-// RadarFrameStartObserver is an optional Participant capability. The host
-// interval conservatively brackets radar frame start using the strongest
-// controller and DCA evidence available to the session.
-type RadarFrameStartObserver interface {
-	RadarFrameStartObserved(lower, upper time.Time)
-}
-
-// RadarFrameStartIntervalProvider optionally supplies a controller-observed
-// interval around the physical frame-start event. Session intersects it with
-// the command-to-first-packet interval instead of treating either as exact.
-type RadarFrameStartIntervalProvider interface {
-	RadarFrameStartInterval() (lower, upper time.Time, err error)
+	SetRadarStart(lower, upper time.Time)
 }
 
 // CleanupError marks a failure that occurred while converging hardware or
@@ -95,71 +73,123 @@ func (e *finiteCaptureDeadlineError) Error() string {
 
 func (e *finiteCaptureDeadlineError) Unwrap() error { return context.DeadlineExceeded }
 
-type Options struct {
-	FPGAConfig          dca.FPGAConfig
-	ReceiverConfig      dca.ReceiverConfig
-	PacketDelay         int
-	ResetFPGA           bool
-	CommandTimeout      time.Duration
-	DrainTimeout        time.Duration
-	ControlDrainTimeout time.Duration
-	ControlQuietWindow  time.Duration
-	RadarCleanupTimeout time.Duration
-	Mirror              *capturestream.Mirror
-	MirrorSealTimeout   time.Duration
-	Participant         Participant
-	ParticipantTimeout  time.Duration
-	// StopRequested asks an infinite capture to stop acquisition and complete
-	// normal cleanup, validation, and publication. It is deliberately separate
-	// from ctx cancellation, which always aborts publication.
-	StopRequested <-chan struct{}
-	Log           func(string)
+type runTimings struct {
+	drain        time.Duration
+	controlDrain time.Duration
+	controlQuiet time.Duration
+	radarCleanup time.Duration
+	participant  time.Duration
 }
 
-func DefaultOptions() Options {
-	return Options{
-		FPGAConfig:          dca.DefaultFPGAConfig(),
-		ReceiverConfig:      dca.DefaultReceiverConfig(),
-		PacketDelay:         25,
-		CommandTimeout:      3 * time.Second,
-		DrainTimeout:        3 * time.Second,
-		ControlDrainTimeout: 500 * time.Millisecond,
-		ControlQuietWindow:  50 * time.Millisecond,
-		RadarCleanupTimeout: 3 * time.Second,
-		MirrorSealTimeout:   3 * time.Second,
-		ParticipantTimeout:  5 * time.Second,
+var defaultRunTimings = runTimings{
+	drain: 3 * time.Second, controlDrain: 500 * time.Millisecond,
+	controlQuiet: 50 * time.Millisecond, radarCleanup: 3 * time.Second,
+	participant: 5 * time.Second,
+}
+
+// Prepared is the fully validated fixed IWR6843/DCA1000 capture configuration.
+// Participant and Log are lifecycle collaborators, not capture policy.
+type Prepared struct {
+	Participant Participant
+	Log         func(string)
+
+	fpga                     dca.FPGAConfig
+	receiver                 dca.ReceiverConfig
+	packetDelay              int
+	commandTimeout           time.Duration
+	maximumStreamingDuration time.Duration
+	timings                  runTimings
+	valid                    bool
+}
+
+func Prepare(
+	plan radar.Plan,
+	fpga dca.FPGAConfig,
+	receiver dca.ReceiverConfig,
+	packetDelay int,
+	commandTimeout time.Duration,
+) (Prepared, error) {
+	if commandTimeout <= 0 || receiver.FirstPacketTimeout <= 0 || receiver.IdleTimeout <= 0 {
+		return Prepared{}, errors.New("capture control and receiver timeouts must be positive")
 	}
+	if plan.BytesPerFrame <= 0 || plan.FramePeriod <= 0 ||
+		plan.NumberOfFrames == 0 || plan.ExpectedBytes <= 0 {
+		return Prepared{}, errors.New("radar capture plan has invalid finite frame accounting")
+	}
+	if err := dca.ValidateRawCaptureFPGAConfig(fpga); err != nil {
+		return Prepared{}, err
+	}
+	if _, err := dca.BuildRecordConfig(packetDelay); err != nil {
+		return Prepared{}, err
+	}
+	if plan.ExpectedDCADataFormat != fpga.DataFormat {
+		return Prepared{}, fmt.Errorf(
+			"radar adcCfg requires DCA data-format=%d, configured=%d",
+			plan.ExpectedDCADataFormat, fpga.DataFormat,
+		)
+	}
+	if !plan.HardwareLVDSEnabled {
+		return Prepared{}, errors.New("radar configuration does not enable hardware LVDS")
+	}
+	if plan.ExpectedBytes%plan.BytesPerFrame != 0 ||
+		plan.ExpectedBytes/plan.BytesPerFrame != int64(plan.NumberOfFrames) {
+		return Prepared{}, errors.New("radar capture plan has inconsistent frame byte accounting")
+	}
+	if receiver.MaxOutputBytes < plan.ExpectedBytes {
+		return Prepared{}, fmt.Errorf(
+			"DCA maximum output size %d is smaller than capture size %d",
+			receiver.MaxOutputBytes, plan.ExpectedBytes,
+		)
+	}
+	receiver.MaxOutputBytes = plan.ExpectedBytes
+	receiver.ExpectedOutputBytes = plan.ExpectedBytes
+	receiver.CadenceFrameBytes = plan.BytesPerFrame
+	receiver.CadenceFramePeriod = plan.FramePeriod
+	requiredIdleTimeout, err := MinimumReceiverIdleTimeout(plan)
+	if err != nil {
+		return Prepared{}, err
+	}
+	if receiver.IdleTimeout < requiredIdleTimeout {
+		receiver.IdleTimeout = requiredIdleTimeout
+	}
+	requiredFirstPacketTimeout, err := MinimumFirstPacketTimeout(plan)
+	if err != nil {
+		return Prepared{}, err
+	}
+	if receiver.FirstPacketTimeout < requiredFirstPacketTimeout {
+		receiver.FirstPacketTimeout = requiredFirstPacketTimeout
+	}
+	maximum, err := plan.MaxDuration(receiver.IdleTimeout)
+	if err != nil {
+		return Prepared{}, err
+	}
+	return Prepared{
+		fpga: fpga, receiver: receiver, packetDelay: packetDelay,
+		commandTimeout: commandTimeout, maximumStreamingDuration: maximum,
+		timings: defaultRunTimings, valid: true,
+	}, nil
 }
 
 func Run(
 	ctx context.Context,
 	radarControl Radar,
-	dcaControl DCAControl,
-	newReceiver ReceiverFactory,
-	plan radar.CapturePlan,
+	dcaControl DCA,
+	newReceiver func(dca.ReceiverConfig) (Receiver, error),
+	plan radar.Plan,
 	output capturefile.Output,
-	options Options,
+	prepared Prepared,
 ) (stats dca.CaptureStats, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	mirror := options.Mirror
-	mirrorManagedByLifecycle := false
-	defer func() {
-		if mirror != nil && !mirrorManagedByLifecycle {
-			mirror.Abort()
-		}
-	}()
-	if radarControl == nil || dcaControl == nil || newReceiver == nil || !capturefile.IsUsableOutput(output) {
+	if radarControl == nil || dcaControl == nil || newReceiver == nil ||
+		!capturefile.IsUsableOutput(output) || !prepared.valid || prepared.Participant == nil {
 		return stats, errors.New("capture session dependencies are incomplete")
 	}
 	outputManagedByLifecycle := false
 	defer func() {
 		if outputManagedByLifecycle {
 			return
-		}
-		if mirror != nil {
-			mirror.Abort()
 		}
 		if closeErr := output.Close(); closeErr != nil {
 			marked := &CleanupError{Err: closeErr}
@@ -170,121 +200,11 @@ func Run(
 			}
 		}
 	}()
-	if options.CommandTimeout <= 0 || options.DrainTimeout <= 0 ||
-		options.ControlDrainTimeout <= 0 || options.ControlQuietWindow <= 0 ||
-		options.RadarCleanupTimeout <= 0 {
-		return stats, errors.New("capture command, data-drain, and control-drain timeouts must be positive")
-	}
-	if options.ReceiverConfig.FirstPacketTimeout <= 0 || options.ReceiverConfig.IdleTimeout <= 0 {
-		return stats, errors.New("capture receiver first-packet and idle timeouts must be positive")
-	}
-	if mirror != nil {
-		if !mirror.BoundTo(output) {
-			return stats, errors.New("capture stream mirror is not bound to the session output")
-		}
-		if options.MirrorSealTimeout <= 0 {
-			return stats, errors.New("capture stream mirror seal timeout must be positive")
-		}
-	}
-	if options.Participant != nil && options.ParticipantTimeout <= 0 {
-		return stats, errors.New("capture participant timeout must be positive")
-	}
-	if plan.Mode != radar.FullConfiguration && plan.Mode != radar.ReuseConfiguration {
-		return stats, errors.New("radar capture plan has an invalid configuration mode")
-	}
-	if plan.BytesPerFrame <= 0 || plan.FramePeriod <= 0 {
-		return stats, errors.New("radar capture plan must have positive frame bytes and period")
-	}
-	if plan.InfiniteFrames {
-		if plan.NumberOfFrames != 0 || plan.ExpectedBytes != 0 {
-			return stats, errors.New("infinite radar capture plan has inconsistent frame accounting")
-		}
-	} else if plan.NumberOfFrames == 0 || plan.ExpectedBytes <= 0 {
-		return stats, errors.New("finite radar capture plan has inconsistent frame accounting")
-	}
-	if options.StopRequested != nil && !plan.InfiniteFrames {
-		return stats, errors.New("requested-stop control is valid only for an infinite radar capture")
-	}
-	if err := dca.ValidateRawCaptureFPGAConfig(options.FPGAConfig); err != nil {
-		return stats, err
-	}
-	log := options.Log
+	log := prepared.Log
 	if log == nil {
 		log = func(string) {}
 	}
-	if plan.ExpectedDCADataFormat != options.FPGAConfig.DataFormat {
-		return stats, fmt.Errorf(
-			"radar adcCfg requires DCA data-format=%d, configured=%d",
-			plan.ExpectedDCADataFormat,
-			options.FPGAConfig.DataFormat,
-		)
-	}
-	if !plan.HardwareLVDSEnabled {
-		return stats, errors.New("radar configuration does not enable hardware LVDS")
-	}
-	if plan.Mode == radar.ReuseConfiguration && plan.Dialect != radar.StudioCLI {
-		return stats, errors.New("capture reuse without reconfiguration is only supported by TI studio_cli device firmware")
-	}
-	if plan.ExpectedBytes > 0 {
-		if plan.BytesPerFrame <= 0 || plan.NumberOfFrames == 0 || plan.InfiniteFrames ||
-			plan.ExpectedBytes%plan.BytesPerFrame != 0 ||
-			plan.ExpectedBytes/plan.BytesPerFrame != int64(plan.NumberOfFrames) {
-			return stats, errors.New("finite radar capture plan has inconsistent frame byte accounting")
-		}
-		if options.ReceiverConfig.MaxOutputBytes < plan.ExpectedBytes {
-			return stats, fmt.Errorf(
-				"DCA maximum output size %d is smaller than finite capture size %d",
-				options.ReceiverConfig.MaxOutputBytes,
-				plan.ExpectedBytes,
-			)
-		}
-		options.ReceiverConfig.MaxOutputBytes = plan.ExpectedBytes
-		options.ReceiverConfig.ExpectedOutputBytes = plan.ExpectedBytes
-		options.ReceiverConfig.CadenceFrameBytes = plan.BytesPerFrame
-		options.ReceiverConfig.CadenceFramePeriod = plan.FramePeriod
-	} else {
-		options.ReceiverConfig.ExpectedOutputBytes = 0
-		options.ReceiverConfig.CadenceFrameBytes = 0
-		options.ReceiverConfig.CadenceFramePeriod = 0
-	}
-	requiredIdleTimeout, err := MinimumReceiverIdleTimeout(plan)
-	if err != nil {
-		return stats, err
-	}
-	if options.ReceiverConfig.IdleTimeout < requiredIdleTimeout {
-		log(fmt.Sprintf(
-			"idle timeout raised from %s to %s for DCA raw tail/frame aggregation",
-			options.ReceiverConfig.IdleTimeout,
-			requiredIdleTimeout,
-		))
-		options.ReceiverConfig.IdleTimeout = requiredIdleTimeout
-	}
-	// After sensorStop, no new frames are expected; only the pending partial
-	// payload needs its fixed tail-flush window.
-	if options.DrainTimeout < dca.RawModeTailFlushGuard {
-		options.DrainTimeout = dca.RawModeTailFlushGuard
-	}
-	requiredFirstPacketTimeout, err := MinimumFirstPacketTimeout(plan)
-	if err != nil {
-		return stats, err
-	}
-	if options.ReceiverConfig.FirstPacketTimeout < requiredFirstPacketTimeout {
-		log(fmt.Sprintf(
-			"first-packet timeout raised from %s to %s for DCA packet aggregation",
-			options.ReceiverConfig.FirstPacketTimeout,
-			requiredFirstPacketTimeout,
-		))
-		options.ReceiverConfig.FirstPacketTimeout = requiredFirstPacketTimeout
-	}
-	maximumStreamingDuration, finiteDuration, err := plan.MaximumStreamingDuration(options.ReceiverConfig.IdleTimeout)
-	if err != nil {
-		return stats, err
-	}
-	if plan.ExpectedBytes > 0 && !finiteDuration {
-		return stats, errors.New("finite radar capture plan has no bounded streaming duration")
-	}
-
-	var receiver DataReceiver
+	var receiver Receiver
 	var receiverCancel context.CancelFunc
 	receiverStarted := false
 	dcaUsed := false
@@ -292,11 +212,10 @@ func Run(
 	radarMayBeRunning := false
 	finiteFrameEndObserved := false
 	var radarStartIssuedAt time.Time
-	participant := options.Participant
+	participant := prepared.Participant
 	participantActive := false
 
 	outputManagedByLifecycle = true
-	mirrorManagedByLifecycle = true
 	defer func() {
 		cleanupErr := cleanup(
 			radarControl,
@@ -308,7 +227,7 @@ func Run(
 			finiteFrameEndObserved && ctx.Err() == nil,
 			dcaUsed,
 			dcaRecording,
-			options,
+			prepared,
 			log,
 		)
 		if receiver != nil {
@@ -330,32 +249,17 @@ func Run(
 			resultErr = errors.Join(resultErr, cancellationErr)
 		}
 		if resultErr == nil {
-			resultErr = validateResult(plan, stats, options.ReceiverConfig.IdleTimeout, radarStartIssuedAt)
+			resultErr = validateResult(plan, stats, prepared.receiver.IdleTimeout, radarStartIssuedAt)
 		}
 		if participantActive {
 			participantContext, cancelParticipant := context.WithTimeout(
 				context.Background(),
-				options.ParticipantTimeout,
+				prepared.timings.participant,
 			)
 			participantErr := participant.Finish(participantContext, resultErr == nil)
 			cancelParticipant()
 			if participantErr != nil {
 				resultErr = errors.Join(resultErr, fmt.Errorf("finish capture participant: %w", participantErr))
-			}
-		}
-		if mirror != nil {
-			if mirrorErr := mirror.Err(); mirrorErr != nil {
-				resultErr = errors.Join(resultErr, mirrorErr)
-			}
-			if resultErr != nil {
-				mirror.Abort()
-			} else {
-				sealContext, cancelSeal := context.WithTimeout(
-					context.Background(),
-					options.MirrorSealTimeout,
-				)
-				resultErr = mirror.Seal(sealContext)
-				cancelSeal()
 			}
 		}
 		if resultErr == nil {
@@ -366,9 +270,6 @@ func Run(
 			}
 		}
 		if resultErr != nil {
-			if mirror != nil {
-				mirror.Abort()
-			}
 			if closeErr := output.Close(); closeErr != nil {
 				resultErr = errors.Join(resultErr, &CleanupError{Err: closeErr})
 			}
@@ -381,16 +282,16 @@ func Run(
 	if err := ctx.Err(); err != nil {
 		return stats, err
 	}
-	if _, err := radarControl.VerifyPlatformContext(ctx); err != nil {
+	if _, err := radarControl.Verify(ctx); err != nil {
 		return stats, err
 	}
-	if _, err := radarControl.StopContext(ctx); err != nil {
+	if _, err := radarControl.Stop(ctx); err != nil {
 		return stats, fmt.Errorf("establish stopped radar state: %w", err)
 	}
 	log("radar stopped")
 
 	dcaUsed = true
-	response, err := dcaControl.StopRecord(ctx)
+	response, err := dcaControl.Stop(ctx)
 	if err != nil {
 		return stats, fmt.Errorf("establish stopped DCA state: %w", err)
 	}
@@ -399,63 +300,43 @@ func Run(
 	}
 	log("DCA1000 stopped")
 
-	if options.ResetFPGA {
-		response, err = dcaControl.Execute(ctx, dca.CommandResetFPGA, nil)
-		if err != nil {
-			return stats, err
-		}
-		if err := requireStatus(response); err != nil {
-			return stats, err
-		}
-		log("DCA1000 FPGA reset")
-	}
-	if _, err := dcaControl.Configure(ctx, options.FPGAConfig, options.PacketDelay); err != nil {
+	if _, err := dcaControl.Configure(ctx, prepared.fpga, prepared.packetDelay); err != nil {
 		return stats, err
 	}
-	if err := fatalAsyncError(dcaControl.TakeAsyncStatuses()); err != nil {
+	if err := fatalAsyncError(dcaControl.TakeStatuses()); err != nil {
 		return stats, err
 	}
 	log("DCA1000 configured")
 
-	if plan.Mode == radar.FullConfiguration {
-		if err := radarControl.ApplyContext(ctx, plan); err != nil {
-			return stats, fmt.Errorf("apply radar configuration: %w", err)
-		}
-		log("radar configuration applied")
-	} else {
-		log("radar configuration reuse selected; no RF/LVDS command sent")
+	if err := radarControl.Apply(ctx, plan); err != nil {
+		return stats, fmt.Errorf("apply radar configuration: %w", err)
 	}
+	log("radar configuration applied")
 
-	if participant != nil {
-		participantActive = true
-		participantContext, cancelParticipant := context.WithTimeout(ctx, options.ParticipantTimeout)
-		err = participant.Arm(participantContext)
-		cancelParticipant()
-		if err != nil {
-			return stats, fmt.Errorf("arm capture participant: %w", err)
-		}
-		log("capture participant armed")
+	participantActive = true
+	participantContext, cancelParticipant := context.WithTimeout(ctx, prepared.timings.participant)
+	err = participant.Arm(participantContext)
+	cancelParticipant()
+	if err != nil {
+		return stats, fmt.Errorf("arm capture participant: %w", err)
 	}
+	log("capture participant armed")
 
-	receiver, err = newReceiver(options.ReceiverConfig)
+	receiver, err = newReceiver(prepared.receiver)
 	if err != nil {
 		return stats, err
 	}
 	receiverContext, cancelReceiver := context.WithCancel(context.Background())
 	receiverCancel = cancelReceiver
-	receiverOutput := io.WriterAt(output)
-	if mirror != nil {
-		receiverOutput = mirror
-	}
-	if err := receiver.Start(receiverContext, receiverOutput); err != nil {
+	if err := receiver.Start(receiverContext, output); err != nil {
 		return stats, err
 	}
 	receiverStarted = true
 	log("DCA1000 data socket armed")
 
-	response, err = dcaControl.StartRecordConvergent(ctx)
+	response, err = dcaControl.Start(ctx)
 	if err != nil {
-		// StartRecordConvergent has already sent the one permitted StopRecord;
+		// Start has already sent the one permitted StopRecord;
 		// dcaRecording remains false so cleanup will not send another.
 		return stats, err
 	}
@@ -463,7 +344,7 @@ func Run(
 		return stats, err
 	}
 	dcaRecording = true
-	if err := fatalAsyncError(dcaControl.TakeAsyncStatuses()); err != nil {
+	if err := fatalAsyncError(dcaControl.TakeStatuses()); err != nil {
 		return stats, err
 	}
 	log("DCA1000 recording started")
@@ -471,33 +352,27 @@ func Run(
 	if err := ctx.Err(); err != nil {
 		return stats, err
 	}
-	if participant != nil {
-		participantContext, cancelParticipant := context.WithTimeout(ctx, options.ParticipantTimeout)
-		err = participant.Start(participantContext)
-		cancelParticipant()
-		if err != nil {
-			return stats, fmt.Errorf("start capture participant: %w", err)
-		}
-		log("capture participant started")
+	participantContext, cancelParticipant = context.WithTimeout(ctx, prepared.timings.participant)
+	err = participant.Start(participantContext)
+	cancelParticipant()
+	if err != nil {
+		return stats, fmt.Errorf("start capture participant: %w", err)
 	}
+	log("capture participant started")
 	radarMayBeRunning = true
 	radarStartIssuedAt = time.Now()
-	if plan.Mode == radar.ReuseConfiguration {
-		_, err = radarControl.StartWithoutReconfigurationContext(ctx)
-	} else {
-		_, err = radarControl.StartContext(ctx)
-	}
+	_, err = radarControl.Start(ctx)
 	if err != nil {
 		return stats, fmt.Errorf("start radar: %w", err)
 	}
 	log("radar started")
 
-	if err := receiver.WaitForFirst(ctx); err != nil {
+	if err := receiver.WaitFirst(ctx); err != nil {
 		return stats, err
 	}
 	firstPacketAt := receiver.Stats().FirstPacketAt
-	if observer, ok := participant.(RadarFrameStartObserver); ok && !firstPacketAt.IsZero() {
-		lower, upper, intervalErr := resolveRadarFrameStartInterval(
+	if !firstPacketAt.IsZero() && !firstPacketAt.Before(radarStartIssuedAt) {
+		lower, upper, intervalErr := resolveStartInterval(
 			radarControl,
 			radarStartIssuedAt,
 			firstPacketAt,
@@ -505,51 +380,12 @@ func Run(
 		if intervalErr != nil {
 			return stats, intervalErr
 		}
-		observer.RadarFrameStartObserved(lower, upper)
+		participant.SetRadarStart(lower, upper)
 	}
-	if plan.InfiniteFrames {
-		if options.StopRequested == nil {
-			stats, err = receiver.Wait(ctx)
-			if err == nil && ctx.Err() == nil {
-				return stats, errors.New("infinite-frame capture became idle unexpectedly")
-			}
-			return stats, err
-		}
-
-		waitContext, cancelWait := context.WithCancel(ctx)
-		stopObserved := make(chan struct{})
-		go func() {
-			select {
-			case <-options.StopRequested:
-				close(stopObserved)
-				cancelWait()
-			case <-waitContext.Done():
-			}
-		}()
-		stats, err = receiver.Wait(waitContext)
-		cancelWait()
-		select {
-		case <-stopObserved:
-			if ctx.Err() != nil {
-				return stats, ctx.Err()
-			}
-			if err == nil || errors.Is(err, context.Canceled) {
-				log("graceful stop requested")
-				return stats, nil
-			}
-			return stats, err
-		default:
-		}
-		if err == nil && ctx.Err() == nil {
-			return stats, errors.New("infinite-frame capture became idle unexpectedly")
-		}
-		return stats, err
-	}
-
 	if firstPacketAt.IsZero() {
 		return stats, errors.New("DCA1000 receiver reported a first packet without a timestamp")
 	}
-	waitContext, cancelWait := context.WithDeadline(ctx, firstPacketAt.Add(maximumStreamingDuration))
+	waitContext, cancelWait := context.WithDeadline(ctx, firstPacketAt.Add(prepared.maximumStreamingDuration))
 	stats, err = receiver.Wait(waitContext)
 	cancelWait()
 	if err == nil && ctx.Err() == nil && stats.OutputBytes == plan.ExpectedBytes &&
@@ -557,26 +393,22 @@ func Run(
 		finiteFrameEndObserved = true
 	}
 	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-		return stats, &finiteCaptureDeadlineError{maximum: maximumStreamingDuration}
+		return stats, &finiteCaptureDeadlineError{maximum: prepared.maximumStreamingDuration}
 	}
 	return stats, err
 }
 
-func resolveRadarFrameStartInterval(
+func resolveStartInterval(
 	radarControl Radar,
 	commandLower time.Time,
 	firstPacketUpper time.Time,
 ) (time.Time, time.Time, error) {
 	if commandLower.IsZero() || firstPacketUpper.IsZero() || firstPacketUpper.Before(commandLower) {
-		return time.Time{}, time.Time{}, errors.New("radar frame-start fallback interval is invalid")
+		return time.Time{}, time.Time{}, errors.New("radar frame-start command interval is invalid")
 	}
 	lower := commandLower
 	upper := firstPacketUpper
-	provider, ok := radarControl.(RadarFrameStartIntervalProvider)
-	if !ok {
-		return lower, upper, nil
-	}
-	eventLower, eventUpper, err := provider.RadarFrameStartInterval()
+	eventLower, eventUpper, err := radarControl.StartInterval()
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("read radar frame-start event interval: %w", err)
 	}
@@ -599,27 +431,27 @@ func resolveRadarFrameStartInterval(
 
 func cleanup(
 	radarControl Radar,
-	dcaControl DCAControl,
-	receiver DataReceiver,
+	dcaControl DCA,
+	receiver Receiver,
 	receiverCancel context.CancelFunc,
 	receiverStarted bool,
 	radarMayBeRunning bool,
 	finiteFrameEndObserved bool,
 	dcaUsed bool,
 	dcaRecording bool,
-	options Options,
+	prepared Prepared,
 	log func(string),
 ) error {
 	var failures []error
 	if radarMayBeRunning {
-		stopContext, cancel := context.WithTimeout(context.Background(), options.RadarCleanupTimeout)
+		stopContext, cancel := context.WithTimeout(context.Background(), prepared.timings.radarCleanup)
 		operation := "stop radar"
 		var err error
-		if awaiter, ok := radarControl.(finiteFrameEndAwaiter); ok && finiteFrameEndObserved {
+		if finiteFrameEndObserved {
 			operation = "wait for finite radar frame end"
-			_, err = awaiter.AwaitFiniteFrameEndContext(stopContext)
+			_, err = radarControl.AwaitEnd(stopContext)
 		} else {
-			_, err = radarControl.StopContext(stopContext)
+			_, err = radarControl.Stop(stopContext)
 		}
 		cancel()
 		if err != nil {
@@ -631,7 +463,7 @@ func cleanup(
 		}
 	}
 	if receiverStarted && receiver != nil && radarMayBeRunning {
-		drainContext, cancel := context.WithTimeout(context.Background(), options.DrainTimeout)
+		drainContext, cancel := context.WithTimeout(context.Background(), prepared.timings.drain)
 		_, err := receiver.Wait(drainContext)
 		cancel()
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) &&
@@ -640,8 +472,8 @@ func cleanup(
 		}
 	}
 	if dcaRecording {
-		stopContext, cancel := context.WithTimeout(context.Background(), options.CommandTimeout)
-		response, err := dcaControl.StopRecord(stopContext)
+		stopContext, cancel := context.WithTimeout(context.Background(), prepared.commandTimeout)
+		response, err := dcaControl.Stop(stopContext)
 		cancel()
 		if err == nil {
 			err = requireStatus(response)
@@ -650,8 +482,8 @@ func cleanup(
 			failures = append(failures, fmt.Errorf("stop DCA1000 during cleanup: %w", err))
 		} else {
 			log("DCA1000 stopped during cleanup")
-			drainContext, drainCancel := context.WithTimeout(context.Background(), options.ControlDrainTimeout)
-			statuses, drainErr := dcaControl.DrainAsyncStatuses(drainContext, options.ControlQuietWindow)
+			drainContext, drainCancel := context.WithTimeout(context.Background(), prepared.timings.controlDrain)
+			statuses, drainErr := dcaControl.DrainStatuses(drainContext, prepared.timings.controlQuiet)
 			drainCancel()
 			if drainErr != nil {
 				failures = append(failures, fmt.Errorf("drain DCA1000 control socket: %w", drainErr))
@@ -670,14 +502,14 @@ func cleanup(
 		}
 	}
 	if dcaUsed {
-		if err := fatalAsyncError(dcaControl.TakeAsyncStatuses()); err != nil {
+		if err := fatalAsyncError(dcaControl.TakeStatuses()); err != nil {
 			failures = append(failures, err)
 		}
 	}
 	return errors.Join(failures...)
 }
 
-func validateResult(plan radar.CapturePlan, stats dca.CaptureStats, idle time.Duration, startIssuedAt time.Time) error {
+func validateResult(plan radar.Plan, stats dca.CaptureStats, idle time.Duration, startIssuedAt time.Time) error {
 	if stats.PacketsReceived == 0 {
 		return errors.New("DCA1000 capture received no data packets")
 	}
@@ -694,31 +526,19 @@ func validateResult(plan radar.CapturePlan, stats dca.CaptureStats, idle time.Du
 	if stats.OverlappingPackets != 0 {
 		return fmt.Errorf("DCA1000 capture received %d overlapping packet(s)", stats.OverlappingPackets)
 	}
-	if plan.ExpectedBytes > 0 && stats.OutputBytes != plan.ExpectedBytes {
+	if stats.OutputBytes != plan.ExpectedBytes {
 		return fmt.Errorf(
 			"finite-frame capture size mismatch: expected=%d actual=%d",
 			plan.ExpectedBytes,
 			stats.OutputBytes,
 		)
 	}
-	if plan.InfiniteFrames {
-		if stats.OutputBytes <= 0 {
-			return errors.New("infinite-frame capture produced no ADC payload")
-		}
-		if stats.OutputBytes%plan.BytesPerFrame != 0 {
-			return fmt.Errorf(
-				"infinite-frame capture ended with a partial frame: bytes=%d bytesPerFrame=%d",
-				stats.OutputBytes,
-				plan.BytesPerFrame,
-			)
-		}
-	}
 	if err := validateFiniteFrameTiming(plan, stats, startIssuedAt); err != nil {
 		return err
 	}
-	if maximum, finite, err := plan.MaximumStreamingDuration(idle); err != nil {
+	if maximum, err := plan.MaxDuration(idle); err != nil {
 		return err
-	} else if finite && !stats.FirstPacketAt.IsZero() && !stats.LastPacketAt.IsZero() {
+	} else if !stats.FirstPacketAt.IsZero() && !stats.LastPacketAt.IsZero() {
 		actual := stats.LastPacketAt.Sub(stats.FirstPacketAt)
 		if actual > maximum {
 			return fmt.Errorf("finite-frame data exceeded planned maximum duration: span=%s maximum=%s", actual, maximum)
@@ -728,13 +548,10 @@ func validateResult(plan radar.CapturePlan, stats dca.CaptureStats, idle time.Du
 }
 
 func validateFiniteFrameTiming(
-	plan radar.CapturePlan,
+	plan radar.Plan,
 	stats dca.CaptureStats,
 	startIssuedAt time.Time,
 ) error {
-	if plan.InfiniteFrames {
-		return nil
-	}
 	if startIssuedAt.IsZero() {
 		return errors.New("finite-frame capture has no sensorStart issue timestamp for timing validation")
 	}
@@ -782,13 +599,13 @@ const cadenceClockDriftDivisor = int64(1000) // 1000 ppm (0.1%)
 // A payload may not become available until the end of the last frame needed
 // to fill it. A finite capture smaller than one payload also includes the raw
 // tail guard that flushes its final partial packet.
-func MinimumFirstPacketTimeout(plan radar.CapturePlan) (time.Duration, error) {
+func MinimumFirstPacketTimeout(plan radar.Plan) (time.Duration, error) {
 	if plan.BytesPerFrame <= 0 || plan.FramePeriod <= 0 {
 		return 0, errors.New("radar capture plan must have positive frame bytes and period")
 	}
 	var framesUntilPayload uint64
 	includeTailGuard := false
-	if !plan.InfiniteFrames && plan.ExpectedBytes > 0 && plan.ExpectedBytes < int64(dca.MaximumDataPayloadSize) {
+	if plan.ExpectedBytes < int64(dca.MaximumDataPayloadSize) {
 		if plan.NumberOfFrames == 0 {
 			return 0, errors.New("finite radar capture plan has no frames")
 		}
@@ -820,7 +637,7 @@ func MinimumFirstPacketTimeout(plan radar.CapturePlan) (time.Duration, error) {
 // flushes a partial packet. Finite receivers use the same bound after reaching
 // their exact target so a slowly aggregated overlong stream cannot escape the
 // post-target quiet verification.
-func MinimumReceiverIdleTimeout(plan radar.CapturePlan) (time.Duration, error) {
+func MinimumReceiverIdleTimeout(plan radar.Plan) (time.Duration, error) {
 	if plan.BytesPerFrame <= 0 || plan.FramePeriod <= 0 {
 		return 0, errors.New("radar capture plan must have positive frame bytes and period")
 	}

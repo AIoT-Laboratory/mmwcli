@@ -15,7 +15,6 @@ var procGetSystemDirectoryW = syscall.NewLazyDLL("kernel32.dll").NewProc("GetSys
 type windowsLibrary struct {
 	path    string
 	library *syscall.DLL
-	version *syscall.Proc
 	openEx  *syscall.Proc
 	device  windowsDeviceProcedures
 }
@@ -54,7 +53,6 @@ func openNative() (nativeLibrary, error) {
 		name   string
 		target **syscall.Proc
 	}{
-		{name: "FT_GetLibraryVersion", target: &native.version},
 		{name: "FT_OpenEx", target: &native.openEx},
 		{name: "FT_Close", target: &native.device.close},
 		{name: "FT_Read", target: &native.device.read},
@@ -80,18 +78,8 @@ func openNative() (nativeLibrary, error) {
 	return native, nil
 }
 
-func (library *windowsLibrary) info() (nativeInfo, error) {
-	var rawVersion uint32
-	result, _, _ := library.version.Call(uintptr(unsafe.Pointer(&rawVersion)))
-	status := Status(uint32(result))
-	if status != StatusOK {
-		return nativeInfo{}, &StatusError{Operation: "FT_GetLibraryVersion", Status: status}
-	}
-	return nativeInfo{library: library.path, version: Version(rawVersion), versionKnown: true}, nil
-}
-
 func (library *windowsLibrary) open(selector Selector) (nativeDevice, error) {
-	argument, err := syscall.BytePtrFromString(selector.Value)
+	argument, err := syscall.BytePtrFromString(selector.Description)
 	if err != nil {
 		return nil, fmt.Errorf("encode D2XX selector: %w", err)
 	}
@@ -99,7 +87,7 @@ func (library *windowsLibrary) open(selector Selector) (nativeDevice, error) {
 	status := callD2XX(
 		library.openEx,
 		uintptr(unsafe.Pointer(argument)),
-		uintptr(selector.By),
+		uintptr(2), // FT_OPEN_BY_DESCRIPTION
 		uintptr(unsafe.Pointer(&handle)),
 	)
 	runtime.KeepAlive(argument)

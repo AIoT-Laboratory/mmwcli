@@ -31,8 +31,10 @@ func CreateTransactionDirectory(finalPath string) (*TransactionDirectory, error)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("check transaction directory output %s: %w", abs, err)
 	}
-	if err := removeStalePart(abs, part); err != nil {
-		return nil, err
+	if _, err := os.Lstat(part); err == nil {
+		return nil, fmt.Errorf("transaction directory stage already exists: %s", part)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("check transaction directory stage %s: %w", part, err)
 	}
 	if err := os.Mkdir(part, 0o755); err != nil {
 		return nil, fmt.Errorf("create transaction directory stage %s: %w", part, err)
@@ -67,20 +69,9 @@ func (directory *TransactionDirectory) CommitContext(ctx context.Context) error 
 	return nil
 }
 
-func (directory *TransactionDirectory) FinalPath() string {
-	if directory == nil {
-		return ""
-	}
-	return directory.finalPath
-}
-
 func (directory *TransactionDirectory) PartPath() string {
 	if directory == nil {
 		return ""
 	}
 	return directory.partPath
-}
-
-func (directory *TransactionDirectory) Committed() bool {
-	return directory != nil && directory.committed
 }

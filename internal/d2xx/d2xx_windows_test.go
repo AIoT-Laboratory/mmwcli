@@ -26,9 +26,4 @@ func TestLoadInstalledLibraryWithoutDeviceAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer library.Close()
-	info := library.Info()
-	if info.Library != path || !info.VersionKnown || info.Version == 0 {
-		t.Fatalf("D2XX info = %+v", info)
-	}
-	t.Logf("D2XX library=%s version=%s raw=0x%08X", info.Library, info.Version, uint32(info.Version))
 }

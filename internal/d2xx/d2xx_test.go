@@ -7,26 +7,9 @@ import (
 	"testing"
 )
 
-func TestVersionStringUsesD2XXBCDFields(t *testing.T) {
-	tests := []struct {
-		version Version
-		want    string
-	}{
-		{version: 0x00021228, want: "2.12.28"},
-		{version: 0x00010434, want: "1.4.34"},
-		{version: 0x00030A15, want: "0x00030A15"},
-		{version: 0x01030115, want: "0x01030115"},
-	}
-	for _, test := range tests {
-		if got := test.version.String(); got != test.want {
-			t.Fatalf("Version(0x%08X).String() = %q, want %q", test.version, got, test.want)
-		}
-	}
-}
-
 func TestStatusErrorIncludesOperationAndStatus(t *testing.T) {
-	err := &StatusError{Operation: "FT_GetLibraryVersion", Status: StatusNotSupported}
-	if got := err.Error(); !strings.Contains(got, "FT_GetLibraryVersion") || !strings.Contains(got, "not supported") {
+	err := &StatusError{Operation: "FT_OpenEx", Status: StatusNotSupported}
+	if got := err.Error(); !strings.Contains(got, "FT_OpenEx") || !strings.Contains(got, "not supported") {
 		t.Fatalf("StatusError.Error() = %q", got)
 	}
 	if got := Status(99).String(); got != "unknown status 99" {
@@ -34,35 +17,14 @@ func TestStatusErrorIncludesOperationAndStatus(t *testing.T) {
 	}
 }
 
-func TestFinishLoadRetainsInfoAndClosesOnce(t *testing.T) {
-	native := &fakeNativeLibrary{infoValue: nativeInfo{
-		library:      "fake-d2xx",
-		version:      0x00021228,
-		versionKnown: true,
-	}}
-	library, err := finishLoad(native)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := library.Info(); got.Library != "fake-d2xx" || !got.VersionKnown || got.Version.String() != "2.12.28" {
-		t.Fatalf("Info() = %+v", got)
-	}
+func TestLibraryClosesOnce(t *testing.T) {
+	native := &fakeNativeLibrary{}
+	library := &Library{native: native}
 	if err := library.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := library.Close(); err != nil {
 		t.Fatal(err)
-	}
-	if native.closeCalls != 1 {
-		t.Fatalf("close calls = %d, want 1", native.closeCalls)
-	}
-}
-
-func TestFinishLoadClosesAfterProbeFailure(t *testing.T) {
-	native := &fakeNativeLibrary{infoError: errors.New("probe failed")}
-	_, err := finishLoad(native)
-	if err == nil || err.Error() != "probe failed" {
-		t.Fatalf("finishLoad() error = %v", err)
 	}
 	if native.closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", native.closeCalls)
@@ -72,14 +34,10 @@ func TestFinishLoadClosesAfterProbeFailure(t *testing.T) {
 func TestLibraryRequiresExplicitSelectorAndTracksDevice(t *testing.T) {
 	nativeDevice := &fakeNativeDevice{}
 	native := &fakeNativeLibrary{
-		infoValue:  nativeInfo{library: "fake-d2xx"},
 		openDevice: nativeDevice,
 	}
-	library, err := finishLoad(native)
-	if err != nil {
-		t.Fatal(err)
-	}
-	selector := Selector{By: SelectBySerialNumber, Value: "FTAK3Z11A"}
+	library := &Library{native: native}
+	selector := Selector{Description: "AR-DevPack-EVM-012 A"}
 	device, err := library.Open(selector)
 	if err != nil {
 		t.Fatal(err)
@@ -105,17 +63,12 @@ func TestLibraryRequiresExplicitSelectorAndTracksDevice(t *testing.T) {
 }
 
 func TestLibraryRejectsInvalidSelectorsBeforeNativeOpen(t *testing.T) {
-	native := &fakeNativeLibrary{infoValue: nativeInfo{library: "fake-d2xx"}}
-	library, err := finishLoad(native)
-	if err != nil {
-		t.Fatal(err)
-	}
+	native := &fakeNativeLibrary{}
+	library := &Library{native: native}
 	defer library.Close()
 	for _, selector := range []Selector{
 		{},
-		{By: SelectBySerialNumber},
-		{By: SelectBySerialNumber, Value: "A\x00B"},
-		{By: Selection(4), Value: "location"},
+		{Description: "A\x00B"},
 	} {
 		if _, err := library.Open(selector); err == nil {
 			t.Fatalf("selector %+v was accepted", selector)
@@ -178,14 +131,10 @@ func TestDeviceIOAndConfiguration(t *testing.T) {
 func TestDeviceCloseFailureIsNotRetried(t *testing.T) {
 	nativeDevice := &fakeNativeDevice{closeStatus: StatusIOError}
 	nativeLibrary := &fakeNativeLibrary{
-		infoValue:  nativeInfo{library: "fake-d2xx"},
 		openDevice: nativeDevice,
 	}
-	library, err := finishLoad(nativeLibrary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	device, err := library.Open(Selector{By: SelectBySerialNumber, Value: "A"})
+	library := &Library{native: nativeLibrary}
+	device, err := library.Open(Selector{Description: "AR-DevPack-EVM-012 A"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,8 +195,6 @@ func TestDeviceBitBangConfigurationReportsNativeStatus(t *testing.T) {
 }
 
 type fakeNativeLibrary struct {
-	infoValue  nativeInfo
-	infoError  error
 	closeCalls int
 	openDevice nativeDevice
 	openError  error
@@ -257,10 +204,6 @@ type fakeNativeLibrary struct {
 func (library *fakeNativeLibrary) open(selector Selector) (nativeDevice, error) {
 	library.selectors = append(library.selectors, selector)
 	return library.openDevice, library.openError
-}
-
-func (library *fakeNativeLibrary) info() (nativeInfo, error) {
-	return library.infoValue, library.infoError
 }
 
 func (library *fakeNativeLibrary) close() error {

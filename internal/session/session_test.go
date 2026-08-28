@@ -14,30 +14,29 @@ import (
 	"time"
 
 	"mmwcli/internal/capturefile"
-	"mmwcli/internal/capturestream"
 	"mmwcli/internal/dca"
 	"mmwcli/internal/radar"
 )
 
 type fakeRadar struct {
-	events    *[]string
-	stopCalls int
-	stopHook  func(context.Context, int) error
-	startErr  error
+	events     *[]string
+	stopCalls  int
+	stopHook   func(context.Context, int) error
+	startErr   error
+	lower      time.Time
+	upper      time.Time
+	awaitCalls int
+	awaitHook  func(context.Context) error
 }
 
 func (f *fakeRadar) VerifyPlatform() (string, error) {
 	*f.events = append(*f.events, "version")
 	return "Platform : xWR68xx\nDone\n", nil
 }
-func (f *fakeRadar) VerifyPlatformContext(context.Context) (string, error) {
+func (f *fakeRadar) Verify(context.Context) (string, error) {
 	return f.VerifyPlatform()
 }
-func (f *fakeRadar) Stop() (string, error) {
-	*f.events = append(*f.events, "sensorStop")
-	return "Done\n", nil
-}
-func (f *fakeRadar) StopContext(ctx context.Context) (string, error) {
+func (f *fakeRadar) Stop(ctx context.Context) (string, error) {
 	*f.events = append(*f.events, "sensorStop")
 	f.stopCalls++
 	if f.stopHook != nil {
@@ -45,24 +44,28 @@ func (f *fakeRadar) StopContext(ctx context.Context) (string, error) {
 	}
 	return "Done\n", nil
 }
-func (f *fakeRadar) Apply(radar.CapturePlan) error {
+func (f *fakeRadar) Apply(_ context.Context, _ radar.Plan) error {
 	*f.events = append(*f.events, "apply")
 	return nil
 }
-func (f *fakeRadar) ApplyContext(_ context.Context, plan radar.CapturePlan) error {
-	return f.Apply(plan)
-}
-func (f *fakeRadar) Start() (string, error) {
+func (f *fakeRadar) Start(context.Context) (string, error) {
+	f.lower = time.Now()
 	*f.events = append(*f.events, "sensorStart")
+	f.upper = time.Now()
 	return "Done\n", f.startErr
 }
-func (f *fakeRadar) StartContext(context.Context) (string, error) { return f.Start() }
-func (f *fakeRadar) StartWithoutReconfiguration() (string, error) {
-	*f.events = append(*f.events, "sensorStart 0")
-	return "Done\n", f.startErr
+
+func (f *fakeRadar) AwaitEnd(ctx context.Context) (string, error) {
+	*f.events = append(*f.events, "frameEnd")
+	f.awaitCalls++
+	if f.awaitHook != nil {
+		return "", f.awaitHook(ctx)
+	}
+	return "finite frame ended", nil
 }
-func (f *fakeRadar) StartWithoutReconfigurationContext(context.Context) (string, error) {
-	return f.StartWithoutReconfiguration()
+
+func (f *fakeRadar) StartInterval() (time.Time, time.Time, error) {
+	return f.lower, f.upper, nil
 }
 
 type fakeFiniteFrameRadar struct {
@@ -71,14 +74,14 @@ type fakeFiniteFrameRadar struct {
 	awaitHook  func(context.Context) error
 }
 
-type fakeRadarFrameStartInterval struct {
+type fakeStartInterval struct {
 	*fakeRadar
 	lower time.Time
 	upper time.Time
 	err   error
 }
 
-func (f *fakeRadarFrameStartInterval) RadarFrameStartInterval() (time.Time, time.Time, error) {
+func (f *fakeStartInterval) StartInterval() (time.Time, time.Time, error) {
 	return f.lower, f.upper, f.err
 }
 
@@ -88,18 +91,18 @@ type fakeObservedFrameStartRadar struct {
 	upper time.Time
 }
 
-func (f *fakeObservedFrameStartRadar) StartContext(ctx context.Context) (string, error) {
+func (f *fakeObservedFrameStartRadar) Start(ctx context.Context) (string, error) {
 	f.lower = time.Now()
-	response, err := f.fakeFiniteFrameRadar.fakeRadar.StartContext(ctx)
+	response, err := f.fakeFiniteFrameRadar.fakeRadar.Start(ctx)
 	f.upper = time.Now()
 	return response, err
 }
 
-func (f *fakeObservedFrameStartRadar) RadarFrameStartInterval() (time.Time, time.Time, error) {
+func (f *fakeObservedFrameStartRadar) StartInterval() (time.Time, time.Time, error) {
 	return f.lower, f.upper, nil
 }
 
-func (f *fakeFiniteFrameRadar) AwaitFiniteFrameEndContext(ctx context.Context) (string, error) {
+func (f *fakeFiniteFrameRadar) AwaitEnd(ctx context.Context) (string, error) {
 	*f.events = append(*f.events, "frameEnd")
 	f.awaitCalls++
 	if f.awaitHook != nil {
@@ -128,14 +131,14 @@ func (f *fakeDCA) Configure(context.Context, dca.FPGAConfig, int) (dca.Configura
 	*f.events = append(*f.events, "dcaConfigure")
 	return dca.ConfigurationResponses{}, nil
 }
-func (f *fakeDCA) StartRecordConvergent(ctx context.Context) (dca.Response, error) {
+func (f *fakeDCA) Start(ctx context.Context) (dca.Response, error) {
 	*f.events = append(*f.events, "dcaStart")
 	if f.startHook != nil {
 		return f.startHook(ctx)
 	}
 	return dca.Response{Command: dca.CommandStartRecord}, nil
 }
-func (f *fakeDCA) StopRecord(ctx context.Context) (dca.Response, error) {
+func (f *fakeDCA) Stop(ctx context.Context) (dca.Response, error) {
 	*f.events = append(*f.events, "dcaStop")
 	f.stopCalls++
 	if f.stopHook != nil {
@@ -143,8 +146,8 @@ func (f *fakeDCA) StopRecord(ctx context.Context) (dca.Response, error) {
 	}
 	return dca.Response{Command: dca.CommandStopRecord}, nil
 }
-func (f *fakeDCA) TakeAsyncStatuses() []dca.Response { return nil }
-func (f *fakeDCA) DrainAsyncStatuses(context.Context, time.Duration) ([]dca.Response, error) {
+func (f *fakeDCA) TakeStatuses() []dca.Response { return nil }
+func (f *fakeDCA) DrainStatuses(context.Context, time.Duration) ([]dca.Response, error) {
 	*f.events = append(*f.events, "dcaDrain")
 	return append([]dca.Response(nil), f.drainStatuses...), nil
 }
@@ -164,7 +167,15 @@ type fakeParticipant struct {
 	startErr  error
 	finishErr error
 	finished  []bool
+	windows   []radarStartWindow
 }
+
+type silentParticipant struct{}
+
+func (*silentParticipant) Arm(context.Context) error          { return nil }
+func (*silentParticipant) Start(context.Context) error        { return nil }
+func (*silentParticipant) Finish(context.Context, bool) error { return nil }
+func (*silentParticipant) SetRadarStart(time.Time, time.Time) {}
 
 type radarStartWindow struct {
 	lower time.Time
@@ -176,8 +187,8 @@ type fakeObservedParticipant struct {
 	windows []radarStartWindow
 }
 
-func (f *fakeObservedParticipant) RadarFrameStartObserved(lower, upper time.Time) {
-	*f.events = append(*f.events, "participantRadarFrameStartObserved")
+func (f *fakeObservedParticipant) SetRadarStart(lower, upper time.Time) {
+	*f.events = append(*f.events, "participantSetRadarStart")
 	f.windows = append(f.windows, radarStartWindow{lower: lower, upper: upper})
 }
 
@@ -197,6 +208,26 @@ func (f *fakeParticipant) Finish(_ context.Context, complete bool) error {
 	return f.finishErr
 }
 
+func (f *fakeParticipant) SetRadarStart(lower, upper time.Time) {
+	f.windows = append(f.windows, radarStartWindow{lower: lower, upper: upper})
+}
+
+func preparedSession(t *testing.T, plan radar.Plan) Prepared {
+	t.Helper()
+	prepared, err := Prepare(
+		plan,
+		dca.DefaultFPGAConfig(),
+		dca.DefaultReceiverConfig(),
+		25,
+		3*time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared.Participant = &silentParticipant{}
+	return prepared
+}
+
 func (f *fakeReceiver) Start(_ context.Context, output io.WriterAt) error {
 	*f.events = append(*f.events, "receiverStart")
 	payload := f.payload
@@ -206,7 +237,7 @@ func (f *fakeReceiver) Start(_ context.Context, output io.WriterAt) error {
 	_, err := output.WriteAt(payload, 0)
 	return err
 }
-func (f *fakeReceiver) WaitForFirst(context.Context) error {
+func (f *fakeReceiver) WaitFirst(context.Context) error {
 	*f.events = append(*f.events, "receiverFirst")
 	if f.stats.PacketsReceived > 0 && f.stats.CadenceAnchorAt.IsZero() {
 		now := time.Now()
@@ -247,594 +278,25 @@ func (function sessionFrameSinkFunc) WriteFrame(
 
 func TestRunRejectsTypedNilOutputBeforeHardware(t *testing.T) {
 	events := []string{}
+	plan := sessionTestPlan(t)
 	var output *capturefile.File
 	_, err := Run(
 		context.Background(),
 		&fakeRadar{events: &events},
 		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) {
+		func(dca.ReceiverConfig) (Receiver, error) {
 			t.Fatal("receiver factory called for unusable output")
 			return nil, nil
 		},
-		sessionTestPlan(t),
+		plan,
 		output,
-		DefaultOptions(),
+		preparedSession(t, plan),
 	)
 	if err == nil || !strings.Contains(err.Error(), "dependencies are incomplete") {
 		t.Fatalf("Run error = %v, want incomplete dependencies", err)
 	}
 	if len(events) != 0 {
 		t.Fatalf("hardware events = %v, want none", events)
-	}
-}
-
-func TestMirrorBoundToExactCaptureOutput(t *testing.T) {
-	first, err := capturefile.Create(filepath.Join(t.TempDir(), "first.bin"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = first.Close() })
-	second, err := capturefile.Create(filepath.Join(t.TempDir(), "second.bin"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = second.Close() })
-	mirror := newSessionTestMirror(
-		t,
-		first,
-		sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
-		func() {},
-	)
-	if !mirror.BoundTo(first) {
-		t.Fatal("Mirror did not recognize its authoritative output")
-	}
-	if mirror.BoundTo(second) || mirror.BoundTo(nil) {
-		t.Fatal("Mirror accepted a different or nil output")
-	}
-	var typedNil *capturefile.File
-	if mirror.BoundTo(typedNil) {
-		t.Fatal("Mirror accepted a typed-nil output")
-	}
-	var nilMirror *capturestream.Mirror
-	if nilMirror.BoundTo(first) {
-		t.Fatal("nil Mirror reported an output binding")
-	}
-}
-
-func TestRunRejectsInvalidMirrorPreflightBeforeHardware(t *testing.T) {
-	t.Run("incomplete dependencies", func(t *testing.T) {
-		output, err := capturefile.Create(filepath.Join(t.TempDir(), "dependencies.bin"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = output.Close() })
-		canceled := make(chan struct{})
-		mirror := newSessionTestMirror(
-			t,
-			output,
-			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
-			func() { close(canceled) },
-		)
-		options := DefaultOptions()
-		options.Mirror = mirror
-		_, err = Run(
-			context.Background(),
-			nil,
-			&fakeDCA{events: &[]string{}},
-			func(dca.ReceiverConfig) (DataReceiver, error) { return nil, nil },
-			mirrorSessionPlan(t),
-			output,
-			options,
-		)
-		if err == nil || !strings.Contains(err.Error(), "dependencies are incomplete") {
-			t.Fatalf("Run error = %v, want incomplete dependencies", err)
-		}
-		select {
-		case <-canceled:
-		case <-time.After(time.Second):
-			t.Fatal("early dependency failure did not abort Mirror")
-		}
-		if mirrorErr := mirror.Err(); !errors.Is(mirrorErr, capturestream.ErrMirrorAborted) {
-			t.Fatalf("Mirror error = %v, want aborted", mirrorErr)
-		}
-	})
-
-	t.Run("invalid command timeout", func(t *testing.T) {
-		finalPath := filepath.Join(t.TempDir(), "command-timeout.bin")
-		output, err := capturefile.Create(finalPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		canceled := make(chan struct{})
-		mirror := newSessionTestMirror(
-			t,
-			output,
-			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
-			func() { close(canceled) },
-		)
-		events := []string{}
-		options := DefaultOptions()
-		options.Mirror = mirror
-		options.CommandTimeout = 0
-		_, err = Run(
-			context.Background(),
-			&fakeRadar{events: &events},
-			&fakeDCA{events: &events},
-			func(dca.ReceiverConfig) (DataReceiver, error) {
-				t.Fatal("receiver factory called after invalid timeout")
-				return nil, nil
-			},
-			mirrorSessionPlan(t),
-			output,
-			options,
-		)
-		if err == nil || !strings.Contains(err.Error(), "timeouts must be positive") {
-			t.Fatalf("Run error = %v, want timeout preflight failure", err)
-		}
-		if len(events) != 0 {
-			t.Fatalf("invalid timeout touched hardware: %v", events)
-		}
-		select {
-		case <-canceled:
-		case <-time.After(time.Second):
-			t.Fatal("invalid timeout did not abort Mirror")
-		}
-		if mirrorErr := mirror.Err(); !errors.Is(mirrorErr, capturestream.ErrMirrorAborted) {
-			t.Fatalf("Mirror error = %v, want aborted", mirrorErr)
-		}
-		assertPartRetained(t, finalPath)
-	})
-
-	t.Run("different output", func(t *testing.T) {
-		finalPath := filepath.Join(t.TempDir(), "session.bin")
-		output, err := capturefile.Create(finalPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		other, err := capturefile.Create(filepath.Join(t.TempDir(), "other.bin"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = other.Close() })
-		mirror := newSessionTestMirror(
-			t,
-			other,
-			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
-			func() {},
-		)
-		events := []string{}
-		options := DefaultOptions()
-		options.Mirror = mirror
-		_, err = Run(
-			context.Background(),
-			&fakeRadar{events: &events},
-			&fakeDCA{events: &events},
-			func(dca.ReceiverConfig) (DataReceiver, error) {
-				t.Fatal("receiver factory called after Mirror binding failure")
-				return nil, nil
-			},
-			mirrorSessionPlan(t),
-			output,
-			options,
-		)
-		if err == nil || !strings.Contains(err.Error(), "not bound") {
-			t.Fatalf("Run error = %v, want Mirror binding failure", err)
-		}
-		if len(events) != 0 {
-			t.Fatalf("Mirror binding preflight touched hardware: %v", events)
-		}
-		if mirrorErr := mirror.Err(); !errors.Is(mirrorErr, capturestream.ErrMirrorAborted) {
-			t.Fatalf("Mirror error = %v, want aborted", mirrorErr)
-		}
-		assertPartRetained(t, finalPath)
-	})
-
-	t.Run("nonpositive seal timeout", func(t *testing.T) {
-		finalPath := filepath.Join(t.TempDir(), "timeout.bin")
-		output, err := capturefile.Create(finalPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		mirror := newSessionTestMirror(
-			t,
-			output,
-			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
-			func() {},
-		)
-		events := []string{}
-		options := DefaultOptions()
-		options.Mirror = mirror
-		options.MirrorSealTimeout = 0
-		_, err = Run(
-			context.Background(),
-			&fakeRadar{events: &events},
-			&fakeDCA{events: &events},
-			func(dca.ReceiverConfig) (DataReceiver, error) {
-				t.Fatal("receiver factory called after Mirror timeout failure")
-				return nil, nil
-			},
-			mirrorSessionPlan(t),
-			output,
-			options,
-		)
-		if err == nil || !strings.Contains(err.Error(), "seal timeout must be positive") {
-			t.Fatalf("Run error = %v, want Mirror timeout failure", err)
-		}
-		if len(events) != 0 {
-			t.Fatalf("Mirror timeout preflight touched hardware: %v", events)
-		}
-		if err := mirror.Err(); !errors.Is(err, capturestream.ErrMirrorAborted) {
-			t.Fatalf("Mirror error = %v, want aborted", err)
-		}
-		assertPartRetained(t, finalPath)
-	})
-}
-
-func TestRunSealsMirrorBeforePublishingExistingOutput(t *testing.T) {
-	plan := mirrorSessionPlan(t)
-	finalPath := filepath.Join(t.TempDir(), "mirrored.bin")
-	output, err := capturefile.Create(finalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionContext, cancelSession := context.WithCancel(context.Background())
-	defer cancelSession()
-	var mirrored []byte
-	mirror := newSessionTestMirror(
-		t,
-		output,
-		sessionFrameSinkFunc(func(ctx context.Context, index uint64, payload []byte) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if index != 0 {
-				return errors.New("unexpected provisional frame index")
-			}
-			if _, err := os.Stat(finalPath); !os.IsNotExist(err) {
-				return errors.New("final output existed before Mirror Seal")
-			}
-			staged, err := os.ReadFile(output.PartPath())
-			if err != nil {
-				return err
-			}
-			if string(staged) != "data" {
-				return errors.New("authoritative output was not written before provisional frame")
-			}
-			mirrored = append([]byte(nil), payload...)
-			return nil
-		}),
-		cancelSession,
-	)
-	events := []string{}
-	options := DefaultOptions()
-	options.Mirror = mirror
-	_, err = Run(
-		sessionContext,
-		&fakeRadar{events: &events},
-		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) {
-			return mirrorTestReceiver(&events, []byte("data"), plan.ExpectedBytes), nil
-		},
-		plan,
-		output,
-		options,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(mirrored) != "data" {
-		t.Fatalf("mirrored frame = %q, want %q", mirrored, "data")
-	}
-	committed, err := os.ReadFile(finalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(committed) != "data" {
-		t.Fatalf("committed bytes = %q, want %q", committed, "data")
-	}
-	if _, err := os.Stat(output.PartPath()); !os.IsNotExist(err) {
-		t.Fatalf("part output remains after commit: %v", err)
-	}
-}
-
-func TestRunReturnsMirrorSinkFailureWithoutCommit(t *testing.T) {
-	plan := mirrorSessionPlan(t)
-	finalPath := filepath.Join(t.TempDir(), "sink-failure.bin")
-	output, err := capturefile.Create(finalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantErr := errors.New("provisional sink failed")
-	sessionContext, cancelSession := context.WithCancel(context.Background())
-	defer cancelSession()
-	mirror := newSessionTestMirror(
-		t,
-		output,
-		sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return wantErr }),
-		cancelSession,
-	)
-	events := []string{}
-	options := DefaultOptions()
-	options.Mirror = mirror
-	_, err = Run(
-		sessionContext,
-		&fakeRadar{events: &events},
-		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) {
-			return mirrorTestReceiver(&events, []byte("data"), plan.ExpectedBytes), nil
-		},
-		plan,
-		output,
-		options,
-	)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("Run error = %v, want sink failure %v", err, wantErr)
-	}
-	if mirrorErr := mirror.Err(); !errors.Is(mirrorErr, wantErr) {
-		t.Fatalf("Mirror error = %v, want %v", mirrorErr, wantErr)
-	}
-	assertPartBytes(t, finalPath, "data")
-}
-
-func TestRunMirrorSealTimeoutPreventsCommit(t *testing.T) {
-	plan := mirrorSessionPlan(t)
-	finalPath := filepath.Join(t.TempDir(), "seal-timeout.bin")
-	output, err := capturefile.Create(finalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mirror := newSessionTestMirror(
-		t,
-		output,
-		sessionFrameSinkFunc(func(ctx context.Context, _ uint64, _ []byte) error {
-			<-ctx.Done()
-			return ctx.Err()
-		}),
-		func() {},
-	)
-	events := []string{}
-	options := DefaultOptions()
-	options.Mirror = mirror
-	options.MirrorSealTimeout = 10 * time.Millisecond
-	_, err = Run(
-		context.Background(),
-		&fakeRadar{events: &events},
-		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) {
-			return mirrorTestReceiver(&events, []byte("data"), plan.ExpectedBytes), nil
-		},
-		plan,
-		output,
-		options,
-	)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Run error = %v, want Mirror seal deadline", err)
-	}
-	assertPartBytes(t, finalPath, "data")
-}
-
-func TestRunReportsCleanupFailureAfterPublishingCompleteData(t *testing.T) {
-	t.Run("cleanup failure", func(t *testing.T) {
-		plan := mirrorSessionPlan(t)
-		finalPath := filepath.Join(t.TempDir(), "cleanup.bin")
-		output, err := capturefile.Create(finalPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sessionContext, cancelSession := context.WithCancel(context.Background())
-		defer cancelSession()
-		mirror := newSessionTestMirror(
-			t,
-			output,
-			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
-			cancelSession,
-		)
-		wantErr := errors.New("radar cleanup failed")
-		events := []string{}
-		radarControl := &fakeRadar{
-			events: &events,
-			stopHook: func(_ context.Context, call int) error {
-				if call == 2 {
-					return wantErr
-				}
-				return nil
-			},
-		}
-		options := DefaultOptions()
-		options.Mirror = mirror
-		_, err = Run(
-			sessionContext,
-			radarControl,
-			&fakeDCA{events: &events},
-			func(dca.ReceiverConfig) (DataReceiver, error) {
-				return mirrorTestReceiver(&events, []byte("data"), plan.ExpectedBytes), nil
-			},
-			plan,
-			output,
-			options,
-		)
-		if !errors.Is(err, wantErr) {
-			t.Fatalf("Run error = %v, want cleanup failure %v", err, wantErr)
-		}
-		if mirrorErr := mirror.Err(); mirrorErr != nil {
-			t.Fatalf("Mirror error = %v, want nil", mirrorErr)
-		}
-		assertPublishedBytes(t, finalPath, "data")
-	})
-
-	t.Run("cancellation", func(t *testing.T) {
-		plan := mirrorSessionPlan(t)
-		finalPath := filepath.Join(t.TempDir(), "canceled.bin")
-		output, err := capturefile.Create(finalPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sessionContext, cancelSession := context.WithCancel(context.Background())
-		defer cancelSession()
-		mirror := newSessionTestMirror(
-			t,
-			output,
-			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
-			cancelSession,
-		)
-		events := []string{}
-		dcaControl := &fakeDCA{
-			events: &events,
-			startHook: func(context.Context) (dca.Response, error) {
-				cancelSession()
-				return dca.Response{Command: dca.CommandStartRecord}, nil
-			},
-		}
-		options := DefaultOptions()
-		options.Mirror = mirror
-		_, err = Run(
-			sessionContext,
-			&fakeRadar{events: &events},
-			dcaControl,
-			func(dca.ReceiverConfig) (DataReceiver, error) {
-				return mirrorTestReceiver(&events, []byte("data"), plan.ExpectedBytes), nil
-			},
-			plan,
-			output,
-			options,
-		)
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("Run error = %v, want cancellation", err)
-		}
-		if mirrorErr := mirror.Err(); !errors.Is(mirrorErr, capturestream.ErrMirrorAborted) {
-			t.Fatalf("Mirror error = %v, want aborted", mirrorErr)
-		}
-		assertPartBytes(t, finalPath, "data")
-	})
-
-	t.Run("missing frame coverage", func(t *testing.T) {
-		plan := mirrorSessionPlan(t)
-		finalPath := filepath.Join(t.TempDir(), "missing.bin")
-		output, err := capturefile.Create(finalPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		mirror := newSessionTestMirror(
-			t,
-			output,
-			sessionFrameSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
-			func() {},
-		)
-		events := []string{}
-		options := DefaultOptions()
-		options.Mirror = mirror
-		_, err = Run(
-			context.Background(),
-			&fakeRadar{events: &events},
-			&fakeDCA{events: &events},
-			func(dca.ReceiverConfig) (DataReceiver, error) {
-				return mirrorTestReceiver(&events, []byte("da"), plan.ExpectedBytes), nil
-			},
-			plan,
-			output,
-			options,
-		)
-		if !errors.Is(err, capturestream.ErrMirrorIntegrity) {
-			t.Fatalf("Run error = %v, want missing Mirror coverage", err)
-		}
-		assertPartBytes(t, finalPath, "da")
-	})
-}
-
-func TestReuseCaptureSendsNoConfigurationAndArmsBeforeStart(t *testing.T) {
-	commands := []string{
-		"flushCfg",
-		"dfeDataOutputMode 1",
-		"channelCfg 15 7 0",
-		"adcCfg 2 1",
-		"adcbufCfg -1 0 1 1 1",
-		"profileCfg 0 60 7 3 40 0 0 100 1 256 5000 0 0 30",
-		"chirpCfg 0 0 0 0 0 0 0 1",
-		"frameCfg 0 0 1 1 10 1 0",
-		"lowPower 0 0",
-		"lvdsStreamCfg -1 0 1 0",
-		"sensorStart",
-	}
-	plan, err := radar.BuildCapturePlan(radar.StudioCLI, commands, radar.ReuseConfiguration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan.BytesPerFrame = 3
-	plan.ExpectedBytes = 3
-	output, err := capturefile.Create(filepath.Join(t.TempDir(), "capture.bin"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	events := []string{}
-	now := time.Now()
-	receiver := &fakeReceiver{
-		events: &events,
-		stats: dca.CaptureStats{
-			PacketsReceived: 1,
-			OutputBytes:     3,
-			FirstPacketAt:   now,
-			LastPacketAt:    now,
-		},
-	}
-	waitCalls := 0
-	var cleanupDrainBudget time.Duration
-	receiver.waitHook = func(ctx context.Context) (dca.CaptureStats, error) {
-		waitCalls++
-		if waitCalls == 2 {
-			deadline, ok := ctx.Deadline()
-			if !ok {
-				return receiver.stats, errors.New("cleanup data drain has no absolute deadline")
-			}
-			cleanupDrainBudget = time.Until(deadline)
-		}
-		return receiver.stats, nil
-	}
-	options := DefaultOptions()
-	options.ReceiverConfig.IdleTimeout = time.Millisecond
-	options.DrainTimeout = time.Millisecond
-	var configuredReceiver dca.ReceiverConfig
-	_, err = Run(
-		context.Background(),
-		&fakeRadar{events: &events},
-		&fakeDCA{events: &events},
-		func(config dca.ReceiverConfig) (DataReceiver, error) {
-			configuredReceiver = config
-			return receiver, nil
-		},
-		plan,
-		output,
-		options,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{
-		"version", "sensorStop", "dcaStop", "dcaConfigure",
-		"receiverStart", "dcaStart", "sensorStart 0", "receiverFirst", "receiverWait",
-		"sensorStop", "receiverWait", "dcaStop", "dcaDrain", "receiverClose",
-	}
-	if !reflect.DeepEqual(events, want) {
-		t.Fatalf("events = %#v\nwant   = %#v", events, want)
-	}
-	if configuredReceiver.ExpectedOutputBytes != plan.ExpectedBytes {
-		t.Fatalf(
-			"receiver expected bytes = %d, want %d",
-			configuredReceiver.ExpectedOutputBytes,
-			plan.ExpectedBytes,
-		)
-	}
-	if configuredReceiver.IdleTimeout < dca.RawModeTailFlushGuard {
-		t.Fatalf("receiver idle timeout = %s, want at least %s", configuredReceiver.IdleTimeout, dca.RawModeTailFlushGuard)
-	}
-	if cleanupDrainBudget < dca.RawModeTailFlushGuard-100*time.Millisecond {
-		t.Fatalf("cleanup drain budget = %s, want at least %s", cleanupDrainBudget, dca.RawModeTailFlushGuard)
-	}
-	raw, err := os.ReadFile(output.FinalPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(raw) != "adc" {
-		t.Fatalf("raw capture bytes = %q, want %q", raw, "adc")
 	}
 }
 
@@ -854,14 +316,14 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 			OutputBytes:     plan.ExpectedBytes,
 		},
 	}
-	options := DefaultOptions()
+	options := preparedSession(t, plan)
 	options.Participant = participant
 
 	_, err = Run(
 		context.Background(),
 		&fakeFiniteFrameRadar{fakeRadar: &fakeRadar{events: &events}},
 		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) {
+		func(dca.ReceiverConfig) (Receiver, error) {
 			return receiver, nil
 		},
 		plan,
@@ -874,7 +336,7 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 	want := []string{
 		"version", "sensorStop", "dcaStop", "dcaConfigure", "apply",
 		"participantArm", "receiverStart", "dcaStart", "participantStart", "sensorStart",
-		"receiverFirst", "participantRadarFrameStartObserved", "receiverWait", "frameEnd", "receiverWait", "dcaStop", "dcaDrain",
+		"receiverFirst", "participantSetRadarStart", "receiverWait", "frameEnd", "receiverWait", "dcaStop", "dcaDrain",
 		"receiverClose", "participantFinish:true",
 	}
 	if !reflect.DeepEqual(events, want) {
@@ -894,7 +356,7 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 	}
 }
 
-func TestParticipantUsesControllerObservedRadarFrameStartInterval(t *testing.T) {
+func TestParticipantUsesControllerObservedStartInterval(t *testing.T) {
 	plan := sessionTestPlan(t)
 	output, err := capturefile.Create(filepath.Join(t.TempDir(), "participant-event.bin"))
 	if err != nil {
@@ -912,14 +374,14 @@ func TestParticipantUsesControllerObservedRadarFrameStartInterval(t *testing.T) 
 			OutputBytes:     plan.ExpectedBytes,
 		},
 	}
-	options := DefaultOptions()
+	options := preparedSession(t, plan)
 	options.Participant = participant
 
 	if _, err := Run(
 		context.Background(),
 		radarControl,
 		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		func(dca.ReceiverConfig) (Receiver, error) { return receiver, nil },
 		plan,
 		output,
 		options,
@@ -945,27 +407,18 @@ func TestParticipantUsesControllerObservedRadarFrameStartInterval(t *testing.T) 
 	}
 }
 
-func TestResolveRadarFrameStartIntervalUsesControllerEventIntersection(t *testing.T) {
+func TestResolveStartIntervalUsesControllerEventIntersection(t *testing.T) {
 	events := []string{}
 	commandLower := time.Now()
 	eventLower := commandLower.Add(time.Millisecond)
 	eventUpper := commandLower.Add(2 * time.Millisecond)
 	firstPacketUpper := commandLower.Add(3 * time.Millisecond)
-	fallbackLower, fallbackUpper, err := resolveRadarFrameStartInterval(
-		&fakeRadar{events: &events},
-		commandLower,
-		firstPacketUpper,
-	)
-	if err != nil || !fallbackLower.Equal(commandLower) ||
-		!fallbackUpper.Equal(firstPacketUpper) {
-		t.Fatalf("fallback frame-start interval = [%v,%v], %v", fallbackLower, fallbackUpper, err)
-	}
-	radarControl := &fakeRadarFrameStartInterval{
+	radarControl := &fakeStartInterval{
 		fakeRadar: &fakeRadar{events: &events},
 		lower:     eventLower,
 		upper:     eventUpper,
 	}
-	lower, upper, err := resolveRadarFrameStartInterval(
+	lower, upper, err := resolveStartInterval(
 		radarControl,
 		commandLower,
 		firstPacketUpper,
@@ -978,16 +431,16 @@ func TestResolveRadarFrameStartIntervalUsesControllerEventIntersection(t *testin
 	}
 }
 
-func TestResolveRadarFrameStartIntervalRejectsDisjointEvidence(t *testing.T) {
+func TestResolveStartIntervalRejectsDisjointEvidence(t *testing.T) {
 	events := []string{}
 	commandLower := time.Now()
 	firstPacketUpper := commandLower.Add(time.Millisecond)
-	radarControl := &fakeRadarFrameStartInterval{
+	radarControl := &fakeStartInterval{
 		fakeRadar: &fakeRadar{events: &events},
 		lower:     firstPacketUpper.Add(time.Millisecond),
 		upper:     firstPacketUpper.Add(2 * time.Millisecond),
 	}
-	if _, _, err := resolveRadarFrameStartInterval(
+	if _, _, err := resolveStartInterval(
 		radarControl,
 		commandLower,
 		firstPacketUpper,
@@ -1006,14 +459,14 @@ func TestRadarStartFailureDoesNotNotifyParticipant(t *testing.T) {
 	events := []string{}
 	wantErr := errors.New("radar start failed")
 	participant := &fakeObservedParticipant{fakeParticipant: &fakeParticipant{events: &events}}
-	options := DefaultOptions()
+	options := preparedSession(t, plan)
 	options.Participant = participant
 
 	_, err = Run(
 		context.Background(),
 		&fakeRadar{events: &events, startErr: wantErr},
 		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) {
+		func(dca.ReceiverConfig) (Receiver, error) {
 			return &fakeReceiver{events: &events}, nil
 		},
 		plan,
@@ -1023,7 +476,7 @@ func TestRadarStartFailureDoesNotNotifyParticipant(t *testing.T) {
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Run error = %v, want %v", err, wantErr)
 	}
-	if len(participant.windows) != 0 || containsEvent(events, "participantRadarFrameStartObserved") {
+	if len(participant.windows) != 0 || containsEvent(events, "participantSetRadarStart") {
 		t.Fatalf("observer notified after failed radar start: windows=%v events=%v", participant.windows, events)
 	}
 	if !containsEvent(events, "sensorStart") {
@@ -1041,14 +494,14 @@ func TestParticipantStartFailurePreventsRadarStart(t *testing.T) {
 	events := []string{}
 	wantErr := errors.New("producer start failed")
 	participant := &fakeParticipant{events: &events, startErr: wantErr}
-	options := DefaultOptions()
+	options := preparedSession(t, plan)
 	options.Participant = participant
 
 	_, err = Run(
 		context.Background(),
 		&fakeRadar{events: &events},
 		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) {
+		func(dca.ReceiverConfig) (Receiver, error) {
 			return &fakeReceiver{events: &events}, nil
 		},
 		plan,
@@ -1058,15 +511,13 @@ func TestParticipantStartFailurePreventsRadarStart(t *testing.T) {
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Run error = %v, want %v", err, wantErr)
 	}
-	if containsEvent(events, "sensorStart") || containsEvent(events, "sensorStart 0") {
+	if containsEvent(events, "sensorStart") {
 		t.Fatalf("radar started after participant failure: %v", events)
 	}
 	if !reflect.DeepEqual(participant.finished, []bool{false}) {
 		t.Fatalf("participant outcomes = %v, want [false]", participant.finished)
 	}
-	if _, err := os.Stat(finalPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("failed participant capture published output: %v", err)
-	}
+	assertADCRetained(t, finalPath)
 }
 
 func TestParticipantFinishFailurePreventsCommit(t *testing.T) {
@@ -1079,14 +530,14 @@ func TestParticipantFinishFailurePreventsCommit(t *testing.T) {
 	events := []string{}
 	wantErr := errors.New("producer END missing")
 	participant := &fakeParticipant{events: &events, finishErr: wantErr}
-	options := DefaultOptions()
+	options := preparedSession(t, plan)
 	options.Participant = participant
 
 	_, err = Run(
 		context.Background(),
 		&fakeFiniteFrameRadar{fakeRadar: &fakeRadar{events: &events}},
 		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) {
+		func(dca.ReceiverConfig) (Receiver, error) {
 			return &fakeReceiver{
 				events: &events,
 				stats:  dca.CaptureStats{PacketsReceived: 1, OutputBytes: plan.ExpectedBytes},
@@ -1102,9 +553,7 @@ func TestParticipantFinishFailurePreventsCommit(t *testing.T) {
 	if !reflect.DeepEqual(participant.finished, []bool{true}) {
 		t.Fatalf("participant outcomes = %v, want [true]", participant.finished)
 	}
-	if _, err := os.Stat(finalPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("participant finish failure published output: %v", err)
-	}
+	assertADCRetained(t, finalPath)
 }
 
 func TestFiniteCaptureUsesNaturalFrameEndCapability(t *testing.T) {
@@ -1129,10 +578,10 @@ func TestFiniteCaptureUsesNaturalFrameEndCapability(t *testing.T) {
 		context.Background(),
 		radarControl,
 		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		func(dca.ReceiverConfig) (Receiver, error) { return receiver, nil },
 		plan,
 		output,
-		DefaultOptions(),
+		preparedSession(t, plan),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1180,10 +629,10 @@ func TestFiniteCaptureWithMissingCoverageUsesNaturalFrameEndAndFails(t *testing.
 		context.Background(),
 		radarControl,
 		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		func(dca.ReceiverConfig) (Receiver, error) { return receiver, nil },
 		plan,
 		output,
-		DefaultOptions(),
+		preparedSession(t, plan),
 	)
 	if err == nil || !strings.Contains(err.Error(), "DCA1000 capture is incomplete: missingBytes=2") {
 		t.Fatalf("Run error = %v, want incomplete coverage", err)
@@ -1195,7 +644,7 @@ func TestFiniteCaptureWithMissingCoverageUsesNaturalFrameEndAndFails(t *testing.
 			radarControl.awaitCalls,
 		)
 	}
-	assertPartRetained(t, finalPath)
+	assertADCRetained(t, finalPath)
 }
 
 func TestFiniteCaptureErrorStillUsesExplicitStop(t *testing.T) {
@@ -1228,10 +677,10 @@ func TestFiniteCaptureErrorStillUsesExplicitStop(t *testing.T) {
 		context.Background(),
 		radarControl,
 		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		func(dca.ReceiverConfig) (Receiver, error) { return receiver, nil },
 		plan,
 		output,
-		DefaultOptions(),
+		preparedSession(t, plan),
 	)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Run error = %v, want finite capture deadline", err)
@@ -1243,10 +692,11 @@ func TestFiniteCaptureErrorStillUsesExplicitStop(t *testing.T) {
 			radarControl.awaitCalls,
 		)
 	}
-	assertPartRetained(t, finalPath)
+	assertADCRetained(t, finalPath)
 }
 
-func TestNaturalFrameEndFailureDoesNotFallbackToStop(t *testing.T) {
+func TestNaturalFrameEndFailureDoesNotStopAgain(t *testing.T) {
+	plan := sessionTestPlan(t)
 	events := []string{}
 	want := errors.New("unknown natural frame-end result")
 	radarControl := &fakeFiniteFrameRadar{
@@ -1266,7 +716,7 @@ func TestNaturalFrameEndFailureDoesNotFallbackToStop(t *testing.T) {
 		true,
 		true,
 		true,
-		DefaultOptions(),
+		preparedSession(t, plan),
 		func(string) {},
 	)
 	if !errors.Is(err, want) {
@@ -1274,7 +724,7 @@ func TestNaturalFrameEndFailureDoesNotFallbackToStop(t *testing.T) {
 	}
 	if radarControl.awaitCalls != 1 || radarControl.stopCalls != 0 {
 		t.Fatalf(
-			"radar cleanup calls: await=%d stop=%d, want one await and no fallback stop",
+			"radar cleanup calls: await=%d stop=%d, want one await and no second stop",
 			radarControl.awaitCalls,
 			radarControl.stopCalls,
 		)
@@ -1303,13 +753,13 @@ func TestCancellationAfterDCAArmDoesNotStartRadar(t *testing.T) {
 		},
 	}
 	receiver := &fakeReceiver{events: &events}
-	options := DefaultOptions()
-	options.DrainTimeout = 20 * time.Millisecond
+	options := preparedSession(t, plan)
+	options.timings.drain = 20 * time.Millisecond
 	_, err = Run(
 		ctx,
 		&fakeRadar{events: &events},
 		dcaControl,
-		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		func(dca.ReceiverConfig) (Receiver, error) { return receiver, nil },
 		plan,
 		output,
 		options,
@@ -1317,7 +767,7 @@ func TestCancellationAfterDCAArmDoesNotStartRadar(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run error = %v, want context cancellation", err)
 	}
-	if containsEvent(events, "sensorStart") || containsEvent(events, "sensorStart 0") {
+	if containsEvent(events, "sensorStart") {
 		t.Fatalf("radar was started after cancellation: %#v", events)
 	}
 	if containsEvent(events, "receiverWait") {
@@ -1326,7 +776,7 @@ func TestCancellationAfterDCAArmDoesNotStartRadar(t *testing.T) {
 	if dcaControl.stopCalls != 2 {
 		t.Fatalf("DCA StopRecord calls = %d, want initial convergence plus final stop", dcaControl.stopCalls)
 	}
-	assertPartRetained(t, finalPath)
+	assertADCRetained(t, finalPath)
 }
 
 func TestCancellationDuringCleanupPreventsCommit(t *testing.T) {
@@ -1354,10 +804,10 @@ func TestCancellationDuringCleanupPreventsCommit(t *testing.T) {
 		ctx,
 		radarControl,
 		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		func(dca.ReceiverConfig) (Receiver, error) { return receiver, nil },
 		plan,
 		output,
-		DefaultOptions(),
+		preparedSession(t, plan),
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run error = %v, want sticky cancellation", err)
@@ -1369,7 +819,7 @@ func TestCancellationDuringCleanupPreventsCommit(t *testing.T) {
 			radarControl.awaitCalls,
 		)
 	}
-	assertPartRetained(t, finalPath)
+	assertADCRetained(t, finalPath)
 }
 
 func TestFiniteDeadlineReportsFinalCoverageAfterReceiverCleanup(t *testing.T) {
@@ -1403,10 +853,10 @@ func TestFiniteDeadlineReportsFinalCoverageAfterReceiverCleanup(t *testing.T) {
 		context.Background(),
 		&fakeRadar{events: &events},
 		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		func(dca.ReceiverConfig) (Receiver, error) { return receiver, nil },
 		plan,
 		output,
-		DefaultOptions(),
+		preparedSession(t, plan),
 	)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Run error = %v, want deadline identity", err)
@@ -1426,7 +876,7 @@ func TestFiniteDeadlineReportsFinalCoverageAfterReceiverCleanup(t *testing.T) {
 	if gotStats != receiver.stats {
 		t.Fatalf("Run stats = %#v, want finalized %#v", gotStats, receiver.stats)
 	}
-	assertPartRetained(t, finalPath)
+	assertADCRetained(t, finalPath)
 }
 
 func TestRadarCleanupDeadlineStillStopsDCA(t *testing.T) {
@@ -1444,23 +894,20 @@ func TestRadarCleanupDeadlineStillStopsDCA(t *testing.T) {
 	}
 	radarControl := &fakeRadar{
 		events: &events,
-		stopHook: func(ctx context.Context, call int) error {
-			if call == 1 {
-				return nil
-			}
+		awaitHook: func(ctx context.Context) error {
 			<-ctx.Done()
 			return ctx.Err()
 		},
 	}
 	dcaControl := &fakeDCA{events: &events}
-	options := DefaultOptions()
-	options.RadarCleanupTimeout = 20 * time.Millisecond
+	options := preparedSession(t, plan)
+	options.timings.radarCleanup = 20 * time.Millisecond
 	started := time.Now()
 	_, err = Run(
 		context.Background(),
 		radarControl,
 		dcaControl,
-		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		func(dca.ReceiverConfig) (Receiver, error) { return receiver, nil },
 		plan,
 		output,
 		options,
@@ -1495,12 +942,12 @@ func TestStartRecordFailureSkipsEmptyDataDrainAndExtraStop(t *testing.T) {
 		context.Background(),
 		&fakeRadar{events: &events},
 		dcaControl,
-		func(dca.ReceiverConfig) (DataReceiver, error) {
+		func(dca.ReceiverConfig) (Receiver, error) {
 			return &fakeReceiver{events: &events}, nil
 		},
 		plan,
 		output,
-		DefaultOptions(),
+		preparedSession(t, plan),
 	)
 	if err == nil {
 		t.Fatal("Run succeeded despite StartRecord convergence failure")
@@ -1509,9 +956,9 @@ func TestStartRecordFailureSkipsEmptyDataDrainAndExtraStop(t *testing.T) {
 		t.Fatalf("failed StartRecord triggered a pointless data drain: %#v", events)
 	}
 	if dcaControl.stopCalls != 1 {
-		t.Fatalf("session retried StopRecord after StartRecordConvergent: %d calls", dcaControl.stopCalls)
+		t.Fatalf("session retried StopRecord after Start: %d calls", dcaControl.stopCalls)
 	}
-	assertPartRetained(t, finalPath)
+	assertADCRetained(t, finalPath)
 }
 
 func TestValidateResultRejectsMissingEdgePacketByExactSize(t *testing.T) {
@@ -1557,10 +1004,10 @@ func TestRunRejectsCompleteSingleFramePacketReceivedBeforeStart(t *testing.T) {
 		context.Background(),
 		radarControl,
 		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		func(dca.ReceiverConfig) (Receiver, error) { return receiver, nil },
 		plan,
 		output,
-		DefaultOptions(),
+		preparedSession(t, plan),
 	)
 	if err == nil || !strings.Contains(err.Error(), "arrived too early") {
 		t.Fatalf("Run error = %v, want stale pre-start packet failure", err)
@@ -1572,7 +1019,7 @@ func TestRunRejectsCompleteSingleFramePacketReceivedBeforeStart(t *testing.T) {
 			radarControl.awaitCalls,
 		)
 	}
-	assertPartRetained(t, finalPath)
+	assertADCRetained(t, finalPath)
 }
 
 func TestRunRejectsFatalAsyncStatusDrainedAfterStop(t *testing.T) {
@@ -1602,10 +1049,10 @@ func TestRunRejectsFatalAsyncStatusDrainedAfterStop(t *testing.T) {
 		context.Background(),
 		&fakeRadar{events: &events},
 		dcaControl,
-		func(dca.ReceiverConfig) (DataReceiver, error) { return receiver, nil },
+		func(dca.ReceiverConfig) (Receiver, error) { return receiver, nil },
 		plan,
 		output,
-		DefaultOptions(),
+		preparedSession(t, plan),
 	)
 	if err == nil || !strings.Contains(err.Error(), "fatal async status") {
 		t.Fatalf("Run error = %v, want fatal async cleanup failure", err)
@@ -1617,7 +1064,7 @@ func TestValidateResultUsesPacketOffsetsAcrossDCAAggregation(t *testing.T) {
 	issued := time.Now()
 	tests := []struct {
 		name          string
-		plan          radar.CapturePlan
+		plan          radar.Plan
 		anchorEnd     int64
 		anchorFrame   uint64
 		anchorDelay   time.Duration
@@ -1626,7 +1073,7 @@ func TestValidateResultUsesPacketOffsetsAcrossDCAAggregation(t *testing.T) {
 	}{
 		{
 			name: "baseline cadence",
-			plan: radar.CapturePlan{
+			plan: radar.Plan{
 				BytesPerFrame:  262_144,
 				ExpectedBytes:  26_214_400,
 				NumberOfFrames: 100,
@@ -1639,7 +1086,7 @@ func TestValidateResultUsesPacketOffsetsAcrossDCAAggregation(t *testing.T) {
 		},
 		{
 			name: "baseline cadence compressed",
-			plan: radar.CapturePlan{
+			plan: radar.Plan{
 				BytesPerFrame:  262_144,
 				ExpectedBytes:  26_214_400,
 				NumberOfFrames: 100,
@@ -1653,7 +1100,7 @@ func TestValidateResultUsesPacketOffsetsAcrossDCAAggregation(t *testing.T) {
 		},
 		{
 			name: "small frames aggregated into full packets",
-			plan: radar.CapturePlan{
+			plan: radar.Plan{
 				BytesPerFrame:  64,
 				ExpectedBytes:  6400,
 				NumberOfFrames: 100,
@@ -1666,7 +1113,7 @@ func TestValidateResultUsesPacketOffsetsAcrossDCAAggregation(t *testing.T) {
 		},
 		{
 			name: "small frames compressed despite delayed tail",
-			plan: radar.CapturePlan{
+			plan: radar.Plan{
 				BytesPerFrame:  64,
 				ExpectedBytes:  6400,
 				NumberOfFrames: 100,
@@ -1680,7 +1127,7 @@ func TestValidateResultUsesPacketOffsetsAcrossDCAAggregation(t *testing.T) {
 		},
 		{
 			name: "only a delayed short tail is conservatively accepted",
-			plan: radar.CapturePlan{
+			plan: radar.Plan{
 				BytesPerFrame:  64,
 				ExpectedBytes:  640,
 				NumberOfFrames: 10,
@@ -1726,21 +1173,22 @@ func TestValidateResultUsesPacketOffsetsAcrossDCAAggregation(t *testing.T) {
 func TestMinimumFirstPacketTimeoutAccountsForAggregationAndTail(t *testing.T) {
 	tests := []struct {
 		name string
-		plan radar.CapturePlan
+		plan radar.Plan
 		want time.Duration
 	}{
 		{
 			name: "small frames aggregate beyond default",
-			plan: radar.CapturePlan{
+			plan: radar.Plan{
 				BytesPerFrame:  64,
-				InfiniteFrames: true,
+				ExpectedBytes:  64_000,
+				NumberOfFrames: 1000,
 				FramePeriod:    1342 * time.Millisecond,
 			},
 			want: 31866 * time.Millisecond,
 		},
 		{
 			name: "finite output is only a delayed short tail",
-			plan: radar.CapturePlan{
+			plan: radar.Plan{
 				BytesPerFrame:  64,
 				ExpectedBytes:  640,
 				NumberOfFrames: 10,
@@ -1750,7 +1198,7 @@ func TestMinimumFirstPacketTimeoutAccountsForAggregationAndTail(t *testing.T) {
 		},
 		{
 			name: "baseline packet in first frame",
-			plan: radar.CapturePlan{
+			plan: radar.Plan{
 				BytesPerFrame:  262_144,
 				ExpectedBytes:  26_214_400,
 				NumberOfFrames: 100,
@@ -1760,16 +1208,17 @@ func TestMinimumFirstPacketTimeoutAccountsForAggregationAndTail(t *testing.T) {
 		},
 		{
 			name: "first payload may require the whole selected frame",
-			plan: radar.CapturePlan{
+			plan: radar.Plan{
 				BytesPerFrame:  dca.MaximumDataPayloadSize,
-				InfiniteFrames: true,
+				ExpectedBytes:  10 * int64(dca.MaximumDataPayloadSize),
+				NumberOfFrames: 10,
 				FramePeriod:    1342 * time.Millisecond,
 			},
 			want: 2342 * time.Millisecond,
 		},
 		{
 			name: "single short frame waits for tail without a frame offset",
-			plan: radar.CapturePlan{
+			plan: radar.Plan{
 				BytesPerFrame:  64,
 				ExpectedBytes:  64,
 				NumberOfFrames: 1,
@@ -1791,33 +1240,35 @@ func TestMinimumFirstPacketTimeoutAccountsForAggregationAndTail(t *testing.T) {
 	}
 }
 
-func TestMinimumReceiverIdleTimeoutAccountsForInfinitePacketAggregation(t *testing.T) {
+func TestMinimumReceiverIdleTimeoutAccountsForPacketAggregation(t *testing.T) {
 	tests := []struct {
 		name string
-		plan radar.CapturePlan
+		plan radar.Plan
 		want time.Duration
 	}{
 		{
-			name: "small infinite frames",
-			plan: radar.CapturePlan{
+			name: "small frames",
+			plan: radar.Plan{
 				BytesPerFrame:  64,
-				InfiniteFrames: true,
+				ExpectedBytes:  64_000,
+				NumberOfFrames: 1000,
 				FramePeriod:    200 * time.Millisecond,
 			},
 			want: 7400 * time.Millisecond,
 		},
 		{
 			name: "one payload per frame remains tail bounded",
-			plan: radar.CapturePlan{
+			plan: radar.Plan{
 				BytesPerFrame:  dca.MaximumDataPayloadSize,
-				InfiniteFrames: true,
+				ExpectedBytes:  10 * int64(dca.MaximumDataPayloadSize),
+				NumberOfFrames: 10,
 				FramePeriod:    100 * time.Millisecond,
 			},
 			want: dca.RawModeTailFlushGuard,
 		},
 		{
 			name: "finite one small frame still watches for aggregated overflow",
-			plan: radar.CapturePlan{
+			plan: radar.Plan{
 				BytesPerFrame:  64,
 				ExpectedBytes:  64,
 				NumberOfFrames: 1,
@@ -1838,9 +1289,10 @@ func TestMinimumReceiverIdleTimeoutAccountsForInfinitePacketAggregation(t *testi
 		})
 	}
 
-	overflow := radar.CapturePlan{
+	overflow := radar.Plan{
 		BytesPerFrame:  64,
-		InfiniteFrames: true,
+		ExpectedBytes:  128,
+		NumberOfFrames: 2,
 		FramePeriod:    time.Duration(math.MaxInt64 / 2),
 	}
 	if _, err := MinimumReceiverIdleTimeout(overflow); err == nil {
@@ -1858,67 +1310,29 @@ func TestFrameOffsetDurationBoundary(t *testing.T) {
 	}
 }
 
-func TestRunRejectsMaximumDurationOverflowBeforeHardware(t *testing.T) {
+func TestPrepareRejectsMaximumDurationOverflow(t *testing.T) {
 	plan := sessionTestPlan(t)
 	plan.BytesPerFrame = dca.MaximumDataPayloadSize
 	plan.ExpectedBytes = 2 * int64(dca.MaximumDataPayloadSize)
 	plan.NumberOfFrames = 2
 	plan.FramePeriod = time.Duration(math.MaxInt64 / 2)
-	output, err := capturefile.Create(filepath.Join(t.TempDir(), "overflow.bin"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	events := []string{}
-	receiverCreated := false
-	_, err = Run(
-		context.Background(),
-		&fakeRadar{events: &events},
-		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) {
-			receiverCreated = true
-			return &fakeReceiver{events: &events}, nil
-		},
-		plan,
-		output,
-		DefaultOptions(),
-	)
+	_, err := Prepare(plan, dca.DefaultFPGAConfig(), dca.DefaultReceiverConfig(), 25, 3*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "maximum") {
-		t.Fatalf("Run error = %v, want maximum-duration preflight failure", err)
-	}
-	if receiverCreated || len(events) != 0 {
-		t.Fatalf("duration preflight touched hardware dependencies: receiver=%t events=%v", receiverCreated, events)
+		t.Fatalf("Prepare error = %v, want maximum-duration failure", err)
 	}
 }
 
-func TestRunRejectsUnsupportedDCAConfigBeforeHardware(t *testing.T) {
+func TestPrepareRejectsUnsupportedDCAConfig(t *testing.T) {
 	plan := sessionTestPlan(t)
-	output, err := capturefile.Create(filepath.Join(t.TempDir(), "unsupported-dca.bin"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	events := []string{}
-	options := DefaultOptions()
-	options.FPGAConfig.Timer = 31
-	_, err = Run(
-		context.Background(),
-		&fakeRadar{events: &events},
-		&fakeDCA{events: &events},
-		func(dca.ReceiverConfig) (DataReceiver, error) {
-			return &fakeReceiver{events: &events}, nil
-		},
-		plan,
-		output,
-		options,
-	)
+	fpga := dca.DefaultFPGAConfig()
+	fpga.Timer = 31
+	_, err := Prepare(plan, fpga, dca.DefaultReceiverConfig(), 25, 3*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "raw capture requires") {
-		t.Fatalf("Run error = %v, want raw DCA contract failure", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("DCA contract preflight touched hardware dependencies: %v", events)
+		t.Fatalf("Prepare error = %v, want raw DCA contract failure", err)
 	}
 }
 
-func sessionTestPlan(t *testing.T) radar.CapturePlan {
+func sessionTestPlan(t *testing.T) radar.Plan {
 	t.Helper()
 	commands := []string{
 		"flushCfg",
@@ -1933,66 +1347,13 @@ func sessionTestPlan(t *testing.T) radar.CapturePlan {
 		"lvdsStreamCfg -1 0 1 0",
 		"sensorStart",
 	}
-	plan, err := radar.BuildCapturePlan(radar.StudioCLI, commands, radar.FullConfiguration)
+	plan, err := radar.CommandPlan(commands)
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan.BytesPerFrame = 3
 	plan.ExpectedBytes = 3
 	return plan
-}
-
-func mirrorSessionPlan(t *testing.T) radar.CapturePlan {
-	t.Helper()
-	plan := sessionTestPlan(t)
-	plan.BytesPerFrame = 4
-	plan.ExpectedBytes = 4
-	plan.NumberOfFrames = 1
-	return plan
-}
-
-func newSessionTestMirror(
-	t *testing.T,
-	output capturefile.Output,
-	sink capturestream.FrameSink,
-	cancel context.CancelFunc,
-) *capturestream.Mirror {
-	t.Helper()
-	mirror, err := capturestream.NewMirror(
-		output,
-		sink,
-		cancel,
-		capturestream.MirrorConfig{FrameBytes: 4, FrameCount: 1, BufferBytes: 4},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(mirror.Abort)
-	return mirror
-}
-
-func mirrorTestReceiver(events *[]string, payload []byte, outputBytes int64) *fakeReceiver {
-	return &fakeReceiver{
-		events:  events,
-		payload: payload,
-		stats: dca.CaptureStats{
-			PacketsReceived:      1,
-			PayloadBytesReceived: uint64(len(payload)),
-			OutputBytes:          outputBytes,
-		},
-	}
-}
-
-func assertPartBytes(t *testing.T, finalPath, want string) {
-	t.Helper()
-	assertPartRetained(t, finalPath)
-	got, err := os.ReadFile(finalPath + ".part")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != want {
-		t.Fatalf("part bytes = %q, want %q", got, want)
-	}
 }
 
 func assertPublishedBytes(t *testing.T, finalPath, want string) {
@@ -2003,9 +1364,6 @@ func assertPublishedBytes(t *testing.T, finalPath, want string) {
 	}
 	if string(got) != want {
 		t.Fatalf("published bytes = %q, want %q", got, want)
-	}
-	if _, err := os.Stat(finalPath + ".part"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("published capture retained stage: %v", err)
 	}
 }
 
@@ -2018,12 +1376,9 @@ func containsEvent(events []string, wanted string) bool {
 	return false
 }
 
-func assertPartRetained(t *testing.T, finalPath string) {
+func assertADCRetained(t *testing.T, finalPath string) {
 	t.Helper()
-	if _, err := os.Stat(finalPath); !os.IsNotExist(err) {
-		t.Fatalf("final output exists after failure: %v", err)
-	}
-	if _, err := os.Stat(finalPath + ".part"); err != nil {
-		t.Fatalf("part file was not retained: %v", err)
+	if _, err := os.Stat(finalPath); err != nil {
+		t.Fatalf("ADC file was not retained: %v", err)
 	}
 }

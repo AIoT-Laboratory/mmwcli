@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 )
 
-var captureSessionV1CommandNames = map[string]struct{}{
+var takeCommandNames = map[string]struct{}{
 	"flushCfg":          {},
 	"dfeDataOutputMode": {},
 	"channelCfg":        {},
@@ -25,84 +25,54 @@ var captureSessionV1CommandNames = map[string]struct{}{
 	"lvdsStreamCfg":     {},
 }
 
-// BuildCaptureSessionV1Plan builds the StudioCLI capture plan and verifies
-// that the exact CFG snapshot is representable by the capture-session v1
-// contract consumed by mmwcore.
-func BuildCaptureSessionV1Plan(snapshot []byte, mode ConfigurationMode) (CapturePlan, error) {
-	if mode != FullConfiguration {
-		return CapturePlan{}, errors.New("capture session v1 requires a full radar configuration")
-	}
-	return buildCaptureSessionV1Plan(xwr68xxFamily, snapshot)
+// BuildPlan validates the exact IWR6843 CFG snapshot consumed by mmwcore.
+func BuildPlan(snapshot []byte) (Plan, error) {
+	return buildPlan(snapshot)
 }
 
-// BuildCaptureSessionV1PlanForFamily builds the sole full-configuration
-// capture-session v1 plan for an explicitly selected closed family.
-func BuildCaptureSessionV1PlanForFamily(
-	family DeviceFamily,
-	snapshot []byte,
-) (CapturePlan, error) {
-	if !family.valid() {
-		return CapturePlan{}, errors.New("invalid radar device family")
-	}
-	return buildCaptureSessionV1Plan(family, snapshot)
-}
-
-func buildCaptureSessionV1Plan(family DeviceFamily, snapshot []byte) (CapturePlan, error) {
+func buildPlan(snapshot []byte) (Plan, error) {
 	if !utf8.Valid(snapshot) {
-		return CapturePlan{}, errors.New("capture session v1 CFG must be valid UTF-8")
+		return Plan{}, errors.New("take CFG must be valid UTF-8")
 	}
 	commands, err := ParseConfig(bytes.NewReader(snapshot))
 	if err != nil {
-		return CapturePlan{}, err
+		return Plan{}, err
 	}
-	plan, err := buildCapturePlan(StudioCLI, family, commands, FullConfiguration)
+	plan, err := commandPlan(commands)
 	if err != nil {
-		return CapturePlan{}, err
+		return Plan{}, err
 	}
-	contractCommands, err := parseCaptureSessionV1Commands(snapshot)
+	contractCommands, err := parseTakeCommands(snapshot)
 	if err != nil {
-		return CapturePlan{}, err
+		return Plan{}, err
 	}
-	contractPlan, err := buildCapturePlan(StudioCLI, family, contractCommands, FullConfiguration)
+	contractPlan, err := commandPlan(contractCommands)
 	if err != nil {
-		return CapturePlan{}, fmt.Errorf("capture session v1 CFG is not representable: %w", err)
+		return Plan{}, fmt.Errorf("take CFG is not representable: %w", err)
 	}
-	if !sameCaptureGeometry(plan, contractPlan) {
-		return CapturePlan{}, errors.New("capture session v1 CFG snapshot does not match the radar capture plan")
+	if !sameGeometry(plan, contractPlan) {
+		return Plan{}, errors.New("take CFG snapshot does not match the radar capture plan")
 	}
-	if err := validateCaptureSessionV1Subset(family, contractCommands, contractPlan); err != nil {
-		return CapturePlan{}, fmt.Errorf("capture session v1 CFG is not representable: %w", err)
+	if err := validateTakeCommands(contractCommands, contractPlan); err != nil {
+		return Plan{}, fmt.Errorf("take CFG is not representable: %w", err)
 	}
 	return plan, nil
 }
 
-// ValidateCaptureSessionV1Plan binds an already-built capture plan to the
-// exact CFG snapshot that will be carried by a capture-session v1 artifact or
-// stream. It rejects semantic differences even when they preserve byte
-// geometry.
-func ValidateCaptureSessionV1Plan(snapshot []byte, actual CapturePlan) error {
-	if actual.Mode != FullConfiguration {
-		return errors.New("capture session v1 requires a full radar configuration")
-	}
-	family := actual.DeviceFamily()
-	if !family.valid() {
-		return errors.New("capture session v1 plan has an invalid radar device family")
-	}
-	expected, err := buildCaptureSessionV1Plan(family, snapshot)
+// ValidatePlan binds an already-built plan to its exact CFG snapshot.
+func ValidatePlan(snapshot []byte, actual Plan) error {
+	expected, err := buildPlan(snapshot)
 	if err != nil {
 		return err
 	}
-	if !sameCapturePlan(expected, actual) {
-		return errors.New("capture session v1 CFG snapshot does not match the supplied radar capture plan")
+	if !samePlan(expected, actual) {
+		return errors.New("take CFG snapshot does not match the supplied radar capture plan")
 	}
 	return nil
 }
 
-func sameCapturePlan(left, right CapturePlan) bool {
-	return left.Dialect == right.Dialect &&
-		left.RawCapture == right.RawCapture &&
-		left.Mode == right.Mode &&
-		slices.Equal(left.ConfigurationCommands, right.ConfigurationCommands) &&
+func samePlan(left, right Plan) bool {
+	return slices.Equal(left.ConfigurationCommands, right.ConfigurationCommands) &&
 		left.DeclaredStartCommand == right.DeclaredStartCommand &&
 		left.StartCommand == right.StartCommand &&
 		left.StartWasSynthesized == right.StartWasSynthesized &&
@@ -110,15 +80,14 @@ func sameCapturePlan(left, right CapturePlan) bool {
 		left.BytesPerFrame == right.BytesPerFrame &&
 		left.ExpectedBytes == right.ExpectedBytes &&
 		left.HardwareLVDSEnabled == right.HardwareLVDSEnabled &&
-		left.InfiniteFrames == right.InfiniteFrames &&
 		left.NumberOfFrames == right.NumberOfFrames &&
 		left.FramePeriod == right.FramePeriod
 }
 
-// parseCaptureSessionV1Commands mirrors mmwcore's public TI-CFG comment
+// parseTakeCommands mirrors mmwcore's TI-CFG comment
 // boundary: percent and hash comments are removed, unknown commands are
 // ignored, and recognized contract commands retain their exact arguments.
-func parseCaptureSessionV1Commands(snapshot []byte) ([]string, error) {
+func parseTakeCommands(snapshot []byte) ([]string, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(snapshot))
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
 	commands := make([]string, 0, 16)
@@ -136,59 +105,52 @@ func parseCaptureSessionV1Commands(snapshot []byte) ([]string, error) {
 			continue
 		}
 		if fields[0] == "advFrameCfg" || fields[0] == "subFrameCfg" {
-			return nil, errors.New("capture session v1 supports legacy frameCfg only")
+			return nil, errors.New("take supports legacy frameCfg only")
 		}
-		if _, recognized := captureSessionV1CommandNames[fields[0]]; recognized {
+		if _, recognized := takeCommandNames[fields[0]]; recognized {
 			commands = append(commands, line)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read capture session v1 configuration: %w", err)
+		return nil, fmt.Errorf("read take configuration: %w", err)
 	}
 	return commands, nil
 }
 
-func sameCaptureGeometry(left, right CapturePlan) bool {
-	return left.RawCapture == right.RawCapture &&
-		left.Mode == right.Mode &&
-		left.ExpectedDCADataFormat == right.ExpectedDCADataFormat &&
+func sameGeometry(left, right Plan) bool {
+	return left.ExpectedDCADataFormat == right.ExpectedDCADataFormat &&
 		left.BytesPerFrame == right.BytesPerFrame &&
 		left.ExpectedBytes == right.ExpectedBytes &&
 		left.HardwareLVDSEnabled == right.HardwareLVDSEnabled &&
-		left.InfiniteFrames == right.InfiniteFrames &&
 		left.NumberOfFrames == right.NumberOfFrames &&
 		left.FramePeriod == right.FramePeriod
 }
 
-func validateCaptureSessionV1Subset(
-	family DeviceFamily,
-	commands []string,
-	plan CapturePlan,
-) error {
-	adcFields, err := singleCaptureSessionCommand(commands, "adcCfg")
+func validateTakeCommands(commands []string, plan Plan) error {
+	adcFields, err := oneCommand(commands, "adcCfg")
 	if err != nil {
 		return err
 	}
 	if strings.Join(adcFields, " ") != "adcCfg 2 1" {
-		return errors.New("capture session v1 requires exact adcCfg 2 1")
+		return errors.New("take requires exact adcCfg 2 1")
 	}
-	channelFields, err := singleCaptureSessionCommand(commands, "channelCfg")
+	channelFields, err := oneCommand(commands, "channelCfg")
 	if err != nil {
 		return err
 	}
 	rxMask, err := strconv.ParseUint(channelFields[1], 10, 8)
 	if err != nil {
-		return fmt.Errorf("parse capture session v1 RX mask: %w", err)
+		return fmt.Errorf("parse take RX mask: %w", err)
 	}
 	if rxMask&(rxMask+1) != 0 {
-		return errors.New("capture session v1 cannot represent a sparse channelCfg RX mask")
+		return errors.New("take cannot represent a sparse channelCfg RX mask")
 	}
 
-	profileFields, err := singleCaptureSessionCommand(commands, "profileCfg")
+	profileFields, err := oneCommand(commands, "profileCfg")
 	if err != nil {
 		return err
 	}
-	profile, err := captureSessionV1Profile(profileFields)
+	profile, err := parseTakeProfile(profileFields)
 	if err != nil {
 		return err
 	}
@@ -196,60 +158,60 @@ func validateCaptureSessionV1Subset(
 		return errors.New("group2_i_then_q capture session requires an even profileCfg numAdcSamples")
 	}
 
-	frame, err := parseFrameForFamily(family, commands)
+	frame, err := parseFrame(commands)
 	if err != nil {
 		return err
 	}
-	frameFields, err := singleCaptureSessionCommand(commands, "frameCfg")
+	frameFields, err := oneCommand(commands, "frameCfg")
 	if err != nil {
 		return err
 	}
-	framePeriodMilliseconds, err := parseCaptureSessionDecimal(frameFields[5], "frameCfg periodicity")
+	framePeriodMilliseconds, err := parseDecimal(frameFields[5], "frameCfg periodicity")
 	if err != nil {
 		return err
 	}
 	framePeriodSeconds := framePeriodMilliseconds / 1e3
 	if math.IsInf(framePeriodSeconds, 0) || framePeriodSeconds <= 0 {
-		return errors.New("capture session v1 scaled frameCfg periodicity must be finite and positive")
+		return errors.New("take scaled frameCfg periodicity must be finite and positive")
 	}
-	frameTriggerDelay, err := parseCaptureSessionDecimal(frameFields[7], "frameCfg trigger delay")
+	frameTriggerDelay, err := parseDecimal(frameFields[7], "frameCfg trigger delay")
 	if err != nil {
 		return err
 	}
 	if frameTriggerDelay != 0 {
-		return errors.New("capture session v1 requires zero frameCfg trigger delay")
+		return errors.New("take requires zero frameCfg trigger delay")
 	}
-	profiles, err := parseProfileSamples(family, commands)
+	profiles, err := parseProfiles(commands)
 	if err != nil {
 		return err
 	}
-	_, enabledTransmitters, err := parseChannelConfigurationForFamily(family, commands)
+	_, enabledTransmitters, err := parseChannels(commands)
 	if err != nil {
 		return err
 	}
-	ranges, err := parseChirpProfileRangesForFamily(family, commands, profiles, enabledTransmitters)
+	ranges, err := parseChirps(commands, profiles, enabledTransmitters)
 	if err != nil {
 		return err
 	}
-	if err := validateCaptureSessionV1Chirps(commands, frame, ranges); err != nil {
+	if err := validateTakeChirps(commands, frame, ranges); err != nil {
 		return err
 	}
 	chirpsPerFrame, err := checkedExpectedMultiply(
 		frame.chirpEnd-frame.chirpStart+1,
 		frame.loops,
-		"capture session v1 chirps per frame",
+		"take chirps per frame",
 	)
 	if err != nil {
 		return err
 	}
 	activeSeconds := (profile.idleSeconds + profile.rampEndSeconds) * float64(chirpsPerFrame)
 	if math.IsInf(activeSeconds, 0) || framePeriodSeconds < activeSeconds {
-		return errors.New("capture session v1 frame periodicity is shorter than the active chirp time")
+		return errors.New("take frame periodicity is shorter than the active chirp time")
 	}
 	return nil
 }
 
-func singleCaptureSessionCommand(commands []string, name string) ([]string, error) {
+func oneCommand(commands []string, name string) ([]string, error) {
 	var result []string
 	count := 0
 	for _, command := range commands {
@@ -261,20 +223,20 @@ func singleCaptureSessionCommand(commands []string, name string) ([]string, erro
 		count++
 	}
 	if count != 1 {
-		return nil, fmt.Errorf("capture session v1 requires exactly one %s", name)
+		return nil, fmt.Errorf("take requires exactly one %s", name)
 	}
 	return result, nil
 }
 
-type captureSessionProfile struct {
+type takeProfile struct {
 	idleSeconds    float64
 	rampEndSeconds float64
 	samples        uint64
 }
 
-func captureSessionV1Profile(fields []string) (captureSessionProfile, error) {
+func parseTakeProfile(fields []string) (takeProfile, error) {
 	if len(fields) != 15 {
-		return captureSessionProfile{}, errors.New("capture session v1 profileCfg must contain fourteen arguments")
+		return takeProfile{}, errors.New("take profileCfg must contain fourteen arguments")
 	}
 	physical := []struct {
 		name       string
@@ -290,34 +252,34 @@ func captureSessionV1Profile(fields []string) (captureSessionProfile, error) {
 	}
 	values := make(map[int]float64, len(physical))
 	for _, field := range physical {
-		raw, err := parseCaptureSessionDecimal(fields[field.index], "profileCfg "+field.name)
+		raw, err := parseDecimal(fields[field.index], "profileCfg "+field.name)
 		if err != nil {
-			return captureSessionProfile{}, err
+			return takeProfile{}, err
 		}
 		value := raw * field.multiplier
 		if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
-			return captureSessionProfile{}, fmt.Errorf(
-				"capture session v1 scaled profileCfg %s must be finite and positive",
+			return takeProfile{}, fmt.Errorf(
+				"take scaled profileCfg %s must be finite and positive",
 				field.name,
 			)
 		}
 		values[field.index] = value
 	}
 	if values[4] >= values[5] {
-		return captureSessionProfile{}, errors.New("capture session v1 profileCfg ADC start time must precede ramp end time")
+		return takeProfile{}, errors.New("take profileCfg ADC start time must precede ramp end time")
 	}
 	samples, err := strconv.ParseUint(fields[10], 10, 16)
 	if err != nil || samples == 0 {
-		return captureSessionProfile{}, errors.New("capture session v1 profileCfg numAdcSamples must be positive")
+		return takeProfile{}, errors.New("take profileCfg numAdcSamples must be positive")
 	}
-	return captureSessionProfile{
+	return takeProfile{
 		idleSeconds:    values[3],
 		rampEndSeconds: values[5],
 		samples:        samples,
 	}, nil
 }
 
-func validateCaptureSessionV1Chirps(
+func validateTakeChirps(
 	commands []string,
 	frame frameConfiguration,
 	ranges []chirpProfileRange,
@@ -328,12 +290,12 @@ func validateCaptureSessionV1Chirps(
 			continue
 		}
 		for index := 4; index <= 7; index++ {
-			value, err := parseCaptureSessionDecimal(fields[index], "chirpCfg variation")
+			value, err := parseDecimal(fields[index], "chirpCfg variation")
 			if err != nil {
 				return err
 			}
 			if value != 0 {
-				return errors.New("capture session v1 does not support nonzero chirpCfg variations")
+				return errors.New("take does not support nonzero chirpCfg variations")
 			}
 		}
 	}
@@ -347,26 +309,26 @@ func validateCaptureSessionV1Chirps(
 	for index := frame.chirpStart; index <= frame.chirpEnd; index++ {
 		configured, found := byIndex[index]
 		if !found {
-			return fmt.Errorf("capture session v1 frame chirp %d is undefined", index)
+			return fmt.Errorf("take frame chirp %d is undefined", index)
 		}
 		if bits.OnesCount64(configured.txEnable) != 1 {
-			return errors.New("capture session v1 requires each frame chirp to enable exactly one TX")
+			return errors.New("take requires each frame chirp to enable exactly one TX")
 		}
 		if seenTransmitters&configured.txEnable != 0 {
-			return errors.New("capture session v1 requires each active TX exactly once per frame loop")
+			return errors.New("take requires each active TX exactly once per frame loop")
 		}
 		seenTransmitters |= configured.txEnable
 	}
 	return nil
 }
 
-func parseCaptureSessionDecimal(token, name string) (float64, error) {
+func parseDecimal(token, name string) (float64, error) {
 	if strings.ContainsAny(token, "xXpP_") {
-		return 0, fmt.Errorf("capture session v1 %s must use decimal floating-point syntax", name)
+		return 0, fmt.Errorf("take %s must use decimal floating-point syntax", name)
 	}
 	value, err := strconv.ParseFloat(token, 64)
 	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
-		return 0, fmt.Errorf("capture session v1 %s must be finite decimal floating-point", name)
+		return 0, fmt.Errorf("take %s must be finite decimal floating-point", name)
 	}
 	return value, nil
 }

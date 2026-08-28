@@ -253,9 +253,9 @@ func (receiver *Receiver) Run(ctx context.Context, output io.WriterAt) (CaptureS
 	return stats, err
 }
 
-// WaitForFirst blocks until the first accepted payload was written, the run
+// WaitFirst blocks until the first accepted payload was written, the run
 // ended, or ctx expired.
-func (receiver *Receiver) WaitForFirst(ctx context.Context) error {
+func (receiver *Receiver) WaitFirst(ctx context.Context) error {
 	if receiver == nil {
 		return errors.New("nil DCA1000 receiver")
 	}
@@ -541,7 +541,7 @@ func (receiver *Receiver) receive(ctx context.Context, output io.WriterAt) (Capt
 		receiver.publishStats(stats)
 		if firstAcceptedPacket {
 			// Publish the timestamp and all first-packet metadata before waking
-			// WaitForFirst. Session deadlines are anchored from Stats immediately
+			// WaitFirst. Session deadlines are anchored from Stats immediately
 			// after that wait returns.
 			receiver.firstOnce.Do(func() { close(receiver.first) })
 		}

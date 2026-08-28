@@ -7,21 +7,13 @@ import (
 	"io"
 	"math"
 	"math/bits"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// ConfigurationMode selects whether a capture will send the parsed RF/LVDS
-// configuration or reuse the configuration already held by the device.
-type ConfigurationMode uint8
-
 const (
-	FullConfiguration ConfigurationMode = iota
-	ReuseConfiguration
-
 	adcBufChannelAlignment   = uint64(16)
 	complex16BytesPerSample  = uint64(4)
 	cbuffMinimumTransferSize = uint64(64)
@@ -32,38 +24,22 @@ const (
 	maximumFramePeriod       = 1342 * time.Millisecond
 )
 
-// CapturePlan is the device-bound result of CFG parsing and preflight.
+// Plan is the validated IWR6843 capture geometry and command sequence.
 // ConfigurationCommands never contains sensorStart. StartCommand is the exact
 // command that an orchestrator should send only after its data sink is armed.
-type CapturePlan struct {
-	Dialect Dialect
-	// RawCapture is the closed hardware and raw-wire descriptor established by
-	// the dialect's validated DeviceFamily.
-	RawCapture            RawCaptureContract
-	Mode                  ConfigurationMode
+type Plan struct {
 	ConfigurationCommands []string
 	DeclaredStartCommand  string
 	StartCommand          string
 	StartWasSynthesized   bool
 	ExpectedDCADataFormat int
-	// BytesPerFrame is the exact headerless complex16 LVDS payload produced by
-	// one frame. It remains populated for infinite plans even though their total
-	// ExpectedBytes is necessarily unknown.
+	// BytesPerFrame is the exact headerless complex16 LVDS payload per frame.
 	BytesPerFrame int64
-	// ExpectedBytes is the exact raw ADC payload size for a finite frame plan.
-	// Infinite frame plans use zero because they have no finite expected size.
+	// ExpectedBytes is the exact raw ADC payload size.
 	ExpectedBytes       int64
 	HardwareLVDSEnabled bool
-	InfiniteFrames      bool
 	NumberOfFrames      uint16
 	FramePeriod         time.Duration
-}
-
-// DeviceFamily returns the closed hardware descriptor carried by the plan's
-// raw-capture contract. A fabricated or invalid contract returns the zero,
-// invalid descriptor.
-func (plan CapturePlan) DeviceFamily() DeviceFamily {
-	return plan.RawCapture.deviceFamily()
 }
 
 // ParseConfig reads TI-style command files without touching hardware. Blank
@@ -98,105 +74,60 @@ func ParseConfig(reader io.Reader) ([]string, error) {
 	return commands, nil
 }
 
-// ParseConfigFile is the filesystem convenience wrapper around ParseConfig.
-func ParseConfigFile(path string) ([]string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open radar configuration %s: %w", path, err)
-	}
-	defer file.Close()
-	return ParseConfig(file)
+// CommandPlan validates parsed IWR6843 commands before any hardware I/O.
+func CommandPlan(commands []string) (Plan, error) {
+	return commandPlan(commands)
 }
 
-// BuildCapturePlan validates a raw ADC legacy-frame configuration before any
-// hardware I/O. ReuseConfiguration still validates the supplied CFG locally,
-// but selects sensorStart 0 and does not require flushCfg to be present.
-func BuildCapturePlan(dialect Dialect, commands []string, mode ConfigurationMode) (CapturePlan, error) {
-	if !dialect.valid() {
-		return CapturePlan{}, errors.New("invalid radar CLI dialect")
-	}
-	return buildCapturePlan(dialect, dialect.family, commands, mode)
-}
-
-// BuildCapturePlanForFamily builds the one strict, full-configuration raw
-// capture plan for an explicitly selected closed family. The StudioCLI
-// dialect remains the legacy CFG grammar; the returned raw-capture contract
-// carries the selected hardware family and the Studio transport independently
-// rejects any family other than xWR68xx.
-func BuildCapturePlanForFamily(family DeviceFamily, commands []string) (CapturePlan, error) {
-	if !family.valid() {
-		return CapturePlan{}, errors.New("invalid radar device family")
-	}
-	return buildCapturePlan(StudioCLI, family, commands, FullConfiguration)
-}
-
-func buildCapturePlan(
-	dialect Dialect,
-	family DeviceFamily,
-	commands []string,
-	mode ConfigurationMode,
-) (CapturePlan, error) {
-	if mode != FullConfiguration && mode != ReuseConfiguration {
-		return CapturePlan{}, fmt.Errorf("invalid configuration mode %d", mode)
-	}
-
+func commandPlan(commands []string) (Plan, error) {
 	copyOfCommands := append([]string(nil), commands...)
 	if err := rejectCaptureLifecycleCommands(copyOfCommands); err != nil {
-		return CapturePlan{}, err
+		return Plan{}, err
 	}
-	if err := validateConfigurationForFamily(family, copyOfCommands, mode == FullConfiguration); err != nil {
-		return CapturePlan{}, err
+	if err := validateCommands(copyOfCommands); err != nil {
+		return Plan{}, err
 	}
 
 	configuration, declaredStart, synthesized, err := splitStart(copyOfCommands)
 	if err != nil {
-		return CapturePlan{}, err
+		return Plan{}, err
 	}
-	if mode == FullConfiguration && declaredStart == "sensorStart 0" {
-		return CapturePlan{}, errors.New("full configuration must use sensorStart; sensorStart 0 is reserved for reuse without reconfiguration")
-	}
-
 	if err := validateLegacyMode(configuration); err != nil {
-		return CapturePlan{}, err
+		return Plan{}, err
 	}
-	if mode == FullConfiguration {
-		if err := validateLegacyCommandOrder(configuration); err != nil {
-			return CapturePlan{}, err
-		}
+	if err := validateLegacyCommandOrder(configuration); err != nil {
+		return Plan{}, err
 	}
 	dcaFormat, err := validateADC(configuration)
 	if err != nil {
-		return CapturePlan{}, err
+		return Plan{}, err
 	}
-	if err := validateADCBuf(family, configuration); err != nil {
-		return CapturePlan{}, err
+	if err := validateADCBuf(configuration); err != nil {
+		return Plan{}, err
 	}
 	if err := validateHardwareLVDS(configuration); err != nil {
-		return CapturePlan{}, err
+		return Plan{}, err
 	}
-	frame, err := parseFrameForFamily(family, configuration)
+	frame, err := parseFrame(configuration)
 	if err != nil {
-		return CapturePlan{}, err
+		return Plan{}, err
+	}
+	if frame.frames == 0 {
+		return Plan{}, errors.New("frameCfg frame count must be in 1..65535")
 	}
 	if _, err := frameSpan(frame.frames, frame.period); err != nil {
-		return CapturePlan{}, err
+		return Plan{}, err
 	}
-	bytesPerFrame, expectedBytes, err := deriveExpectedBytes(family, configuration, frame)
+	bytesPerFrame, expectedBytes, err := expectedBytes(configuration, frame)
 	if err != nil {
-		return CapturePlan{}, err
+		return Plan{}, err
 	}
 
 	start := declaredStart
 	if start == "" {
 		start = "sensorStart"
 	}
-	if mode == ReuseConfiguration {
-		start = "sensorStart 0"
-	}
-	return CapturePlan{
-		Dialect:               dialect,
-		RawCapture:            family.RawCaptureContract(),
-		Mode:                  mode,
+	return Plan{
 		ConfigurationCommands: append([]string(nil), configuration...),
 		DeclaredStartCommand:  declaredStart,
 		StartCommand:          start,
@@ -205,7 +136,6 @@ func buildCapturePlan(
 		BytesPerFrame:         bytesPerFrame,
 		ExpectedBytes:         expectedBytes,
 		HardwareLVDSEnabled:   true,
-		InfiniteFrames:        frame.frames == 0,
 		NumberOfFrames:        frame.frames,
 		FramePeriod:           frame.period,
 	}, nil
@@ -226,8 +156,8 @@ func splitStart(commands []string) ([]string, string, bool, error) {
 		if !isCommand(command, "sensorStart") {
 			continue
 		}
-		if command != "sensorStart" && command != "sensorStart 0" {
-			return nil, "", false, fmt.Errorf("capture accepts only exact sensorStart or sensorStart 0: %s", command)
+		if command != "sensorStart" {
+			return nil, "", false, fmt.Errorf("capture accepts only exact sensorStart: %s", command)
 		}
 		if startIndex >= 0 {
 			return nil, "", false, errors.New("capture configuration may contain only one sensorStart")
@@ -350,7 +280,7 @@ func validateADC(commands []string) (int, error) {
 	return 3, nil
 }
 
-func validateADCBuf(family DeviceFamily, commands []string) error {
+func validateADCBuf(commands []string) error {
 	count := 0
 	for _, command := range commands {
 		if !isCommand(command, "adcbufCfg") {
@@ -375,10 +305,10 @@ func validateADCBuf(family DeviceFamily, commands []string) error {
 			return fmt.Errorf("capture requires complex ADCBuf format (adcFmt=0): %s", command)
 		}
 		if values[4] != 1 {
-			return fmt.Errorf("%s capture requires adcbufCfg chirpThreshold=1: %s", family.versionPlatforms[0], command)
+			return fmt.Errorf("%s capture requires adcbufCfg chirpThreshold=1: %s", iwr6843Platform, command)
 		}
 		if values[0] != -1 || values[2] != 1 || values[3] != 1 {
-			return fmt.Errorf("TI %s legacy capture requires adcbufCfg -1 0 1 1 1: %s", family.versionPlatforms[0], command)
+			return fmt.Errorf("TI %s legacy capture requires adcbufCfg -1 0 1 1 1: %s", iwr6843Platform, command)
 		}
 		count++
 	}
@@ -436,10 +366,6 @@ type chirpProfileRange struct {
 }
 
 func parseFrame(commands []string) (frameConfiguration, error) {
-	return parseFrameForFamily(xwr68xxFamily, commands)
-}
-
-func parseFrameForFamily(family DeviceFamily, commands []string) (frameConfiguration, error) {
 	count := 0
 	var result frameConfiguration
 	for _, command := range commands {
@@ -465,14 +391,14 @@ func parseFrameForFamily(family DeviceFamily, commands []string) (frameConfigura
 			return frameConfiguration{}, fmt.Errorf("frameCfg chirp end index is before its start index: %s", command)
 		}
 		if chirpStart > maximumChirpIndex || chirpEnd > maximumChirpIndex {
-			return frameConfiguration{}, fmt.Errorf("%s frameCfg chirp indices must be in 0..511: %s", family.versionPlatforms[0], command)
+			return frameConfiguration{}, fmt.Errorf("%s frameCfg chirp indices must be in 0..511: %s", iwr6843Platform, command)
 		}
 		loops, err := parseUnsignedArgument(command, fields, 3, 16, "frame loop count")
 		if err != nil {
 			return frameConfiguration{}, err
 		}
 		if loops == 0 || loops > maximumFrameLoops {
-			return frameConfiguration{}, fmt.Errorf("%s frameCfg loop count must be in 1..255: %s", family.versionPlatforms[0], command)
+			return frameConfiguration{}, fmt.Errorf("%s frameCfg loop count must be in 1..255: %s", iwr6843Platform, command)
 		}
 		frameValue, err := strconv.ParseUint(fields[4], 10, 16)
 		if err != nil {
@@ -494,11 +420,11 @@ func parseFrameForFamily(family DeviceFamily, commands []string) (frameConfigura
 		}
 		period := time.Duration(milliseconds * float64(time.Millisecond))
 		if period < minimumFramePeriod || period > maximumFramePeriod {
-			return frameConfiguration{}, fmt.Errorf("%s frame periodicity must be in 0.3..1342 ms: %s", family.versionPlatforms[0], command)
+			return frameConfiguration{}, fmt.Errorf("%s frame periodicity must be in 0.3..1342 ms: %s", iwr6843Platform, command)
 		}
 		triggerDelay, err := strconv.ParseFloat(fields[7], 64)
 		if err != nil || math.IsNaN(triggerDelay) || math.IsInf(triggerDelay, 0) || triggerDelay != 0 {
-			return frameConfiguration{}, fmt.Errorf("initial %s single-chip capture requires frameTriggerDelay=0: %s", family.versionPlatforms[0], command)
+			return frameConfiguration{}, fmt.Errorf("initial %s single-chip capture requires frameTriggerDelay=0: %s", iwr6843Platform, command)
 		}
 		result = frameConfiguration{
 			chirpStart: chirpStart,
@@ -515,12 +441,12 @@ func parseFrameForFamily(family DeviceFamily, commands []string) (frameConfigura
 	return result, nil
 }
 
-func deriveExpectedBytes(family DeviceFamily, commands []string, frame frameConfiguration) (int64, int64, error) {
-	receivers, enabledTransmitters, err := parseChannelConfigurationForFamily(family, commands)
+func expectedBytes(commands []string, frame frameConfiguration) (int64, int64, error) {
+	receivers, enabledTransmitters, err := parseChannels(commands)
 	if err != nil {
 		return 0, 0, err
 	}
-	profiles, err := parseProfileSamples(family, commands)
+	profiles, err := parseProfiles(commands)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -531,29 +457,29 @@ func deriveExpectedBytes(family DeviceFamily, commands []string, frame frameConf
 	// The supported text CLI firmware uses a 32-entry table while validating
 	// the unique chirps in a legacy frame.
 	if uniqueChirps > 32 {
-		return 0, 0, fmt.Errorf("%s strict legacy capture supports at most 32 unique frame chirps, got %d", family.versionPlatforms[0], uniqueChirps)
+		return 0, 0, fmt.Errorf("%s strict legacy capture supports at most 32 unique frame chirps, got %d", iwr6843Platform, uniqueChirps)
 	}
 	// The studio_cli source audited from Radar Toolbox 4.00.00.05 hard-codes
 	// profile index 0 in mmw_rfparser.c. Reject configurations the firmware
 	// cannot represent instead of deriving a byte count for another profile.
 	if len(profiles) != 1 {
-		return 0, 0, fmt.Errorf("TI %s strict legacy capture requires exactly one profileCfg for profile ID 0", family.versionPlatforms[0])
+		return 0, 0, fmt.Errorf("TI %s strict legacy capture requires exactly one profileCfg for profile ID 0", iwr6843Platform)
 	}
 	if _, found := profiles[0]; !found {
-		return 0, 0, fmt.Errorf("TI %s strict legacy capture requires its only profileCfg to use profile ID 0", family.versionPlatforms[0])
+		return 0, 0, fmt.Errorf("TI %s strict legacy capture requires its only profileCfg to use profile ID 0", iwr6843Platform)
 	}
-	ranges, err := parseChirpProfileRangesForFamily(family, commands, profiles, enabledTransmitters)
+	ranges, err := parseChirps(commands, profiles, enabledTransmitters)
 	if err != nil {
 		return 0, 0, err
 	}
 	if len(ranges) > 5 {
-		return 0, 0, fmt.Errorf("TI %s strict legacy capture supports at most five chirpCfg ranges, got %d", family.versionPlatforms[0], len(ranges))
+		return 0, 0, fmt.Errorf("TI %s strict legacy capture supports at most five chirpCfg ranges, got %d", iwr6843Platform, len(ranges))
 	}
-	samplesPerLoop, samplesPerChirp, err := mappedSamplesPerLoop(family, frame, profiles, ranges)
+	samplesPerLoop, samplesPerChirp, err := samplesPerLoop(frame, profiles, ranges)
 	if err != nil {
 		return 0, 0, err
 	}
-	if err := validateRawBufferSizes(family, samplesPerChirp, receivers); err != nil {
+	if err := validateBuffer(samplesPerChirp, receivers); err != nil {
 		return 0, 0, err
 	}
 
@@ -576,9 +502,6 @@ func deriveExpectedBytes(family DeviceFamily, commands []string, frame frameConf
 	if err != nil {
 		return 0, 0, err
 	}
-	if frame.frames == 0 {
-		return bytesPerFrameSigned, 0, nil
-	}
 	expected, err := checkedExpectedMultiply(bytesPerFrame, uint64(frame.frames), "bytes per frame by finite frame count")
 	if err != nil {
 		return 0, 0, err
@@ -590,11 +513,7 @@ func deriveExpectedBytes(family DeviceFamily, commands []string, frame frameConf
 	return bytesPerFrameSigned, expectedSigned, nil
 }
 
-func parseChannelConfiguration(commands []string) (uint64, uint64, error) {
-	return parseChannelConfigurationForFamily(xwr68xxFamily, commands)
-}
-
-func parseChannelConfigurationForFamily(family DeviceFamily, commands []string) (uint64, uint64, error) {
+func parseChannels(commands []string) (uint64, uint64, error) {
 	count := 0
 	var mask uint64
 	var transmitters uint64
@@ -613,11 +532,11 @@ func parseChannelConfigurationForFamily(family DeviceFamily, commands []string) 
 		if err != nil {
 			return 0, 0, err
 		}
-		if value == 0 || value&^family.receiverMask != 0 {
+		if value == 0 || value&^iwr6843ReceiverMask != 0 {
 			return 0, 0, fmt.Errorf(
 				"%s channelCfg RX mask must enable one or more of %s: %s",
-				family.versionPlatforms[0],
-				family.receiverRange(),
+				iwr6843Platform,
+				iwr6843ReceiverRange(),
 				command,
 			)
 		}
@@ -625,11 +544,11 @@ func parseChannelConfigurationForFamily(family DeviceFamily, commands []string) 
 		if err != nil {
 			return 0, 0, err
 		}
-		if txMask == 0 || txMask&^family.transmitterMask != 0 {
+		if txMask == 0 || txMask&^iwr6843TransmitterMask != 0 {
 			return 0, 0, fmt.Errorf(
 				"%s channelCfg TX mask must enable one or more of %s: %s",
-				family.versionPlatforms[0],
-				family.transmitterRange(),
+				iwr6843Platform,
+				iwr6843TransmitterRange(),
 				command,
 			)
 		}
@@ -638,7 +557,7 @@ func parseChannelConfigurationForFamily(family DeviceFamily, commands []string) 
 			return 0, 0, err
 		}
 		if cascade != 0 {
-			return 0, 0, fmt.Errorf("initial %s capture supports only single-chip channelCfg cascading=0: %s", family.versionPlatforms[0], command)
+			return 0, 0, fmt.Errorf("initial %s capture supports only single-chip channelCfg cascading=0: %s", iwr6843Platform, command)
 		}
 		mask = value
 		transmitters = txMask
@@ -650,7 +569,7 @@ func parseChannelConfigurationForFamily(family DeviceFamily, commands []string) 
 	return uint64(bits.OnesCount64(mask)), transmitters, nil
 }
 
-func parseProfileSamples(family DeviceFamily, commands []string) (map[uint64]uint64, error) {
+func parseProfiles(commands []string) (map[uint64]uint64, error) {
 	profiles := make(map[uint64]uint64)
 	for _, command := range commands {
 		if !isCommand(command, "profileCfg") {
@@ -668,7 +587,7 @@ func parseProfileSamples(family DeviceFamily, commands []string) (map[uint64]uin
 			return nil, err
 		}
 		if profileID >= 4 {
-			return nil, fmt.Errorf("%s profileCfg profile ID must be in 0..3: %s", family.versionPlatforms[0], command)
+			return nil, fmt.Errorf("%s profileCfg profile ID must be in 0..3: %s", iwr6843Platform, command)
 		}
 		if strings.ContainsAny(fields[2], "xXpP_") {
 			return nil, fmt.Errorf("profileCfg start frequency must use decimal floating-point syntax: %s", command)
@@ -680,13 +599,13 @@ func parseProfileSamples(family DeviceFamily, commands []string) (map[uint64]uin
 		if math.IsInf(startFrequency*1e9, 0) {
 			return nil, fmt.Errorf("scaled profileCfg start frequency overflows finite Hz representation: %s", command)
 		}
-		if startFrequency < family.minimumStartFrequencyGHz ||
-			startFrequency > family.maximumStartFrequencyGHz {
+		if startFrequency < iwr6843MinimumStartFrequencyGHz ||
+			startFrequency > iwr6843MaximumStartFrequencyGHz {
 			return nil, fmt.Errorf(
 				"%s profileCfg start frequency is outside %.0f..%.0f GHz: %s",
-				family.versionPlatforms[0],
-				family.minimumStartFrequencyGHz,
-				family.maximumStartFrequencyGHz,
+				iwr6843Platform,
+				iwr6843MinimumStartFrequencyGHz,
+				iwr6843MaximumStartFrequencyGHz,
 				command,
 			)
 		}
@@ -695,7 +614,7 @@ func parseProfileSamples(family DeviceFamily, commands []string) (map[uint64]uin
 			return nil, fmt.Errorf("invalid profileCfg frequency slope in %q", command)
 		}
 		if frequencySlope < 0 {
-			return nil, fmt.Errorf("TI %s strict legacy capture does not support negative profileCfg frequency slope: %s", family.versionPlatforms[0], command)
+			return nil, fmt.Errorf("TI %s strict legacy capture does not support negative profileCfg frequency slope: %s", iwr6843Platform, command)
 		}
 		samples, err := parseUnsignedArgument(command, fields, 10, 16, "profileCfg numAdcSamples")
 		if err != nil {
@@ -715,16 +634,7 @@ func parseProfileSamples(family DeviceFamily, commands []string) (map[uint64]uin
 	return profiles, nil
 }
 
-func parseChirpProfileRanges(
-	commands []string,
-	profiles map[uint64]uint64,
-	enabledTransmitters uint64,
-) ([]chirpProfileRange, error) {
-	return parseChirpProfileRangesForFamily(xwr68xxFamily, commands, profiles, enabledTransmitters)
-}
-
-func parseChirpProfileRangesForFamily(
-	family DeviceFamily,
+func parseChirps(
 	commands []string,
 	profiles map[uint64]uint64,
 	enabledTransmitters uint64,
@@ -753,14 +663,14 @@ func parseChirpProfileRangesForFamily(
 			return nil, fmt.Errorf("chirpCfg end index is before its start index: %s", command)
 		}
 		if start > maximumChirpIndex || end > maximumChirpIndex {
-			return nil, fmt.Errorf("%s chirpCfg indices must be in 0..511: %s", family.versionPlatforms[0], command)
+			return nil, fmt.Errorf("%s chirpCfg indices must be in 0..511: %s", iwr6843Platform, command)
 		}
 		profileID, err := parseUnsignedArgument(command, fields, 3, 16, "chirpCfg profile ID")
 		if err != nil {
 			return nil, err
 		}
 		if profileID >= 4 {
-			return nil, fmt.Errorf("%s chirpCfg profile ID must be in 0..3: %s", family.versionPlatforms[0], command)
+			return nil, fmt.Errorf("%s chirpCfg profile ID must be in 0..3: %s", iwr6843Platform, command)
 		}
 		if _, found := profiles[profileID]; !found {
 			return nil, fmt.Errorf("chirpCfg range %d..%d references profile ID %d without a matching profileCfg", start, end, profileID)
@@ -769,11 +679,11 @@ func parseChirpProfileRangesForFamily(
 		if err != nil {
 			return nil, err
 		}
-		if txEnable&^family.transmitterMask != 0 {
+		if txEnable&^iwr6843TransmitterMask != 0 {
 			return nil, fmt.Errorf(
 				"%s chirpCfg TX enable mask must use %s only: %s",
-				family.versionPlatforms[0],
-				family.transmitterRange(),
+				iwr6843Platform,
+				iwr6843TransmitterRange(),
 				command,
 			)
 		}
@@ -781,7 +691,7 @@ func parseChirpProfileRangesForFamily(
 			return nil, fmt.Errorf("chirpCfg TX enable mask must be a subset of channelCfg TX mask: %s", command)
 		}
 		if bits.OnesCount64(txEnable) > 2 {
-			return nil, fmt.Errorf("%s chirpCfg may enable at most two transmitters per chirp: %s", family.versionPlatforms[0], command)
+			return nil, fmt.Errorf("%s chirpCfg may enable at most two transmitters per chirp: %s", iwr6843Platform, command)
 		}
 		ranges = append(ranges, chirpProfileRange{
 			start:     start,
@@ -813,8 +723,7 @@ func parseChirpProfileRangesForFamily(
 	return ranges, nil
 }
 
-func mappedSamplesPerLoop(
-	family DeviceFamily,
+func samplesPerLoop(
 	frame frameConfiguration,
 	profiles map[uint64]uint64,
 	ranges []chirpProfileRange,
@@ -845,7 +754,7 @@ func mappedSamplesPerLoop(
 				"frameCfg chirps use mixed profile IDs %d and %d; %s requires one profile per frame",
 				frameProfileID,
 				configured.profileID,
-				family.versionPlatforms[0],
+				iwr6843Platform,
 			)
 		}
 		selectedTransmitters |= configured.txEnable
@@ -870,7 +779,7 @@ func mappedSamplesPerLoop(
 	return 0, 0, fmt.Errorf("frameCfg chirp index %d has no chirpCfg-to-profile mapping", nextChirp)
 }
 
-func validateRawBufferSizes(family DeviceFamily, samplesPerChirp, receivers uint64) error {
+func validateBuffer(samplesPerChirp, receivers uint64) error {
 	channelBytes, err := checkedExpectedMultiply(
 		samplesPerChirp,
 		complex16BytesPerSample,
@@ -882,7 +791,7 @@ func validateRawBufferSizes(family DeviceFamily, samplesPerChirp, receivers uint
 	if channelBytes > cbuffMaximumTransferSize {
 		return fmt.Errorf(
 			"%s CBUFF complex16 linked-list transfer is %d bytes per RX; at most %d bytes are supported",
-			family.versionPlatforms[0],
+			iwr6843Platform,
 			channelBytes,
 			cbuffMaximumTransferSize,
 		)
@@ -894,7 +803,7 @@ func validateRawBufferSizes(family DeviceFamily, samplesPerChirp, receivers uint
 	if transferBytes < cbuffMinimumTransferSize {
 		return fmt.Errorf(
 			"%s CBUFF ADC-only transfer is %d bytes per chirp; at least %d bytes are required",
-			family.versionPlatforms[0],
+			iwr6843Platform,
 			transferBytes,
 			cbuffMinimumTransferSize,
 		)
@@ -908,12 +817,12 @@ func validateRawBufferSizes(family DeviceFamily, samplesPerChirp, receivers uint
 	if err != nil {
 		return err
 	}
-	if adcBufBytes > family.adcBufBytes {
+	if adcBufBytes > iwr6843ADCBufBytes {
 		return fmt.Errorf(
 			"%s ADCBuf requires %d bytes (16-byte aligned per RX channel), exceeding its %d-byte capacity",
-			family.versionPlatforms[0],
+			iwr6843Platform,
 			adcBufBytes,
-			family.adcBufBytes,
+			iwr6843ADCBufBytes,
 		)
 	}
 	return nil
@@ -973,7 +882,10 @@ func requireExactName(command, expected string) error {
 }
 
 func frameSpan(frames uint16, period time.Duration) (time.Duration, error) {
-	if frames == 0 || frames == 1 {
+	if frames == 0 {
+		return 0, errors.New("frame count must be positive")
+	}
+	if frames == 1 {
 		return 0, nil
 	}
 	multiplier := int64(frames - 1)
@@ -983,37 +895,32 @@ func frameSpan(frames uint16, period time.Duration) (time.Duration, error) {
 	return time.Duration(multiplier) * period, nil
 }
 
-// ExpectedFrameSpan returns (numberOfFrames-1)*period for a finite capture.
-// The boolean is false for an infinite-frame plan.
-func (p CapturePlan) ExpectedFrameSpan() (time.Duration, bool) {
-	if p.InfiniteFrames {
-		return 0, false
-	}
-	span, err := frameSpan(p.NumberOfFrames, p.FramePeriod)
-	return span, err == nil
+// FrameSpan returns (numberOfFrames-1)*period.
+func (p Plan) FrameSpan() (time.Duration, error) {
+	return frameSpan(p.NumberOfFrames, p.FramePeriod)
 }
 
-// MaximumStreamingDuration supplies a finite absolute deadline after the first
+// MaxDuration supplies an absolute deadline after the first
 // data packet. Two idle windows cover a delayed final short payload and the
 // post-target quiet verification that rejects an overlong stream.
-func (p CapturePlan) MaximumStreamingDuration(idle time.Duration) (time.Duration, bool, error) {
-	span, finite := p.ExpectedFrameSpan()
-	if !finite {
-		return 0, false, nil
+func (p Plan) MaxDuration(idle time.Duration) (time.Duration, error) {
+	span, err := p.FrameSpan()
+	if err != nil {
+		return 0, err
 	}
 	if idle < 0 {
-		return 0, true, errors.New("idle duration must not be negative")
+		return 0, errors.New("idle duration must not be negative")
 	}
 	if p.FramePeriod < 0 || p.FramePeriod > time.Duration(math.MaxInt64/2) {
-		return 0, true, errors.New("frame period exceeds supported range")
+		return 0, errors.New("frame period exceeds supported range")
 	}
 	guard := max(2*p.FramePeriod, time.Second)
 	if idle > time.Duration(math.MaxInt64/2) {
-		return 0, true, errors.New("idle duration is too large to derive a finite maximum")
+		return 0, errors.New("idle duration is too large to derive a finite maximum")
 	}
 	idleWindows := 2 * idle
 	if span > time.Duration(math.MaxInt64)-idleWindows || span+idleWindows > time.Duration(math.MaxInt64)-guard {
-		return 0, true, errors.New("frameCfg-derived maximum duration exceeds supported range")
+		return 0, errors.New("frameCfg-derived maximum duration exceeds supported range")
 	}
-	return span + idleWindows + guard, true, nil
+	return span + idleWindows + guard, nil
 }

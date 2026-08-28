@@ -8,12 +8,13 @@ import (
 	"unicode/utf8"
 )
 
-// OverrideCaptureSessionV1FrameCount returns the exact effective CFG snapshot
-// for a capture. It rewrites the sole legacy frameCfg count while preserving
-// all other lines and validates the resulting capture-session contract.
-func OverrideCaptureSessionV1FrameCount(snapshot []byte, frameCount uint16) ([]byte, error) {
+// SetFrameCount rewrites the sole frameCfg count and validates the result.
+func SetFrameCount(snapshot []byte, frameCount uint16) ([]byte, error) {
+	if frameCount == 0 {
+		return nil, errors.New("frame count must be in 1..65535")
+	}
 	if !utf8.Valid(snapshot) {
-		return nil, errors.New("capture session v1 CFG must be valid UTF-8")
+		return nil, errors.New("take CFG must be valid UTF-8")
 	}
 
 	lines := strings.SplitAfter(string(snapshot), "\n")
@@ -39,7 +40,7 @@ func OverrideCaptureSessionV1FrameCount(snapshot []byte, frameCount uint16) ([]b
 	}
 
 	effective := []byte(strings.Join(lines, ""))
-	if _, err := BuildCaptureSessionV1Plan(effective, FullConfiguration); err != nil {
+	if _, err := BuildPlan(effective); err != nil {
 		return nil, fmt.Errorf("validate frame-count override: %w", err)
 	}
 	return effective, nil

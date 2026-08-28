@@ -8,13 +8,6 @@ import (
 	"syscall"
 )
 
-// publishNoReplace uses MoveFileW, whose no-flags form fails when finalPath
-// already exists. Unlike hard-link publication, it also works on Windows
-// filesystems such as exFAT and FAT32.
-func publishNoReplace(partPath, finalPath string) error {
-	return moveNoReplace(partPath, finalPath)
-}
-
 func publishDirectoryNoReplace(partPath, finalPath string) error {
 	return moveNoReplace(partPath, finalPath)
 }

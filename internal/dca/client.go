@@ -146,27 +146,9 @@ func Dial(options Options) (*Client, error) {
 	}, nil
 }
 
-// LocalEndpoint returns the actual control socket endpoint. It is primarily
-// useful when an ephemeral bind port was selected for an offline fake.
-func (client *Client) LocalEndpoint() *net.UDPAddr {
-	if client == nil || client.conn == nil {
-		return nil
-	}
-	endpoint, _ := client.conn.LocalAddr().(*net.UDPAddr)
-	return cloneUDPAddr(endpoint)
-}
-
-// LastResponseEndpoint returns the source of the most recent response that
-// strictly matched the pending synchronous command.
-func (client *Client) LastResponseEndpoint() *net.UDPAddr {
-	client.stateMu.Lock()
-	defer client.stateMu.Unlock()
-	return cloneUDPAddr(client.last)
-}
-
-// TakeAsyncStatuses returns and clears valid asynchronous status frames seen
+// TakeStatuses returns and clears valid asynchronous status frames seen
 // while waiting for commands. They are never mistaken for synchronous replies.
-func (client *Client) TakeAsyncStatuses() []Response {
+func (client *Client) TakeStatuses() []Response {
 	client.stateMu.Lock()
 	defer client.stateMu.Unlock()
 	statuses := make([]Response, len(client.async))
@@ -175,11 +157,11 @@ func (client *Client) TakeAsyncStatuses() []Response {
 	return statuses
 }
 
-// DrainAsyncStatuses keeps reading the control socket until no valid DCA1000
+// DrainStatuses keeps reading the control socket until no valid DCA1000
 // frame has arrived for quietWindow. ctx should carry the absolute upper bound
 // required by the capture lifecycle. The returned slice includes statuses
 // already observed by Execute and removes them from the client queue.
-func (client *Client) DrainAsyncStatuses(ctx context.Context, quietWindow time.Duration) ([]Response, error) {
+func (client *Client) DrainStatuses(ctx context.Context, quietWindow time.Duration) ([]Response, error) {
 	if client == nil {
 		return nil, errors.New("nil DCA1000 client")
 	}
@@ -192,18 +174,18 @@ func (client *Client) DrainAsyncStatuses(ctx context.Context, quietWindow time.D
 	client.executeMu.Lock()
 	defer client.executeMu.Unlock()
 	if err := client.usabilityError(); err != nil {
-		return client.TakeAsyncStatuses(), err
+		return client.TakeStatuses(), err
 	}
 
 	quietDeadline := time.Now().Add(quietWindow)
 	buffer := make([]byte, 65535)
 	for {
 		if err := ctx.Err(); err != nil {
-			return client.TakeAsyncStatuses(), err
+			return client.TakeStatuses(), err
 		}
 		now := time.Now()
 		if !now.Before(quietDeadline) {
-			return client.TakeAsyncStatuses(), nil
+			return client.TakeStatuses(), nil
 		}
 		readDeadline := now.Add(controlReadPollInterval)
 		if quietDeadline.Before(readDeadline) {
@@ -213,17 +195,17 @@ func (client *Client) DrainAsyncStatuses(ctx context.Context, quietWindow time.D
 			readDeadline = contextDeadline
 		}
 		if err := client.conn.SetReadDeadline(readDeadline); err != nil {
-			return client.TakeAsyncStatuses(), fmt.Errorf("set DCA1000 control drain deadline: %w", err)
+			return client.TakeStatuses(), fmt.Errorf("set DCA1000 control drain deadline: %w", err)
 		}
 		length, source, err := client.conn.ReadFromUDP(buffer)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return client.TakeAsyncStatuses(), ctxErr
+				return client.TakeStatuses(), ctxErr
 			}
 			if networkError, ok := err.(net.Error); ok && networkError.Timeout() {
 				continue
 			}
-			return client.TakeAsyncStatuses(), fmt.Errorf("drain DCA1000 control socket: %w", err)
+			return client.TakeStatuses(), fmt.Errorf("drain DCA1000 control socket: %w", err)
 		}
 		response, err := ParseResponse(buffer[:length])
 		if err != nil {
@@ -235,7 +217,7 @@ func (client *Client) DrainAsyncStatuses(ctx context.Context, quietWindow time.D
 		}
 		response.Source = cloneUDPAddr(source)
 		if err := client.enqueueAsyncStatus(response); err != nil {
-			return client.TakeAsyncStatuses(), err
+			return client.TakeStatuses(), err
 		}
 	}
 }
@@ -391,14 +373,14 @@ func (client *Client) StartRecord(ctx context.Context) (Response, error) {
 	return client.Execute(ctx, CommandStartRecord, nil)
 }
 
-func (client *Client) StopRecord(ctx context.Context) (Response, error) {
+func (client *Client) Stop(ctx context.Context) (Response, error) {
 	return client.Execute(ctx, CommandStopRecord, nil)
 }
 
-// StartRecordConvergent sends StartRecord only once. If its response is
+// Start sends StartRecord only once. If its response is
 // missing, invalid, or non-zero, it uses a fresh bounded context to send exactly
 // one StopRecord and returns an error; StartRecord is never retried.
-func (client *Client) StartRecordConvergent(ctx context.Context) (Response, error) {
+func (client *Client) Start(ctx context.Context) (Response, error) {
 	if client == nil {
 		return Response{}, errors.New("nil DCA1000 client")
 	}
@@ -417,7 +399,7 @@ func (client *Client) StartRecordConvergent(ctx context.Context) (Response, erro
 
 	stopContext, cancel := context.WithTimeout(context.Background(), client.timeout)
 	defer cancel()
-	stopResponse, stopErr := client.StopRecord(stopContext)
+	stopResponse, stopErr := client.Stop(stopContext)
 	if stopErr == nil && stopResponse.Status != 0 {
 		stopErr = &StatusError{Command: stopResponse.Command, Status: stopResponse.Status}
 	}
