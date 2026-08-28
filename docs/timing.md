@@ -27,9 +27,8 @@ The take clock starts when recording begins and runs at 1 GHz without wrapping.
 Subsequent frame times use the configured frame period.
 
 Each `camera.index.bin` entry points to one complete JPEG in `camera.mjpeg` and records when that JPEG was
-fully delivered to mmwcli. `delivery_observed` is not exposure time. Downstream pairing therefore
-uses the latest complete JPEG already delivered at a radar-frame boundary and makes no hardware-sync
-claim.
+fully delivered to mmwcli. `delivery_observed` is not exposure time and makes no hardware-sync claim.
+OpenMMW owns the downstream offline pairing policy.
 
 ## Failure boundary
 
