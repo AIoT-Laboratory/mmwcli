@@ -206,6 +206,34 @@ func TestBuildPlanRequiresExactPlan(t *testing.T) {
 	}
 }
 
+func TestBuildPlanEncodesContinuousFrameCount(t *testing.T) {
+	source := goldenIWR6843Plan(t)
+	commands := append([]string(nil), source.ConfigurationCommands...)
+	for index, command := range commands {
+		fields := strings.Fields(command)
+		if len(fields) != 0 && fields[0] == "frameCfg" {
+			fields[4] = "0"
+			commands[index] = strings.Join(fields, " ")
+		}
+	}
+	if source.DeclaredStartCommand != "" {
+		commands = append(commands, source.DeclaredStartCommand)
+	}
+	continuous, err := radar.CommandPlan(commands)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := BuildPlan(continuous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := plan.operationsCopy()[15].command.subblocks[0].data
+	if continuous.NumberOfFrames != 0 || continuous.ExpectedBytes != 0 ||
+		binary.LittleEndian.Uint16(frame[8:10]) != 0 {
+		t.Fatalf("continuous frame plan=%+v wire=% X", continuous, frame)
+	}
+}
+
 func TestPlanCopiesOperationsAndSource(t *testing.T) {
 	source := goldenIWR6843Plan(t)
 	original := clonePlan(source)

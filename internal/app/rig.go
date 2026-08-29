@@ -14,7 +14,7 @@ import (
 	"mmwcli/internal/camera"
 )
 
-const rigSchema = "mmwcli.rig.v2"
+const rigSchema = "mmwcli.rig.v3"
 
 type rigConfig struct {
 	Schema  string         `json:"schema"`
@@ -25,6 +25,7 @@ type rigConfig struct {
 	DCA     rigDCA         `json:"dca"`
 	Camera  *camera.Config `json:"camera,omitempty"`
 	HeightM float64        `json:"height_m"`
+	TiltDeg float64        `json:"tilt_deg"`
 }
 
 type rigDCA struct {
@@ -99,6 +100,9 @@ func (rig rigConfig) validate(radarOnly bool) error {
 	}
 	if rig.HeightM <= 0 || rig.HeightM > 10 {
 		return errors.New("rig height_m must be in (0, 10]")
+	}
+	if rig.TiltDeg != 90 {
+		return errors.New("rig tilt_deg must be 90")
 	}
 	if radarOnly {
 		return nil

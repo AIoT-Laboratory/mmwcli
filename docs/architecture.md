@@ -1,6 +1,6 @@
 # Architecture
 
-mmwcli has one job: publish a finite IWR6843 take that mmwcore and OpenMMW can open directly.
+mmwcli owns IWR6843/DCA1000 acquisition: it publishes finite takes or emits whole live ADC frames.
 
 ```text
 radar.cfg + rig.json + frame count
@@ -17,6 +17,7 @@ The public surface is intentionally small:
 ```text
 mmwcli check RADAR_CFG --rig RIG --frames N [--camera DEVICE] [--radar-only]
 mmwcli capture RADAR_CFG TAKE --rig RIG --frames N [--camera DEVICE] [--radar-only]
+mmwcli stream RADAR_CFG --rig RIG
 mmwcli camera list --rig RIG
 mmwcli camera preview --rig RIG [--camera ID]
 mmwcli version
@@ -29,6 +30,13 @@ open radar or DCA1000 hardware.
 `capture` repeats preflight, boots the IWR6843, configures DCA1000, records exactly `N` whole radar
 frames, and optionally records complete JPEGs from the rig's structured DirectShow configuration.
 Raw ADC bytes are not converted, repaired, or processed.
+
+`stream` applies the same hardware preflight with `frameCfg numFrames=0`, starts the radar once, and
+emits one compact JSON geometry line followed by fixed-size complete ADC frames on stdout. It has no
+camera, take directory, recording option, job layer, or network server. stderr remains human-readable.
+OpenMMW must drain the pipe independently of model inference. The first DCA packet is anchored at
+sequence 1 and byte offset 0; an unanchored stream fails before emitting ADC bytes. Ctrl+C, an
+exact `stop` line on stdin, or stdin EOF enters the same hardware cleanup path.
 
 ## Camera identity
 
@@ -49,9 +57,10 @@ All files are created below `TAKE.part`. Publication requires:
 - exact finite ADC byte count;
 - no missing or overlapping capture bytes;
 - a complete required camera recording when enabled;
-- closed files and a valid `mmwcli.take.v1` manifest.
+- closed files and a valid `mmwcli.take.v2` manifest.
 
 Existing `TAKE` or `TAKE.part` paths are never replaced. Failure leaves no completed take.
 
 mmwcore owns archive and DSP work. OpenMMW owns datasets, models, evaluation, inference, and
-display. The completed take directory is the only handoff.
+display. A completed take directory is the finite handoff; the stream stdout contract is the online
+handoff and is never represented as `TAKE.part`.

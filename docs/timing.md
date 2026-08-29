@@ -13,12 +13,15 @@ TAKE/
   camera.index.bin  # camera take only
 ```
 
-`session.json` uses `mmwcli.take.v1` and records:
+`session.json` uses `mmwcli.take.v2` and records:
 
 - session ID, finite frame count, and frame period;
 - the bounded host-relative radar start observation;
-- radar height, IWR6843 identity, paths, sizes, and SHA-256 digests;
+- radar height, required 90-degree tilt, IWR6843 identity, paths, sizes, and SHA-256 digests;
 - camera frame count, payload/index identity, and timing semantics when present.
+
+`radar_tilt_deg` is the radar PCB plane's angle above the horizontal floor. Its required value
+`90` means a vertical PCB and horizontal boresight; the same definition is used by stream headers.
 
 ## Time meaning
 

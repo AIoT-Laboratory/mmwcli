@@ -98,11 +98,14 @@ func TestPlanRejectsNoReconfigureStart(t *testing.T) {
 	}
 }
 
-func TestZeroFramePlanIsRejected(t *testing.T) {
+func TestZeroFramePlanIsContinuous(t *testing.T) {
 	commands := replaceCommand(validCommands(), "frameCfg", "frameCfg 0 1 32 0 100 1 0")
-	if _, err := CommandPlan(commands); err == nil ||
-		!strings.Contains(err.Error(), "frame count") {
-		t.Fatalf("zero-frame error = %v", err)
+	plan, err := CommandPlan(commands)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.NumberOfFrames != 0 || plan.ExpectedBytes != 0 || plan.BytesPerFrame <= 0 {
+		t.Fatalf("continuous plan = %+v", plan)
 	}
 }
 

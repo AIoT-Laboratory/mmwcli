@@ -1,11 +1,12 @@
 # mmwcli
 
-mmwcli captures finite IWR6843 + DCA1000 takes for OpenMMW on Windows/amd64.
-It writes raw ADC, an optional MJPEG camera recording, and one small manifest.
+mmwcli captures finite IWR6843 + DCA1000 takes or streams whole ADC frames on Windows/amd64.
+Finite capture writes raw ADC, an optional MJPEG camera recording, and one small manifest.
 DSP, datasets, training, inference, and visualization belong downstream.
 
 ```text
-IWR6843 + DCA1000 [+ camera] -> mmwcli.take.v1 -> mmwcore -> OpenMMW
+finite: IWR6843 + DCA1000 [+ camera] -> mmwcli.take.v2 -> mmwcore -> OpenMMW
+stream: IWR6843 + DCA1000 -> whole ADC frames on stdout -> OpenMMW
 ```
 
 ## Build
@@ -26,7 +27,7 @@ Keep workstation-specific paths and device selections in one JSON file:
 
 ```json
 {
-  "schema": "mmwcli.rig.v2",
+  "schema": "mmwcli.rig.v3",
   "port": "COM3",
   "bss": "firmware/xwr68xx_radarss.bin",
   "mss": "firmware/xwr68xx_masterss.bin",
@@ -43,13 +44,15 @@ Keep workstation-specific paths and device selections in one JSON file:
     "fps": 30,
     "max_bytes": 2097152
   },
-  "height_m": 1.5
+  "height_m": 1.5,
+  "tilt_deg": 90
 }
 ```
 
 Relative firmware paths resolve beside the rig file. The camera is always a DirectShow video
 device produced by the one built-in FFmpeg MJPEG command; rig files cannot execute arbitrary
-camera commands.
+camera commands. `tilt_deg` is the radar PCB plane's angle above the horizontal floor: `90` means
+the PCB is vertical and its boresight is horizontal. This release accepts only `90`.
 
 List DirectShow cameras before choosing one. This also works when the rig has no camera. The JSON
 result has the rig default (`null` when absent) and each device's friendly `name` plus its
@@ -78,6 +81,23 @@ Use `--radar-only` on both commands to omit the camera; it cannot be combined wi
 A camera configured for a normal take is required to complete successfully; otherwise the take is
 not published.
 
+## Stream
+
+Run one unbounded radar-only session for online inference:
+
+```powershell
+mmwcli stream hardware\iwr6843.cfg --rig rig.json
+```
+
+The effective in-memory CFG always uses `frameCfg numFrames=0`; the source file is unchanged. stdout
+starts with one JSON line containing `frame_bytes`, `period_ns`, `height_m`, and `tilt_deg`. Every
+remaining byte belongs to fixed-size complete ADC frames. Logs go to stderr. `stream` never opens a
+camera or writes a take. Ctrl+C stops the radar and DCA1000 and discards any incomplete final frame.
+An exact `stop` line or stdin EOF performs the same cleanup; other stdin lines are ignored.
+Malformed, overlapping, or persistently incomplete DCA data terminates the stream instead of being
+repaired. The first packet must be DCA sequence 1 at byte offset 0, so losing the stream origin
+cannot silently shift every frame.
+
 ## Output
 
 ```text
@@ -89,8 +109,9 @@ TAKE/
   camera.index.bin  # absent with --radar-only
 ```
 
-`session.json` uses `mmwcli.take.v1`. Radar time is a bounded frame-start observation. Camera time
-is complete-JPEG delivery time, not exposure time. Files are staged under `TAKE.part` and published
+`session.json` uses `mmwcli.take.v2` and records the required 90-degree radar tilt. Radar time is a
+bounded frame-start observation. Camera time is complete-JPEG delivery time, not exposure time.
+Files are staged under `TAKE.part` and published
 only after the requested radar frames and required camera recording complete.
 
 See [architecture](docs/architecture.md), [timing and layout](docs/timing.md), and the

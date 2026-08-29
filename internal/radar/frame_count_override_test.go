@@ -13,8 +13,16 @@ func TestSetFrameCountProducesEffectiveSnapshot(t *testing.T) {
 		1,
 	))
 
-	if _, err := SetFrameCount(snapshot, 0); err == nil {
-		t.Fatal("zero frame override was accepted")
+	continuous, err := SetFrameCount(snapshot, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	continuousPlan, err := BuildPlan(continuous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continuousPlan.NumberOfFrames != 0 || continuousPlan.ExpectedBytes != 0 {
+		t.Fatalf("continuous override plan = %+v", continuousPlan)
 	}
 
 	effective, err := SetFrameCount(snapshot, 7)

@@ -24,11 +24,12 @@ const maxTrackedOutputRanges = 4096
 const RawModeTailFlushGuard = 2500 * time.Millisecond
 
 var (
-	ErrFirstPacketTimeout = errors.New("DCA1000 first data packet timeout")
-	ErrReceiverClosed     = errors.New("DCA1000 data receiver closed")
-	ErrReceiverAlreadyRun = errors.New("DCA1000 data receiver can only run once")
-	errOutputRangeOverlap = errors.New("DCA1000 packet overlaps previously written output")
-	errSparseRangeLimit   = errors.New("DCA1000 sparse output range limit exceeded")
+	ErrFirstPacketTimeout  = errors.New("DCA1000 first data packet timeout")
+	ErrReceiverClosed      = errors.New("DCA1000 data receiver closed")
+	ErrReceiverAlreadyRun  = errors.New("DCA1000 data receiver can only run once")
+	errFirstPacketNotFresh = errors.New("DCA1000 first data packet is not a fresh record start")
+	errOutputRangeOverlap  = errors.New("DCA1000 packet overlaps previously written output")
+	errSparseRangeLimit    = errors.New("DCA1000 sparse output range limit exceeded")
 )
 
 // ReceiverConfig configures the raw ADC UDP receiver. The data socket is bound
@@ -55,6 +56,13 @@ type ReceiverConfig struct {
 	// an early radar stop.
 	CadenceFrameBytes  int64
 	CadenceFramePeriod time.Duration
+	// RejectMalformed makes malformed packets from the configured device fatal.
+	RejectMalformed bool
+	// RequireFreshStart rejects the first accepted packet unless it is packet 1
+	// at byte count 0. TI's DCA1000 protocol numbers packets from 1 and defines
+	// byte count as bytes transmitted through the preceding packet. Enable this
+	// only when the receiver is armed before a fresh StartRecord command.
+	RequireFreshStart bool
 }
 
 func DefaultReceiverConfig() ReceiverConfig {
@@ -450,10 +458,24 @@ func (receiver *Receiver) receive(ctx context.Context, output io.WriterAt) (Capt
 		if err != nil {
 			stats.MalformedPackets++
 			receiver.publishStats(stats)
+			if receiver.config.RejectMalformed {
+				stats = finalizeStats(stats, ranges, highestOutputOffset)
+				return stats, fmt.Errorf("malformed DCA1000 data packet: %w", err)
+			}
 			continue
 		}
 		receivedAt := time.Now()
 		if !baseSet {
+			if receiver.config.RequireFreshStart && (packet.Sequence != 1 || packet.ByteOffset != 0) {
+				stats = finalizeStats(stats, ranges, highestOutputOffset)
+				receiver.publishStats(stats)
+				return stats, fmt.Errorf(
+					"%w: sequence=%d byteOffset=%d, want sequence=1 byteOffset=0",
+					errFirstPacketNotFresh,
+					packet.Sequence,
+					packet.ByteOffset,
+				)
+			}
 			baseOffset = packet.ByteOffset
 			baseSet = true
 			stats.BaseByteOffset = baseOffset

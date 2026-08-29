@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	Schema          = "mmwcli.take.v1"
+	Schema          = "mmwcli.take.v2"
 	ManifestName    = "session.json"
 	RadarPayload    = "adc.bin"
 	RadarConfigName = "radar.cfg"
@@ -32,6 +32,7 @@ type Config struct {
 	RadarConfig  []byte
 	Plan         radar.Plan
 	RadarHeightM float64
+	RadarTiltDeg float64
 	Camera       *camera.Config
 }
 
@@ -84,6 +85,7 @@ type manifest struct {
 	FramePeriodNS uint64        `json:"frame_period_ns"`
 	RadarStart    frameStart    `json:"radar_start"`
 	RadarHeightM  float64       `json:"radar_height_m"`
+	RadarTiltDeg  float64       `json:"radar_tilt_deg"`
 	Radar         radarRecord   `json:"radar"`
 	Camera        *cameraRecord `json:"camera,omitempty"`
 }
@@ -96,7 +98,7 @@ func New(
 ) (*Capture, error) {
 	if ctx == nil || cancel == nil || config.Output == "" || len(config.RadarConfig) == 0 ||
 		config.Plan.NumberOfFrames == 0 || config.Plan.ExpectedBytes <= 0 ||
-		config.RadarHeightM <= 0 {
+		config.RadarHeightM <= 0 || config.RadarTiltDeg != 90 {
 		return nil, errors.New("take configuration is incomplete")
 	}
 	directory, err := capturefile.CreateTransactionDirectory(config.Output)
@@ -199,7 +201,8 @@ func (capture *Capture) Publish(ctx context.Context) error {
 		FrameCount:    capture.config.Plan.NumberOfFrames,
 		FramePeriodNS: uint64(capture.config.Plan.FramePeriod),
 		RadarStart:    start, RadarHeightM: capture.config.RadarHeightM,
-		Radar: radarRecord, Camera: recordedCamera,
+		RadarTiltDeg: capture.config.RadarTiltDeg,
+		Radar:        radarRecord, Camera: recordedCamera,
 	}
 	encoded, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {

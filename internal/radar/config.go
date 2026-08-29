@@ -35,7 +35,7 @@ type Plan struct {
 	ExpectedDCADataFormat int
 	// BytesPerFrame is the exact headerless complex16 LVDS payload per frame.
 	BytesPerFrame int64
-	// ExpectedBytes is the exact raw ADC payload size.
+	// ExpectedBytes is the exact raw ADC payload size, or zero for a continuous plan.
 	ExpectedBytes       int64
 	HardwareLVDSEnabled bool
 	NumberOfFrames      uint16
@@ -112,11 +112,10 @@ func commandPlan(commands []string) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	if frame.frames == 0 {
-		return Plan{}, errors.New("frameCfg frame count must be in 1..65535")
-	}
-	if _, err := frameSpan(frame.frames, frame.period); err != nil {
-		return Plan{}, err
+	if frame.frames != 0 {
+		if _, err := frameSpan(frame.frames, frame.period); err != nil {
+			return Plan{}, err
+		}
 	}
 	bytesPerFrame, expectedBytes, err := expectedBytes(configuration, frame)
 	if err != nil {

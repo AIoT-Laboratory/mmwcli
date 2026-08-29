@@ -30,8 +30,9 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	command := strings.ToLower(arguments[0])
 	var err error
-	switch strings.ToLower(arguments[0]) {
+	switch command {
 	case "version", "--version", "-v":
 		fmt.Fprintf(stdout, "mmwcli %s (%s/%s)\n", Version, runtime.GOOS, runtime.GOARCH)
 		return 0
@@ -39,6 +40,8 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 		err = runCheck(arguments[1:], stdout, stderr)
 	case "capture":
 		err = runCapture(arguments[1:], stdout, stderr)
+	case "stream":
+		err = runStream(arguments[1:], stdout, stderr)
 	case "camera":
 		err = runCamera(arguments[1:], stdout, stderr)
 	default:
@@ -55,8 +58,8 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
-	if strings.EqualFold(arguments[0], "capture") && cancellationOnly(err) {
-		fmt.Fprintln(stderr, "capture cancelled; cleanup completed")
+	if (command == "capture" || command == "stream") && cancellationOnly(err) {
+		fmt.Fprintf(stderr, "%s cancelled; cleanup completed\n", command)
 		return 130
 	}
 	fmt.Fprintln(stderr, "failed:", err)
@@ -110,6 +113,18 @@ func runCapture(arguments []string, stdout, stderr io.Writer) error {
 	}, stdout, stderr)
 }
 
+func runStream(arguments []string, stdout, stderr io.Writer) error {
+	options, err := parseStreamOptions(arguments, stderr)
+	if err != nil {
+		return err
+	}
+	rig, err := loadRig(options.rigPath, true, "")
+	if err != nil {
+		return err
+	}
+	return stream(streamRequest{ConfigPath: options.configPath, Rig: rig}, os.Stdin, stdout, stderr)
+}
+
 type captureOptions struct {
 	configPath string
 	outputPath string
@@ -117,6 +132,33 @@ type captureOptions struct {
 	camera     string
 	frames     uint16
 	radarOnly  bool
+}
+
+type streamOptions struct {
+	configPath string
+	rigPath    string
+}
+
+func parseStreamOptions(arguments []string, stderr io.Writer) (streamOptions, error) {
+	const synopsis = "mmwcli stream RADAR_CFG --rig RIG"
+	flags := newCommandFlagSet("stream", stderr, synopsis)
+	rigPath := flags.String("rig", "", "rig JSON")
+	if len(arguments) != 0 && isHelp(arguments[0]) {
+		return streamOptions{}, parseCommandFlags(flags, arguments)
+	}
+	if len(arguments) < 1 || arguments[0] == "" || strings.HasPrefix(arguments[0], "-") {
+		return streamOptions{}, usageError{message: synopsis}
+	}
+	if err := parseCommandFlags(flags, arguments[1:]); err != nil {
+		return streamOptions{}, err
+	}
+	if flags.NArg() != 0 {
+		return streamOptions{}, usageError{message: "unexpected stream arguments: " + strings.Join(flags.Args(), " ")}
+	}
+	if strings.TrimSpace(*rigPath) == "" {
+		return streamOptions{}, usageError{message: "--rig is required"}
+	}
+	return streamOptions{configPath: arguments[0], rigPath: *rigPath}, nil
 }
 
 func parseCaptureOptions(
@@ -276,6 +318,7 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "usage:")
 	fmt.Fprintln(writer, "  mmwcli check RADAR_CFG --rig RIG --frames N [--camera DEVICE] [--radar-only]")
 	fmt.Fprintln(writer, "  mmwcli capture RADAR_CFG TAKE --rig RIG --frames N [--camera DEVICE] [--radar-only]")
+	fmt.Fprintln(writer, "  mmwcli stream RADAR_CFG --rig RIG")
 	fmt.Fprintln(writer, "  mmwcli camera list --rig RIG")
 	fmt.Fprintln(writer, "  mmwcli camera preview --rig RIG [--camera ID]")
 	fmt.Fprintln(writer, "  mmwcli version")

@@ -228,6 +228,141 @@ func preparedSession(t *testing.T, plan radar.Plan) Prepared {
 	return prepared
 }
 
+func TestPrepareStreamKeepsReceiverUnboundedAndStrict(t *testing.T) {
+	plan := streamTestPlan(t)
+	prepared, err := PrepareStream(
+		plan,
+		dca.DefaultFPGAConfig(),
+		dca.DefaultReceiverConfig(),
+		25,
+		3*time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prepared.streaming || prepared.receiver.ExpectedOutputBytes != 0 ||
+		prepared.receiver.MaxOutputBytes != math.MaxInt64 || !prepared.receiver.RejectMalformed ||
+		!prepared.receiver.RequireFreshStart ||
+		prepared.receiver.CadenceFrameBytes != 0 || prepared.receiver.CadenceFramePeriod != 0 {
+		t.Fatalf("stream receiver config = %+v", prepared.receiver)
+	}
+	if _, err := PrepareStream(
+		sessionTestPlan(t),
+		dca.DefaultFPGAConfig(),
+		dca.DefaultReceiverConfig(),
+		25,
+		3*time.Second,
+	); err == nil {
+		t.Fatal("PrepareStream accepted a finite plan")
+	}
+}
+
+func TestStreamRunsUntilCancellationAndUsesExplicitRadarStop(t *testing.T) {
+	plan := streamTestPlan(t)
+	prepared, err := PrepareStream(
+		plan,
+		dca.DefaultFPGAConfig(),
+		dca.DefaultReceiverConfig(),
+		25,
+		3*time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared.timings.drain = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := []string{}
+	waits := 0
+	now := time.Now()
+	receiver := &fakeReceiver{
+		events: &events,
+		stats: dca.CaptureStats{
+			PacketsReceived: 1, OutputBytes: 3, FirstPacketAt: now, LastPacketAt: now,
+		},
+	}
+	receiver.waitHook = func(context.Context) (dca.CaptureStats, error) {
+		waits++
+		if waits == 1 {
+			cancel()
+			return receiver.stats, context.Canceled
+		}
+		return receiver.stats, nil
+	}
+	radarControl := &fakeRadar{events: &events}
+	dcaControl := &fakeDCA{events: &events}
+	output, err := os.CreateTemp(t.TempDir(), "stream-*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	_, err = Stream(
+		ctx,
+		radarControl,
+		dcaControl,
+		func(dca.ReceiverConfig) (Receiver, error) { return receiver, nil },
+		plan,
+		output,
+		prepared,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stream error = %v, want cancellation", err)
+	}
+	if radarControl.stopCalls != 2 || radarControl.awaitCalls != 0 {
+		t.Fatalf("radar cleanup calls: stop=%d await=%d", radarControl.stopCalls, radarControl.awaitCalls)
+	}
+	if dcaControl.stopCalls != 2 {
+		t.Fatalf("DCA stop calls = %d, want initial and cleanup stops", dcaControl.stopCalls)
+	}
+	want := []string{
+		"version", "sensorStop", "dcaStop", "dcaConfigure", "apply",
+		"receiverStart", "dcaStart", "sensorStart", "receiverFirst", "receiverWait",
+		"sensorStop", "receiverWait", "dcaStop", "dcaDrain", "receiverClose",
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v\nwant   = %#v", events, want)
+	}
+}
+
+func TestStreamRejectsUnexpectedReceiverEnd(t *testing.T) {
+	plan := streamTestPlan(t)
+	prepared, err := PrepareStream(
+		plan,
+		dca.DefaultFPGAConfig(),
+		dca.DefaultReceiverConfig(),
+		25,
+		3*time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	now := time.Now()
+	receiver := &fakeReceiver{
+		events: &events,
+		stats: dca.CaptureStats{
+			PacketsReceived: 1, OutputBytes: 3, FirstPacketAt: now, LastPacketAt: now,
+		},
+	}
+	output, err := os.CreateTemp(t.TempDir(), "ended-stream-*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	_, err = Stream(
+		context.Background(),
+		&fakeRadar{events: &events},
+		&fakeDCA{events: &events},
+		func(dca.ReceiverConfig) (Receiver, error) { return receiver, nil },
+		plan,
+		output,
+		prepared,
+	)
+	if err == nil || !strings.Contains(err.Error(), "ended unexpectedly") {
+		t.Fatalf("Stream error = %v", err)
+	}
+}
+
 func (f *fakeReceiver) Start(_ context.Context, output io.WriterAt) error {
 	*f.events = append(*f.events, "receiverStart")
 	payload := f.payload
@@ -1353,6 +1488,13 @@ func sessionTestPlan(t *testing.T) radar.Plan {
 	}
 	plan.BytesPerFrame = 3
 	plan.ExpectedBytes = 3
+	return plan
+}
+
+func streamTestPlan(t *testing.T) radar.Plan {
+	plan := sessionTestPlan(t)
+	plan.NumberOfFrames = 0
+	plan.ExpectedBytes = 0
 	return plan
 }
 

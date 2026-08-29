@@ -2,13 +2,14 @@
 
 ## Scope
 
-mmwcli acquires raw mmWave data and publishes completed radar or radar-plus-camera takes. Keep DSP,
-datasets, inference, and visualization in mmwcore or OpenMMW.
+mmwcli acquires raw mmWave data as a completed finite take or a stream of whole ADC frames. Keep
+DSP, datasets, inference, and visualization in mmwcore or OpenMMW.
 
 The active research path is:
 
 ```text
-mmwcli capture -> flat take -> mmwcore -> OpenMMW
+finite: mmwcli capture -> flat take -> mmwcore -> OpenMMW
+online: mmwcli stream -> whole ADC frames -> OpenMMW
 ```
 
 The only hardware route is IWR6843 ES2 + DCA1000 on Windows/amd64.
@@ -18,7 +19,7 @@ The only hardware route is IWR6843 ES2 + DCA1000 on Windows/amd64.
 - `cmd/mmwcli`: executable
 - `internal/app`: command parsing and orchestration
 - `internal/iwr6843`, `internal/d2xx`: IWR6843 firmware and mmWaveLink control
-- `internal/dca`, `internal/session`, `internal/capturefile`: raw ADC capture and publication
+- `internal/dca`, `internal/session`, `internal/capturefile`: raw ADC receive, streaming, and publication
 - `internal/camera`, `internal/take`: optional camera recording and flat take publication
 - `internal/radar`: CFG parsing and frame geometry
 
@@ -27,8 +28,9 @@ The only hardware route is IWR6843 ES2 + DCA1000 on Windows/amd64.
 - Validate capture inputs before opening hardware or creating output.
 - Never auto-select a COM or D2XX device.
 - Preserve ADC bytes exactly; do not process or repair them.
-- Publish only complete whole-frame takes through the existing `.part` transaction.
-- Keep public capture stdout human-readable. Completed directories are the data handoff.
+- Publish finite takes only through the existing `.part` transaction.
+- Stream only complete frames, never repairs or files; stdout is machine data and logs use stderr.
+- Completed directories and `stream` stdout are the only data handoffs.
 - Keep changes narrow and update the closest tests and documentation.
 - Automated validation must not access radar, DCA1000, serial, USB, camera, or network hardware.
 

@@ -23,7 +23,7 @@ type captureRequest struct {
 	RadarOnly  bool
 }
 
-type preparedCapture struct {
+type preparedRun struct {
 	radar     loadedPlan
 	assets    iwr6843.Assets
 	link      iwr6843.Plan
@@ -53,23 +53,20 @@ func capture(request captureRequest, stdout, stderr io.Writer) error {
 func prepareCapture(
 	request captureRequest,
 	stdout io.Writer,
-) (preparedCapture, error) {
+) (preparedRun, error) {
 	if request.Frames == 0 {
-		return preparedCapture{}, usageError{message: "--frames must be in 1..65535"}
+		return preparedRun{}, usageError{message: "--frames must be in 1..65535"}
 	}
-	loaded, err := loadPlan(
-		request.ConfigPath,
-		&request.Frames,
-	)
+	loaded, err := loadPlan(request.ConfigPath, request.Frames)
 	if err != nil {
-		return preparedCapture{}, err
+		return preparedRun{}, err
 	}
 	if loaded.plan.NumberOfFrames != request.Frames {
-		return preparedCapture{}, errors.New("capture plan must be finite and match --frames")
+		return preparedRun{}, errors.New("capture plan must be finite and match --frames")
 	}
 	dcaSetup, err := dcaForRig(request.Rig)
 	if err != nil {
-		return preparedCapture{}, err
+		return preparedRun{}, err
 	}
 	preparedSession, err := session.Prepare(
 		loaded.plan,
@@ -79,33 +76,18 @@ func prepareCapture(
 		dcaSetup.control.Timeout,
 	)
 	if err != nil {
-		return preparedCapture{}, usageError{message: err.Error()}
+		return preparedRun{}, usageError{message: err.Error()}
 	}
-	link, err := iwr6843.BuildPlan(loaded.plan)
+	ready, err := prepareHardware(request.Rig, loaded, dcaSetup, preparedSession)
 	if err != nil {
-		return preparedCapture{}, err
-	}
-	assets, err := iwr6843.CheckAssets(request.Rig.BSS, request.Rig.MSS)
-	if err != nil {
-		return preparedCapture{}, err
-	}
-	library, err := d2xx.Load()
-	if err != nil {
-		return preparedCapture{}, err
-	}
-	if err := library.Close(); err != nil {
-		return preparedCapture{}, err
-	}
-	selectors, err := buildSelectors(request.Rig.D2XX)
-	if err != nil {
-		return preparedCapture{}, err
+		return preparedRun{}, err
 	}
 	if !request.RadarOnly {
 		if request.Rig.Camera == nil {
-			return preparedCapture{}, errors.New("camera is required unless --radar-only is set")
+			return preparedRun{}, errors.New("camera is required unless --radar-only is set")
 		}
 		if _, err := exec.LookPath(camera.Executable); err != nil {
-			return preparedCapture{}, fmt.Errorf(
+			return preparedRun{}, fmt.Errorf(
 				"find camera executable %q: %w",
 				camera.Executable,
 				err,
@@ -114,26 +96,48 @@ func prepareCapture(
 	}
 	printFiniteCapture(stdout, loaded.plan)
 	fmt.Fprintln(stdout, "capture check passed (offline; no hardware accessed)")
-	return preparedCapture{
-		radar:     loaded,
-		assets:    assets,
-		link:      link,
-		dca:       dcaSetup,
-		session:   preparedSession,
-		selectors: selectors,
+	return ready, nil
+}
+
+func prepareHardware(
+	rig rigConfig,
+	loaded loadedPlan,
+	dcaSetup dcaConfig,
+	preparedSession session.Prepared,
+) (preparedRun, error) {
+	link, err := iwr6843.BuildPlan(loaded.plan)
+	if err != nil {
+		return preparedRun{}, err
+	}
+	assets, err := iwr6843.CheckAssets(rig.BSS, rig.MSS)
+	if err != nil {
+		return preparedRun{}, err
+	}
+	library, err := d2xx.Load()
+	if err != nil {
+		return preparedRun{}, err
+	}
+	if err := library.Close(); err != nil {
+		return preparedRun{}, err
+	}
+	selectors, err := buildSelectors(rig.D2XX)
+	if err != nil {
+		return preparedRun{}, err
+	}
+	return preparedRun{
+		radar: loaded, assets: assets, link: link, dca: dcaSetup,
+		session: preparedSession, selectors: selectors,
 	}, nil
 }
 
-func loadPlan(path string, frameCount *uint16) (loadedPlan, error) {
+func loadPlan(path string, frameCount uint16) (loadedPlan, error) {
 	snapshot, err := readRadarConfig(path)
 	if err != nil {
 		return loadedPlan{}, err
 	}
-	if frameCount != nil {
-		snapshot, err = radar.SetFrameCount(snapshot, *frameCount)
-		if err != nil {
-			return loadedPlan{}, err
-		}
+	snapshot, err = radar.SetFrameCount(snapshot, frameCount)
+	if err != nil {
+		return loadedPlan{}, err
 	}
 	plan, err := radar.BuildPlan(snapshot)
 	if err != nil {
@@ -164,7 +168,7 @@ func buildSelectors(description string) (iwr6843.Selectors, error) {
 
 func captureHardware(
 	request captureRequest,
-	ready preparedCapture,
+	ready preparedRun,
 	stdout, stderr io.Writer,
 ) (stats dca.CaptureStats, resultErr error) {
 	ctx, cancel := hardwareSignalContext()
@@ -179,6 +183,7 @@ func captureHardware(
 		RadarConfig:  ready.radar.source,
 		Plan:         ready.radar.plan,
 		RadarHeightM: request.Rig.HeightM,
+		RadarTiltDeg: request.Rig.TiltDeg,
 		Camera:       cameraConfig,
 	}, stderr)
 	if err != nil {

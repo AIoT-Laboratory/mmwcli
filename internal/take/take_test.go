@@ -25,6 +25,7 @@ func TestRadarOnlyTakePublishesFlatFiles(t *testing.T) {
 			ExpectedBytes:  4,
 		},
 		RadarHeightM: 1.5,
+		RadarTiltDeg: 90,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +63,7 @@ func TestRadarOnlyTakePublishesFlatFiles(t *testing.T) {
 	if err := json.Unmarshal(manifestBytes, &record); err != nil {
 		t.Fatal(err)
 	}
-	if record.Schema != Schema || record.FrameCount != 1 || record.Camera != nil {
+	if record.Schema != Schema || record.FrameCount != 1 || record.RadarTiltDeg != 90 || record.Camera != nil {
 		t.Fatalf("unexpected manifest: %+v", record)
 	}
 }

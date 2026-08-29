@@ -131,6 +131,120 @@ func TestReceiverFirstPacketTimeoutAndClose(t *testing.T) {
 	}
 }
 
+func TestReceiverCanRejectMalformedPacketImmediately(t *testing.T) {
+	config := DefaultReceiverConfig()
+	config.DataBindAddress = net.IPv4(127, 0, 0, 1)
+	config.DataBindPort = 0
+	config.DeviceIP = net.IPv4(127, 0, 0, 2)
+	config.FirstPacketTimeout = time.Second
+	config.IdleTimeout = time.Second
+	config.RejectMalformed = true
+	receiver, err := NewReceiver(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+	output, err := os.CreateTemp(t.TempDir(), "strict-*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	if err := receiver.Start(context.Background(), output); err != nil {
+		t.Fatal(err)
+	}
+	device := listenUDP(t, config.DeviceIP)
+	defer device.Close()
+	if _, err := device.WriteToUDP(make([]byte, DataHeaderSize), receiver.LocalEndpoint()); err != nil {
+		t.Fatal(err)
+	}
+	waitContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stats, err := receiver.Wait(waitContext)
+	if err == nil || !strings.Contains(err.Error(), "malformed") || stats.MalformedPackets != 1 {
+		t.Fatalf("Wait = (%+v, %v), want immediate malformed-packet failure", stats, err)
+	}
+}
+
+func TestFreshStartReceiverRejectsLostFirstPacketBeforeWriting(t *testing.T) {
+	config := DefaultReceiverConfig()
+	config.DataBindAddress = net.IPv4(127, 0, 0, 1)
+	config.DataBindPort = 0
+	config.DeviceIP = net.IPv4(127, 0, 0, 2)
+	config.FirstPacketTimeout = time.Second
+	config.IdleTimeout = time.Second
+	config.RequireFreshStart = true
+	receiver, err := NewReceiver(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+
+	var output bytes.Buffer
+	frames, err := NewFrameWriter(4, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := receiver.Start(context.Background(), frames); err != nil {
+		t.Fatal(err)
+	}
+	device := listenUDP(t, config.DeviceIP)
+	defer device.Close()
+	// Packet 1 (bytes 0..4) was lost. Without a fresh-start anchor, packet 2
+	// would be rebased to zero and silently emitted as a complete frame.
+	sendDataPacket(t, device, receiver.LocalEndpoint(), 2, 4, []byte("efgh"))
+
+	waitContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stats, err := receiver.Wait(waitContext)
+	if !errors.Is(err, errFirstPacketNotFresh) {
+		t.Fatalf("Wait = (%+v, %v), want fresh-start failure", stats, err)
+	}
+	if output.Len() != 0 || stats.PacketsReceived != 0 {
+		t.Fatalf(
+			"lost first packet produced output: bytes=%q stats=%+v",
+			output.Bytes(),
+			stats,
+		)
+	}
+}
+
+func TestFreshStartReceiverAcceptsPacketOneAtZero(t *testing.T) {
+	config := DefaultReceiverConfig()
+	config.DataBindAddress = net.IPv4(127, 0, 0, 1)
+	config.DataBindPort = 0
+	config.DeviceIP = net.IPv4(127, 0, 0, 2)
+	config.FirstPacketTimeout = time.Second
+	config.IdleTimeout = 20 * time.Millisecond
+	config.RequireFreshStart = true
+	receiver, err := NewReceiver(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+
+	var output bytes.Buffer
+	frames, err := NewFrameWriter(4, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := receiver.Start(context.Background(), frames); err != nil {
+		t.Fatal(err)
+	}
+	device := listenUDP(t, config.DeviceIP)
+	defer device.Close()
+	sendDataPacket(t, device, receiver.LocalEndpoint(), 1, 0, []byte("abcd"))
+
+	waitContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stats, err := receiver.Wait(waitContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "abcd" || stats.PacketsReceived != 1 || stats.BaseByteOffset != 0 {
+		t.Fatalf("fresh stream output=%q stats=%+v", output.String(), stats)
+	}
+}
+
 func TestFirstPacketTimeoutStartsWhenCallerWaitsAfterArm(t *testing.T) {
 	config := DefaultReceiverConfig()
 	config.DataBindAddress = net.IPv4(127, 0, 0, 1)
@@ -530,6 +644,16 @@ func TestSparseRangePreflightHasFixedLimit(t *testing.T) {
 
 	if err := preflightRangeAddition(ranges, ranges[0]); !errors.Is(err, errOutputRangeOverlap) {
 		t.Fatalf("overlap error = %v", err)
+	}
+}
+
+func TestAdjacentCoverageStaysOneRange(t *testing.T) {
+	var ranges []byteRange
+	for offset := int64(0); offset < 10_000; offset++ {
+		ranges = addRange(ranges, byteRange{start: offset, end: offset + 1})
+	}
+	if len(ranges) != 1 || ranges[0] != (byteRange{start: 0, end: 10_000}) {
+		t.Fatalf("adjacent coverage = %#v", ranges)
 	}
 }
 

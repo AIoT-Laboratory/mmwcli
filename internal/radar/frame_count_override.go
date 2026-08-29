@@ -10,9 +10,6 @@ import (
 
 // SetFrameCount rewrites the sole frameCfg count and validates the result.
 func SetFrameCount(snapshot []byte, frameCount uint16) ([]byte, error) {
-	if frameCount == 0 {
-		return nil, errors.New("frame count must be in 1..65535")
-	}
 	if !utf8.Valid(snapshot) {
 		return nil, errors.New("take CFG must be valid UTF-8")
 	}
