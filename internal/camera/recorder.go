@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,11 +22,47 @@ import (
 const (
 	PayloadName = "camera.mjpeg"
 	IndexName   = "camera.index.bin"
+	// Executable is the sole camera producer supported by this package.
+	Executable = "ffmpeg"
 )
 
 type Config struct {
-	Command  []string
-	MaxBytes int
+	Device   string `json:"device"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	FPS      int    `json:"fps"`
+	MaxBytes int    `json:"max_bytes"`
+}
+
+func (config Config) Validate() error {
+	if config.Device == "" || config.Device != strings.TrimSpace(config.Device) || strings.IndexByte(config.Device, 0) >= 0 {
+		return errors.New("camera device must be a non-empty value without NUL")
+	}
+	if config.Width < 1 || config.Width > 16_384 || config.Height < 1 || config.Height > 16_384 {
+		return errors.New("camera width and height must be in 1..16384")
+	}
+	if config.FPS < 1 || config.FPS > 240 {
+		return errors.New("camera fps must be in 1..240")
+	}
+	if config.MaxBytes < 4 || config.MaxBytes > 64<<20 {
+		return errors.New("camera max_bytes must be in [4, 67108864]")
+	}
+	return nil
+}
+
+func (config Config) command(oneFrame bool) []string {
+	argv := []string{
+		Executable, "-hide_banner", "-loglevel", "error", "-nostdin",
+		"-f", "dshow",
+		"-video_size", strconv.Itoa(config.Width) + "x" + strconv.Itoa(config.Height),
+		"-framerate", strconv.Itoa(config.FPS),
+		"-i", "video=" + config.Device,
+		"-an", "-c:v", "mjpeg",
+	}
+	if oneFrame {
+		argv = append(argv, "-frames:v", "1")
+	}
+	return append(argv, "-f", "image2pipe", "pipe:1")
 }
 
 type Artifact struct {
@@ -81,8 +119,8 @@ func New(
 	if ctx == nil || cancel == nil || hostOrigin.IsZero() || stage == "" {
 		return nil, errors.New("camera recorder dependencies are incomplete")
 	}
-	if len(config.Command) == 0 || config.Command[0] == "" || config.MaxBytes < 4 {
-		return nil, errors.New("camera recorder configuration is invalid")
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("camera recorder configuration is invalid: %w", err)
 	}
 	if stderr == nil {
 		stderr = io.Discard
@@ -106,11 +144,8 @@ func (recorder *Recorder) Arm(ctx context.Context) error {
 		recorder.mu.Unlock()
 		return errors.New("camera recorder cannot be armed twice")
 	}
-	command := exec.CommandContext(
-		recorder.baseCtx,
-		recorder.config.Command[0],
-		recorder.config.Command[1:]...,
-	)
+	argv := recorder.config.command(false)
+	command := exec.CommandContext(recorder.baseCtx, argv[0], argv[1:]...)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		recorder.mu.Unlock()

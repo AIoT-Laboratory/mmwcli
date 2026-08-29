@@ -104,10 +104,10 @@ func prepareCapture(
 		if request.Rig.Camera == nil {
 			return preparedCapture{}, errors.New("camera is required unless --radar-only is set")
 		}
-		if _, err := exec.LookPath(request.Rig.Camera.Command[0]); err != nil {
+		if _, err := exec.LookPath(camera.Executable); err != nil {
 			return preparedCapture{}, fmt.Errorf(
 				"find camera executable %q: %w",
-				request.Rig.Camera.Command[0],
+				camera.Executable,
 				err,
 			)
 		}
@@ -171,10 +171,8 @@ func captureHardware(
 	defer cancel()
 	var cameraConfig *camera.Config
 	if !request.RadarOnly {
-		cameraConfig = &camera.Config{
-			Command:  append([]string(nil), request.Rig.Camera.Command...),
-			MaxBytes: request.Rig.Camera.MaxBytes,
-		}
+		configured := *request.Rig.Camera
+		cameraConfig = &configured
 	}
 	captureOutput, err := take.New(ctx, cancel, take.Config{
 		Output:       request.OutputPath,

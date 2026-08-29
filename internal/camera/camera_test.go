@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"slices"
 	"testing"
 )
 
@@ -40,5 +41,56 @@ func TestCameraIndexIsMinimalAndContiguous(t *testing.T) {
 	}
 	if _, err := encodeIndex([]entry{{offset: 1, size: 10}}, 10); err == nil {
 		t.Fatal("non-contiguous index accepted")
+	}
+}
+
+func TestConfigBuildsTheOnlyCaptureCommand(t *testing.T) {
+	config := Config{Device: "@device_pnp_camera", Width: 1280, Height: 720, FPS: 30, MaxBytes: 1024}
+	if err := config.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	got := config.command(false)
+	want := []string{
+		"ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "dshow",
+		"-video_size", "1280x720", "-framerate", "30", "-i", "video=@device_pnp_camera",
+		"-an", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("command = %#v, want %#v", got, want)
+	}
+	if got := config.command(true); !slices.Contains(got, "-frames:v") {
+		t.Fatalf("preview command lacks one-frame limit: %#v", got)
+	}
+}
+
+func TestParseDirectShowDevicesSelectsOnlyVideoAndAlternativeNames(t *testing.T) {
+	output := []byte(`
+[dshow @ 000001] DirectShow video devices (some may be both video and audio devices)
+[dshow @ 000001]  "RGB Camera" (video)
+[dshow @ 000001]     Alternative name "@device_pnp_rgb"
+[dshow @ 000001]  "Unavailable" (none)
+[dshow @ 000001] DirectShow audio devices
+[dshow @ 000001]  "Microphone" (audio)
+[dshow @ 000001]     Alternative name "@device_pnp_mic"
+`)
+	got := parseDirectShowDevices(output)
+	want := []Device{
+		{Name: "RGB Camera", ID: "@device_pnp_rgb"},
+		{Name: "Unavailable", ID: "Unavailable"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("devices = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseDirectShowDevicesAcceptsFFmpeg9NoHeaderNoneDevice(t *testing.T) {
+	output := []byte(`
+[dshow @ 000001]  "Integrated Camera" (none)
+[dshow @ 000001]     Alternative name "@device_pnp_integrated"
+[dshow @ 000001] Could not enumerate audio only devices
+`)
+	want := []Device{{Name: "Integrated Camera", ID: "@device_pnp_integrated"}}
+	if got := parseDirectShowDevices(output); !slices.Equal(got, want) {
+		t.Fatalf("devices = %#v, want %#v", got, want)
 	}
 }

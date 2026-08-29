@@ -8,7 +8,7 @@ Run this only on the fixed Windows/amd64 research rig. Automated tests do not ac
 - Connect DCA1000 to the dedicated `192.168.33.30/24` host interface; its default address is
   `192.168.33.180`.
 - Install FTDI D2XX and build `mmwcli.exe` with `-tags ftd2xx`.
-- Put exact Enhanced COM, D2XX description, BSS/MSS paths, DCA addresses, delay, camera command, and
+- Put exact Enhanced COM, D2XX description, BSS/MSS paths, DCA addresses, delay, camera settings, and
   radar height in `rig.json`.
 - Do not run another DCA1000 or camera process concurrently.
 

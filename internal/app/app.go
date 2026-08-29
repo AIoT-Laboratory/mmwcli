@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,6 +12,9 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
+
+	"mmwcli/internal/camera"
 )
 
 // Version can be set with -ldflags.
@@ -35,6 +39,8 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 		err = runCheck(arguments[1:], stdout, stderr)
 	case "capture":
 		err = runCapture(arguments[1:], stdout, stderr)
+	case "camera":
+		err = runCamera(arguments[1:], stdout, stderr)
 	default:
 		err = usageError{message: "unknown command: " + arguments[0]}
 	}
@@ -58,9 +64,9 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 }
 
 func runCheck(arguments []string, stdout, stderr io.Writer) error {
-	configPath, flags, rigPath, frames, radarOnly, err := parseCaptureFlags(
+	options, err := parseCaptureOptions(
 		"check",
-		"mmwcli check RADAR_CFG --rig RIG --frames N [--radar-only]",
+		"mmwcli check RADAR_CFG --rig RIG --frames N [--camera DEVICE] [--radar-only]",
 		arguments,
 		false,
 		stderr,
@@ -68,25 +74,22 @@ func runCheck(arguments []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if flags.NArg() != 0 {
-		return usageError{message: "unexpected check arguments: " + strings.Join(flags.Args(), " ")}
-	}
-	rig, err := loadRig(*rigPath, *radarOnly)
+	rig, err := loadRig(options.rigPath, options.radarOnly, options.camera)
 	if err != nil {
 		return err
 	}
 	return checkCapture(captureRequest{
-		ConfigPath: configPath,
+		ConfigPath: options.configPath,
 		Rig:        rig,
-		Frames:     uint16(*frames),
-		RadarOnly:  *radarOnly,
+		Frames:     options.frames,
+		RadarOnly:  options.radarOnly,
 	}, stdout)
 }
 
 func runCapture(arguments []string, stdout, stderr io.Writer) error {
-	configPath, flags, rigPath, frames, radarOnly, err := parseCaptureFlags(
+	options, err := parseCaptureOptions(
 		"capture",
-		"mmwcli capture RADAR_CFG TAKE --rig RIG --frames N [--radar-only]",
+		"mmwcli capture RADAR_CFG TAKE --rig RIG --frames N [--camera DEVICE] [--radar-only]",
 		arguments,
 		true,
 		stderr,
@@ -94,29 +97,35 @@ func runCapture(arguments []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if flags.NArg() != 0 {
-		return usageError{message: "unexpected capture arguments: " + strings.Join(flags.Args(), " ")}
-	}
-	rig, err := loadRig(*rigPath, *radarOnly)
+	rig, err := loadRig(options.rigPath, options.radarOnly, options.camera)
 	if err != nil {
 		return err
 	}
 	return capture(captureRequest{
-		ConfigPath: configPath,
-		OutputPath: arguments[1],
+		ConfigPath: options.configPath,
+		OutputPath: options.outputPath,
 		Rig:        rig,
-		Frames:     uint16(*frames),
-		RadarOnly:  *radarOnly,
+		Frames:     options.frames,
+		RadarOnly:  options.radarOnly,
 	}, stdout, stderr)
 }
 
-func parseCaptureFlags(
+type captureOptions struct {
+	configPath string
+	outputPath string
+	rigPath    string
+	camera     string
+	frames     uint16
+	radarOnly  bool
+}
+
+func parseCaptureOptions(
 	name,
 	synopsis string,
 	arguments []string,
 	wantOutput bool,
 	stderr io.Writer,
-) (string, *flag.FlagSet, *string, *int, *bool, error) {
+) (captureOptions, error) {
 	positionals := 1
 	if wantOutput {
 		positionals = 2
@@ -124,30 +133,133 @@ func parseCaptureFlags(
 	flags := newCommandFlagSet(name, stderr, synopsis)
 	rigPath := flags.String("rig", "", "rig JSON")
 	frames := flags.Int("frames", 0, "finite radar frame count")
+	cameraDevice := flags.String("camera", "", "camera ID from camera list")
 	radarOnly := flags.Bool("radar-only", false, "capture radar without a camera")
 	if len(arguments) != 0 && isHelp(arguments[0]) {
-		return "", flags, rigPath, frames, radarOnly, parseCommandFlags(flags, arguments)
+		return captureOptions{}, parseCommandFlags(flags, arguments)
 	}
 	if len(arguments) < positionals {
-		return "", flags, rigPath, frames, radarOnly, usageError{message: synopsis}
+		return captureOptions{}, usageError{message: synopsis}
 	}
 	for _, value := range arguments[:positionals] {
 		if value == "" || strings.HasPrefix(value, "-") {
-			return "", flags, rigPath, frames, radarOnly, usageError{message: synopsis}
+			return captureOptions{}, usageError{message: synopsis}
 		}
 	}
 	if err := parseCommandFlags(flags, arguments[positionals:]); err != nil {
-		return "", flags, rigPath, frames, radarOnly, err
+		return captureOptions{}, err
+	}
+	if flags.NArg() != 0 {
+		return captureOptions{}, usageError{
+			message: "unexpected " + name + " arguments: " + strings.Join(flags.Args(), " "),
+		}
 	}
 	if *frames < 1 || *frames > 65535 {
-		return "", flags, rigPath, frames, radarOnly, usageError{
+		return captureOptions{}, usageError{
 			message: "--frames must be in 1..65535",
 		}
 	}
 	if strings.TrimSpace(*rigPath) == "" {
-		return "", flags, rigPath, frames, radarOnly, usageError{message: "--rig is required"}
+		return captureOptions{}, usageError{message: "--rig is required"}
 	}
-	return arguments[0], flags, rigPath, frames, radarOnly, nil
+	if *radarOnly && *cameraDevice != "" {
+		return captureOptions{}, usageError{
+			message: "--camera cannot be used with --radar-only",
+		}
+	}
+	options := captureOptions{
+		configPath: arguments[0], rigPath: *rigPath, camera: *cameraDevice,
+		frames: uint16(*frames), radarOnly: *radarOnly,
+	}
+	if wantOutput {
+		options.outputPath = arguments[1]
+	}
+	return options, nil
+}
+
+func runCamera(arguments []string, stdout, stderr io.Writer) error {
+	if len(arguments) == 0 || isHelp(arguments[0]) {
+		printCameraHelp(stdout)
+		return nil
+	}
+	switch arguments[0] {
+	case "list":
+		rigPath, _, err := parseCameraFlags(
+			"camera list", "mmwcli camera list --rig RIG", arguments[1:], false, stderr,
+		)
+		if err != nil {
+			return err
+		}
+		rig, err := loadRig(rigPath, true, "")
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		devices, err := camera.List(ctx)
+		if err != nil {
+			return err
+		}
+		var defaultID *string
+		if rig.Camera != nil {
+			configured := rig.Camera.Device
+			for _, device := range devices {
+				if configured == device.Name || configured == device.ID {
+					configured = device.ID
+					break
+				}
+			}
+			defaultID = &configured
+		}
+		return json.NewEncoder(stdout).Encode(struct {
+			Default *string         `json:"default"`
+			Devices []camera.Device `json:"devices"`
+		}{Default: defaultID, Devices: devices})
+	case "preview":
+		rigPath, cameraDevice, err := parseCameraFlags(
+			"camera preview", "mmwcli camera preview --rig RIG [--camera ID]",
+			arguments[1:], true, stderr,
+		)
+		if err != nil {
+			return err
+		}
+		rig, err := loadRig(rigPath, false, cameraDevice)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		image, err := camera.Preview(ctx, *rig.Camera)
+		if err != nil {
+			return err
+		}
+		written, err := stdout.Write(image)
+		if err == nil && written != len(image) {
+			err = io.ErrShortWrite
+		}
+		return err
+	default:
+		return usageError{message: "unknown camera command: " + arguments[0]}
+	}
+}
+
+func parseCameraFlags(name, synopsis string, arguments []string, allowCamera bool, stderr io.Writer) (string, string, error) {
+	flags := newCommandFlagSet(name, stderr, synopsis)
+	rigPath := flags.String("rig", "", "rig JSON")
+	var cameraDevice string
+	if allowCamera {
+		flags.StringVar(&cameraDevice, "camera", "", "camera ID from camera list")
+	}
+	if err := parseCommandFlags(flags, arguments); err != nil {
+		return "", "", err
+	}
+	if flags.NArg() != 0 {
+		return "", "", usageError{message: "unexpected arguments: " + strings.Join(flags.Args(), " ")}
+	}
+	if strings.TrimSpace(*rigPath) == "" {
+		return "", "", usageError{message: "--rig is required"}
+	}
+	return *rigPath, cameraDevice, nil
 }
 
 func isHelp(command string) bool {
@@ -162,9 +274,17 @@ func isHelp(command string) bool {
 func printHelp(writer io.Writer) {
 	fmt.Fprintf(writer, "mmwcli %s - IWR6843 + DCA1000 capture\n\n", Version)
 	fmt.Fprintln(writer, "usage:")
-	fmt.Fprintln(writer, "  mmwcli check RADAR_CFG --rig RIG --frames N [--radar-only]")
-	fmt.Fprintln(writer, "  mmwcli capture RADAR_CFG TAKE --rig RIG --frames N [--radar-only]")
+	fmt.Fprintln(writer, "  mmwcli check RADAR_CFG --rig RIG --frames N [--camera DEVICE] [--radar-only]")
+	fmt.Fprintln(writer, "  mmwcli capture RADAR_CFG TAKE --rig RIG --frames N [--camera DEVICE] [--radar-only]")
+	fmt.Fprintln(writer, "  mmwcli camera list --rig RIG")
+	fmt.Fprintln(writer, "  mmwcli camera preview --rig RIG [--camera ID]")
 	fmt.Fprintln(writer, "  mmwcli version")
+}
+
+func printCameraHelp(writer io.Writer) {
+	fmt.Fprintln(writer, "usage:")
+	fmt.Fprintln(writer, "  mmwcli camera list --rig RIG")
+	fmt.Fprintln(writer, "  mmwcli camera preview --rig RIG [--camera ID]")
 }
 
 func newCommandFlagSet(name string, output io.Writer, synopsis string) *flag.FlagSet {

@@ -10,19 +10,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"mmwcli/internal/camera"
 )
 
-const rigSchema = "mmwcli.rig.v1"
+const rigSchema = "mmwcli.rig.v2"
 
 type rigConfig struct {
-	Schema  string     `json:"schema"`
-	Port    string     `json:"port"`
-	BSS     string     `json:"bss"`
-	MSS     string     `json:"mss"`
-	D2XX    string     `json:"d2xx"`
-	DCA     rigDCA     `json:"dca"`
-	Camera  *rigCamera `json:"camera,omitempty"`
-	HeightM float64    `json:"height_m"`
+	Schema  string         `json:"schema"`
+	Port    string         `json:"port"`
+	BSS     string         `json:"bss"`
+	MSS     string         `json:"mss"`
+	D2XX    string         `json:"d2xx"`
+	DCA     rigDCA         `json:"dca"`
+	Camera  *camera.Config `json:"camera,omitempty"`
+	HeightM float64        `json:"height_m"`
 }
 
 type rigDCA struct {
@@ -31,12 +33,7 @@ type rigDCA struct {
 	DelayUS int    `json:"delay_us"`
 }
 
-type rigCamera struct {
-	Command  []string `json:"command"`
-	MaxBytes int      `json:"max_bytes"`
-}
-
-func loadRig(path string, radarOnly bool) (rigConfig, error) {
+func loadRig(path string, radarOnly bool, cameraDevice string) (rigConfig, error) {
 	if strings.TrimSpace(path) == "" {
 		return rigConfig{}, usageError{message: "--rig is required"}
 	}
@@ -61,6 +58,14 @@ func loadRig(path string, radarOnly bool) (rigConfig, error) {
 	base := filepath.Dir(abs)
 	rig.BSS = resolveRigPath(base, rig.BSS)
 	rig.MSS = resolveRigPath(base, rig.MSS)
+	if cameraDevice != "" {
+		if rig.Camera == nil {
+			return rigConfig{}, errors.New("rig camera is required for --camera")
+		}
+		configured := *rig.Camera
+		configured.Device = cameraDevice
+		rig.Camera = &configured
+	}
 	if err := rig.validate(radarOnly); err != nil {
 		return rigConfig{}, err
 	}
@@ -101,16 +106,8 @@ func (rig rigConfig) validate(radarOnly bool) error {
 	if rig.Camera == nil {
 		return errors.New("rig camera is required unless --radar-only is set")
 	}
-	if len(rig.Camera.Command) == 0 || rig.Camera.Command[0] == "" {
-		return errors.New("rig camera.command must name an executable")
-	}
-	for index, argument := range rig.Camera.Command {
-		if strings.IndexByte(argument, 0) >= 0 {
-			return fmt.Errorf("rig camera.command[%d] contains NUL", index)
-		}
-	}
-	if rig.Camera.MaxBytes < 4 || rig.Camera.MaxBytes > 64<<20 {
-		return errors.New("rig camera.max_bytes must be in [4, 67108864]")
+	if err := rig.Camera.Validate(); err != nil {
+		return fmt.Errorf("rig camera: %w", err)
 	}
 	return nil
 }
