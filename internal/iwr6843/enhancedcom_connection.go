@@ -52,9 +52,12 @@ func openEnhancedCOMConnection(ctx context.Context, portName string) (*enhancedC
 	})
 }
 
-// ProbeEnhancedCOM verifies the explicit debug port and IWR6843 ES2 identity
-// without resetting the target or submitting firmware.
-func ProbeEnhancedCOM(ctx context.Context, portName string) error {
+// Probe resets the target into SOP2, then verifies the Enhanced COM IWR6843 ES2 identity.
+// It does not submit firmware.
+func Probe(ctx context.Context, portName string, selectors Selectors) error {
+	if err := prepareSOP2Target(ctx, selectors); err != nil {
+		return err
+	}
 	connection, err := openEnhancedCOMConnection(ctx, portName)
 	if err != nil {
 		return err

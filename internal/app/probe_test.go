@@ -11,6 +11,7 @@ import (
 	"mmwcli/internal/camera"
 	"mmwcli/internal/d2xx"
 	"mmwcli/internal/dca"
+	"mmwcli/internal/iwr6843"
 )
 
 func TestParseProbeOptionsKeepsCameraOptional(t *testing.T) {
@@ -42,8 +43,12 @@ func TestProbeHardwareChecksConfiguredInterfacesAndOptionalCamera(t *testing.T) 
 			calls = append(calls, "d2xx:"+description)
 			return nil
 		},
-		enhancedCOM: func(_ context.Context, port string) error {
-			calls = append(calls, "enhanced:"+port)
+		radar: func(_ context.Context, port string, selectors iwr6843.Selectors) error {
+			if selectors.SPI.Description != setup.Radar.D2XX+" A" ||
+				selectors.IRQ.Description != setup.Radar.D2XX+" B" {
+				t.Fatalf("radar selectors = %+v", selectors)
+			}
+			calls = append(calls, "radar:"+port)
 			return nil
 		},
 		dca: func(_ context.Context, options dca.Options) error {
@@ -68,7 +73,7 @@ func TestProbeHardwareChecksConfiguredInterfacesAndOptionalCamera(t *testing.T) 
 	}
 	want := []string{
 		"d2xx:AR-DevPack-EVM-012",
-		"enhanced:COM47",
+		"radar:COM47",
 		"dca",
 		"camera:camera-id",
 	}
@@ -80,9 +85,12 @@ func TestProbeHardwareChecksConfiguredInterfacesAndOptionalCamera(t *testing.T) 
 func TestProbeHardwareStopsAtFailedComponent(t *testing.T) {
 	want := errors.New("missing interface D")
 	backend := probeBackend{
-		d2xx:        func(string) error { return want },
-		enhancedCOM: func(context.Context, string) error { t.Fatal("Enhanced COM called after D2XX failure"); return nil },
-		dca:         func(context.Context, dca.Options) error { t.Fatal("DCA called after D2XX failure"); return nil },
+		d2xx: func(string) error { return want },
+		radar: func(context.Context, string, iwr6843.Selectors) error {
+			t.Fatal("radar probe called after D2XX failure")
+			return nil
+		},
+		dca: func(context.Context, dca.Options) error { t.Fatal("DCA called after D2XX failure"); return nil },
 		camera: func(context.Context, camera.Config) ([]byte, error) {
 			t.Fatal("camera called after D2XX failure")
 			return nil, nil

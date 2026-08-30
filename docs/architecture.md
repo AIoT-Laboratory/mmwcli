@@ -33,9 +33,9 @@ Pitch `90` is the primary downward-looking installation; pitch `0` remains the h
 and DCA settings, loads and closes D2XX, and checks the fixed FFmpeg camera executable. It does not
 open radar or DCA1000 hardware.
 
-`probe` opens and closes the configured D2XX A/B/C/D interfaces, gates the Enhanced COM IWR6843 ES2
-identity, and requires a DCA1000 SystemAlive reply through the configured host link. Optional
-`--camera` reuses the one-frame preview. It does not reset the target or submit firmware.
+`probe` opens the configured D2XX interfaces, performs the capture path's SOP2 reset, gates the
+Enhanced COM IWR6843 ES2 identity, and requires a DCA1000 SystemAlive reply through the configured
+host link. Optional `--camera` reuses the one-frame preview. It does not submit firmware.
 
 `capture` repeats preflight, boots the IWR6843, configures DCA1000, records exactly `N` complete
 radar frames, and optionally records complete JPEGs using the setup format and selected DirectShow

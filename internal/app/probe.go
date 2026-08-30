@@ -23,10 +23,10 @@ type probeOptions struct {
 }
 
 type probeBackend struct {
-	d2xx        func(string) error
-	enhancedCOM func(context.Context, string) error
-	dca         func(context.Context, dca.Options) error
-	camera      func(context.Context, camera.Config) ([]byte, error)
+	d2xx   func(string) error
+	radar  func(context.Context, string, iwr6843.Selectors) error
+	dca    func(context.Context, dca.Options) error
+	camera func(context.Context, camera.Config) ([]byte, error)
 }
 
 func runProbe(arguments []string, stdout, stderr io.Writer) error {
@@ -55,7 +55,7 @@ func runProbe(arguments []string, stdout, stderr io.Writer) error {
 	if err := probeHardware(ctx, setup, selectedCamera, defaultProbeBackend()); err != nil {
 		return err
 	}
-	components := "Enhanced COM, D2XX A/B/C/D, DCA1000 SystemAlive"
+	components := "IWR6843 SOP2/Enhanced COM, D2XX A/B/C/D, DCA1000 SystemAlive"
 	if selectedCamera != nil {
 		components += ", camera"
 	}
@@ -82,10 +82,10 @@ func parseProbeOptions(arguments []string, stderr io.Writer) (probeOptions, erro
 
 func defaultProbeBackend() probeBackend {
 	return probeBackend{
-		d2xx:        probeD2XX,
-		enhancedCOM: iwr6843.ProbeEnhancedCOM,
-		dca:         probeDCA,
-		camera:      camera.Preview,
+		d2xx:   probeD2XX,
+		radar:  iwr6843.Probe,
+		dca:    probeDCA,
+		camera: camera.Preview,
 	}
 }
 
@@ -98,15 +98,19 @@ func probeHardware(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if backend.d2xx == nil || backend.enhancedCOM == nil || backend.dca == nil ||
+	if backend.d2xx == nil || backend.radar == nil || backend.dca == nil ||
 		(selectedCamera != nil && backend.camera == nil) {
 		return errors.New("hardware probe backend is incomplete")
 	}
 	if err := backend.d2xx(setup.Radar.D2XX); err != nil {
 		return fmt.Errorf("probe D2XX A/B/C/D: %w", err)
 	}
-	if err := backend.enhancedCOM(ctx, setup.Radar.Port); err != nil {
-		return fmt.Errorf("probe Enhanced COM: %w", err)
+	selectors, err := buildSelectors(setup.Radar.D2XX)
+	if err != nil {
+		return err
+	}
+	if err := backend.radar(ctx, setup.Radar.Port, selectors); err != nil {
+		return fmt.Errorf("probe IWR6843 SOP2/Enhanced COM: %w", err)
 	}
 	dcaSetup, err := dcaForSetup(setup)
 	if err != nil {

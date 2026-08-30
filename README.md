@@ -50,23 +50,15 @@ mmwcli camera preview --setup hardware\setup.json --camera "@device_pnp_..." > p
 `id`, not a device number, in `--camera`. Preview and camera capture require the explicit `camera`
 format in setup; there are no hidden format defaults. `camera list` remains available without setup.
 
-Before a collection run, probe the real Enhanced COM target, D2XX A/B/C/D interfaces, and DCA1000
-SystemAlive reply. Add the selected camera to require one decodable frame as well:
+Before a collection run, probe the IWR6843, D2XX A/B/C/D interfaces, and DCA1000 SystemAlive reply.
+Add the selected camera to require one decodable frame as well:
 
 ```powershell
 mmwcli probe --setup hardware\setup.json --camera "@device_pnp_..."
 ```
 
-`probe` holds the same hardware lock as capture. It does not reset the radar or submit firmware.
-
-Before a collection run, probe the real Enhanced COM target, D2XX A/B/C/D interfaces, and DCA1000
-SystemAlive reply. Add the selected camera to require one decodable frame as well:
-
-```powershell
-mmwcli probe --setup hardware\setup.json --camera "@device_pnp_..."
-```
-
-`probe` holds the same hardware lock as capture. It does not reset the radar or submit firmware.
+`probe` holds the same hardware lock as capture, performs the same SOP2 reset, and verifies the
+Enhanced COM IWR6843 ES2 identity without submitting firmware.
 
 ## Capture
 
