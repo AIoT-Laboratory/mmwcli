@@ -39,6 +39,8 @@ func Run(arguments []string, stdout, stderr io.Writer) int {
 		return 0
 	case "check":
 		err = runCheck(arguments[1:], stdout, stderr)
+	case "probe":
+		err = runProbe(arguments[1:], stdout, stderr)
 	case "capture":
 		err = runCapture(arguments[1:], stdout, stderr)
 	case "stream":
@@ -348,6 +350,7 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "usage:")
 	fmt.Fprintln(writer, "  mmwcli setup show SETUP")
 	fmt.Fprintln(writer, "  mmwcli setup mount SETUP --height M --pitch 90")
+	fmt.Fprintln(writer, "  mmwcli probe --setup SETUP [--camera DEVICE]")
 	fmt.Fprintln(writer, "  mmwcli check RADAR_CFG --setup SETUP --frames N [--camera DEVICE | --radar-only]")
 	fmt.Fprintln(writer, "  mmwcli capture RADAR_CFG TAKE.capture --setup SETUP --frames N [--camera DEVICE | --radar-only] [--control-stdin]")
 	fmt.Fprintln(writer, "  mmwcli stream RADAR_CFG --setup SETUP")

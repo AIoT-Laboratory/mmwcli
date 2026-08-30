@@ -18,6 +18,7 @@ The public surface is intentionally small:
 ```text
 mmwcli setup show SETUP
 mmwcli setup mount SETUP --height M --pitch 90
+mmwcli probe --setup SETUP [--camera DEVICE]
 mmwcli check RADAR_CFG --setup SETUP --frames N [--camera DEVICE | --radar-only]
 mmwcli capture RADAR_CFG TAKE.capture --setup SETUP --frames N [--camera DEVICE | --radar-only] [--control-stdin]
 mmwcli stream RADAR_CFG --setup SETUP
@@ -32,14 +33,18 @@ Pitch `90` is the primary downward-looking installation; pitch `0` remains the h
 and DCA settings, loads and closes D2XX, and checks the fixed FFmpeg camera executable. It does not
 open radar or DCA1000 hardware.
 
+`probe` opens and closes the configured D2XX A/B/C/D interfaces, gates the Enhanced COM IWR6843 ES2
+identity, and requires a DCA1000 SystemAlive reply through the configured host link. Optional
+`--camera` reuses the one-frame preview. It does not reset the target or submit firmware.
+
 `capture` repeats preflight, boots the IWR6843, configures DCA1000, records exactly `N` complete
 radar frames, and optionally records complete JPEGs using the setup format and selected DirectShow
 configuration. Raw ADC bytes are not converted, repaired, or processed.
 
 `stream` applies the same hardware preflight with `frameCfg numFrames=0`, starts the radar once, and
 emits one compact JSON geometry line followed by fixed-size complete ADC frames on stdout. It has
-no camera, take directory, recording option, job layer, or network server. stderr remains
-human-readable.
+no camera, take directory, recording option, job layer, or network server. Logs remain on stderr;
+the stable `MMWCLI_EVENT {"event":"radar_started"}` stderr line marks the validated RF start event.
 OpenMMW must drain the pipe independently of model inference. The first DCA packet is anchored at
 sequence 1 and byte offset 0; an unanchored stream fails before emitting ADC bytes. Ctrl+C, an
 exact `stop` line on stdin, or stdin EOF enters the same hardware cleanup path. Finite capture reads

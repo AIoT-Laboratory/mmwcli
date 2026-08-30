@@ -113,7 +113,7 @@ func Stream(
 	if _, err := radarControl.Start(ctx); err != nil {
 		return stats, fmt.Errorf("start radar: %w", err)
 	}
-	log("radar stream started")
+	log("radar started")
 
 	if err := state.receiver.WaitFirst(ctx); err != nil {
 		receiverDone = ctx.Err() == nil

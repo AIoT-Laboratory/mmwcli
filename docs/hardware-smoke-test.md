@@ -19,6 +19,7 @@ From `mmwcli`, validate the request without opening hardware:
 
 ```powershell
 bin\mmwcli.exe check hardware\iwr6843.cfg --setup hardware\setup.json --frames 30 --radar-only
+bin\mmwcli.exe probe --setup hardware\setup.json
 ```
 
 Then start the actual entry point from `openmmw` and open `http://127.0.0.1:5173/capture`:

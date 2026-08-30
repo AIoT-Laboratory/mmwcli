@@ -273,6 +273,11 @@ func TestStreamRunsUntilCancellationAndUsesExplicitRadarStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	events := []string{}
+	prepared.Log = func(message string) {
+		if message == "radar started" {
+			events = append(events, "radarStartedLog")
+		}
+	}
 	waits := 0
 	now := time.Now()
 	receiver := &fakeReceiver{
@@ -316,7 +321,7 @@ func TestStreamRunsUntilCancellationAndUsesExplicitRadarStop(t *testing.T) {
 	}
 	want := []string{
 		"version", "sensorStop", "dcaStop", "dcaConfigure", "apply",
-		"receiverStart", "dcaStart", "sensorStart", "receiverFirst", "receiverWait",
+		"receiverStart", "dcaStart", "sensorStart", "radarStartedLog", "receiverFirst", "receiverWait",
 		"sensorStop", "receiverWait", "dcaStop", "dcaDrain", "receiverClose",
 	}
 	if !reflect.DeepEqual(events, want) {
@@ -453,6 +458,11 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 	}
 	options := preparedSession(t, plan)
 	options.Participant = participant
+	options.Log = func(message string) {
+		if message == "radar started" {
+			events = append(events, "radarStartedLog")
+		}
+	}
 
 	_, err = Run(
 		context.Background(),
@@ -470,7 +480,7 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 	}
 	want := []string{
 		"version", "sensorStop", "dcaStop", "dcaConfigure", "apply",
-		"participantArm", "receiverStart", "dcaStart", "participantStart", "sensorStart",
+		"participantArm", "receiverStart", "dcaStart", "participantStart", "sensorStart", "radarStartedLog",
 		"receiverFirst", "participantSetRadarStart", "receiverWait", "frameEnd", "receiverWait", "dcaStop", "dcaDrain",
 		"receiverClose", "participantFinish:true",
 	}

@@ -112,7 +112,7 @@ func streamHardware(
 	}()
 
 	preparedSession := ready.session
-	preparedSession.Log = func(message string) { fmt.Fprintln(stderr, "[stream] "+message) }
+	preparedSession.Log = sessionLog(stderr, "stream")
 	_, err = session.Stream(
 		ctx,
 		controller,

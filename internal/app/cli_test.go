@@ -22,7 +22,7 @@ func TestPublicCLIStaysSmall(t *testing.T) {
 	}
 	help := stdout.String()
 	for _, command := range []string{
-		"mmwcli setup show", "mmwcli check", "mmwcli capture", "mmwcli stream", "mmwcli camera list", "mmwcli camera preview", "mmwcli version",
+		"mmwcli setup show", "mmwcli probe", "mmwcli check", "mmwcli capture", "mmwcli stream", "mmwcli camera list", "mmwcli camera preview", "mmwcli version",
 	} {
 		if !strings.Contains(help, command) {
 			t.Fatalf("help missing %q", command)

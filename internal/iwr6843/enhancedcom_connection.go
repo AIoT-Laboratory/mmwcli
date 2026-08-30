@@ -52,6 +52,16 @@ func openEnhancedCOMConnection(ctx context.Context, portName string) (*enhancedC
 	})
 }
 
+// ProbeEnhancedCOM verifies the explicit debug port and IWR6843 ES2 identity
+// without resetting the target or submitting firmware.
+func ProbeEnhancedCOM(ctx context.Context, portName string) error {
+	connection, err := openEnhancedCOMConnection(ctx, portName)
+	if err != nil {
+		return err
+	}
+	return connection.close()
+}
+
 func openEnhancedCOMConnectionWithBackend(
 	ctx context.Context,
 	portName string,

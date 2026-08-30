@@ -221,7 +221,7 @@ func captureHardware(
 
 	preparedSession := ready.session
 	preparedSession.Participant = captureOutput
-	preparedSession.Log = func(message string) { fmt.Fprintln(stdout, "[capture] "+message) }
+	preparedSession.Log = sessionLog(stderr, "capture")
 	stats, err = session.Run(
 		ctx,
 		controller,

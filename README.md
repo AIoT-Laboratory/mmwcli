@@ -50,6 +50,24 @@ mmwcli camera preview --setup hardware\setup.json --camera "@device_pnp_..." > p
 `id`, not a device number, in `--camera`. Preview and camera capture require the explicit `camera`
 format in setup; there are no hidden format defaults. `camera list` remains available without setup.
 
+Before a collection run, probe the real Enhanced COM target, D2XX A/B/C/D interfaces, and DCA1000
+SystemAlive reply. Add the selected camera to require one decodable frame as well:
+
+```powershell
+mmwcli probe --setup hardware\setup.json --camera "@device_pnp_..."
+```
+
+`probe` holds the same hardware lock as capture. It does not reset the radar or submit firmware.
+
+Before a collection run, probe the real Enhanced COM target, D2XX A/B/C/D interfaces, and DCA1000
+SystemAlive reply. Add the selected camera to require one decodable frame as well:
+
+```powershell
+mmwcli probe --setup hardware\setup.json --camera "@device_pnp_..."
+```
+
+`probe` holds the same hardware lock as capture. It does not reset the radar or submit firmware.
+
 ## Capture
 
 Check every input without opening capture hardware, then run the same finite plan:
@@ -83,6 +101,12 @@ An exact `stop` line or stdin EOF performs the same cleanup; other stdin lines a
 Malformed, overlapping, or persistently incomplete DCA data terminates the stream instead of being
 repaired. The first packet must be DCA sequence 1 at byte offset 0, so losing the stream origin
 cannot silently shift every frame.
+
+After the validated radar frame-start event, finite capture and stream write the exact line
+`MMWCLI_EVENT {"event":"radar_started"}` to stderr. It never enters stream stdout.
+
+After the validated radar frame-start event, finite capture and stream write the exact line
+`MMWCLI_EVENT {"event":"radar_started"}` to stderr. It never enters stream stdout.
 
 ## Finite output
 
