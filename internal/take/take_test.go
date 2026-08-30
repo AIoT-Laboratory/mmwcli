@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -77,6 +78,24 @@ func TestRadarOnlyTakePublishesFlatFiles(t *testing.T) {
 	wantHash := sha256.Sum256(setupBytes)
 	if record.Setup.Bytes != uint64(len(setupBytes)) || record.Setup.SHA256 != hex.EncodeToString(wantHash[:]) {
 		t.Fatalf("setup reference = %+v", record.Setup)
+	}
+}
+
+func TestSetupSnapshotAcceptsOnlySupportedMountPitches(t *testing.T) {
+	for _, pitchDeg := range []float64{0, 90} {
+		snapshot := testSetupSnapshot()
+		snapshot.Mount.PitchDeg = pitchDeg
+		if err := validateSetupSnapshot(snapshot, nil); err != nil {
+			t.Fatalf("pitch %v rejected: %v", pitchDeg, err)
+		}
+	}
+
+	for _, pitchDeg := range []float64{-90, 45, math.Inf(1), math.NaN()} {
+		snapshot := testSetupSnapshot()
+		snapshot.Mount.PitchDeg = pitchDeg
+		if err := validateSetupSnapshot(snapshot, nil); err == nil {
+			t.Fatalf("pitch %v accepted", pitchDeg)
+		}
 	}
 }
 

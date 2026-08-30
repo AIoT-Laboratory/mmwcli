@@ -152,9 +152,9 @@ func TestOpenEnhancedCOMConnectionNegotiatesColdBootBaudOnce(t *testing.T) {
 	}
 }
 
-func TestOpenEnhancedCOMConnectionStopsAfterInvalidColdBootProbe(t *testing.T) {
+func TestOpenEnhancedCOMConnectionExplainsDemoFirmwareColdBootProbe(t *testing.T) {
 	requestedProbe := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("x0 ??"), nil}}
-	coldBoot := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("bad?!"), nil}}
+	coldBoot := &fakeEnhancedCOMTransport{reads: [][]byte{[]byte("'rd' is not recognized as a CLI command\r\nmmwDemo:/>"), nil}}
 	transports := []*fakeEnhancedCOMTransport{requestedProbe, coldBoot}
 	var bauds []int
 	_, err := openEnhancedCOMConnectionWithBackend(context.Background(), "COM3", enhancedCOMBackend{
@@ -169,6 +169,9 @@ func TestOpenEnhancedCOMConnectionStopsAfterInvalidColdBootProbe(t *testing.T) {
 
 	if !errors.Is(err, errEnhancedCOMInvalidResponse) {
 		t.Fatalf("error = %v", err)
+	}
+	if !errors.Is(err, errEnhancedCOMTargetNotSOP2) || !strings.Contains(err.Error(), "SOP[2:0]=011") {
+		t.Fatalf("error = %v, want physical SOP2 guidance", err)
 	}
 	if want := []int{921600, 115200}; !slices.Equal(bauds, want) {
 		t.Fatalf("open bauds = %v, want %v", bauds, want)

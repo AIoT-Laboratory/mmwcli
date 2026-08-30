@@ -398,7 +398,7 @@ func validateSetupSnapshot(snapshot SetupSnapshot, selectedCamera *camera.Config
 		!exactValue(snapshot.Radar.D2XX) || !canonicalIPv4(snapshot.DCA.Host) || !canonicalIPv4(snapshot.DCA.Device) ||
 		snapshot.DCA.DelayUS < 5 || snapshot.DCA.DelayUS > 500 ||
 		math.IsNaN(snapshot.Mount.HeightM) || math.IsInf(snapshot.Mount.HeightM, 0) ||
-		snapshot.Mount.HeightM <= 0 || snapshot.Mount.HeightM > 10 || snapshot.Mount.PitchDeg != 0 {
+		snapshot.Mount.HeightM <= 0 || snapshot.Mount.HeightM > 10 || !validMountPitch(snapshot.Mount.PitchDeg) {
 		return errors.New("setup snapshot is incomplete")
 	}
 	for _, file := range []SetupFile{snapshot.Radar.BSS, snapshot.Radar.MSS} {
@@ -419,6 +419,10 @@ func validateSetupSnapshot(snapshot SetupSnapshot, selectedCamera *camera.Config
 		}
 	}
 	return nil
+}
+
+func validMountPitch(pitchDeg float64) bool {
+	return pitchDeg == 0 || pitchDeg == 90
 }
 
 func exactValue(value string) bool {

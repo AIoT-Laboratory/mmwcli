@@ -1,6 +1,7 @@
 package iwr6843
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -10,7 +11,10 @@ import (
 
 const enhancedCOMMaximumBlockSize = 4096
 
-var errEnhancedCOMInvalidResponse = errors.New("Enhanced COM read response is invalid")
+var (
+	errEnhancedCOMInvalidResponse = errors.New("Enhanced COM read response is invalid")
+	errEnhancedCOMTargetNotSOP2   = errors.New("IWR6843 target is not in SOP2 development mode")
+)
 
 func encodeEnhancedCOMWake() []byte {
 	return []byte("x0 \r\n")
@@ -86,13 +90,23 @@ func parseEnhancedCOMReadResponse(response []byte) (uint32, error) {
 }
 
 func invalidEnhancedCOMResponse(response []byte, detail string) error {
-	return fmt.Errorf(
+	invalid := fmt.Errorf(
 		"%w: %s; raw bytes (%d): % X",
 		errEnhancedCOMInvalidResponse,
 		detail,
 		len(response),
 		response,
 	)
+	if bytes.Contains(response, []byte("mmwDemo:")) {
+		return errors.Join(
+			fmt.Errorf(
+				"%w; set physical SOP[2:0]=011 (SOP0/SOP1 closed, SOP2 open), then reset",
+				errEnhancedCOMTargetNotSOP2,
+			),
+			invalid,
+		)
+	}
+	return invalid
 }
 
 func trimEnhancedCOMWhitespace(value []byte) []byte {
