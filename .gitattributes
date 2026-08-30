@@ -1,2 +1,0 @@
-internal/multisensor/testdata/*.json text eol=lf
-internal/multisensorstream/testdata/*.hex text eol=lf

@@ -3,9 +3,14 @@ package camera
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
+	"io"
+	"os"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestReadJPEGDoesNotSplitStuffedEntropyBytes(t *testing.T) {
@@ -60,6 +65,53 @@ func TestConfigBuildsTheOnlyCaptureCommand(t *testing.T) {
 	}
 	if got := config.command(true); !slices.Contains(got, "-frames:v") {
 		t.Fatalf("preview command lacks one-frame limit: %#v", got)
+	}
+}
+
+func TestRecorderCancellationIgnoresOnlyExpectedPipeTermination(t *testing.T) {
+	cameraFailure := errors.New("camera shutdown failed")
+	for _, test := range []struct {
+		name       string
+		cancel     bool
+		readErr    error
+		wantFinish error
+	}{
+		{name: "cancelled EOF", cancel: true, readErr: io.EOF},
+		{name: "cancelled partial JPEG", cancel: true, readErr: io.ErrUnexpectedEOF},
+		{name: "cancelled closed pipe", cancel: true, readErr: io.ErrClosedPipe},
+		{name: "cancelled closed file", cancel: true, readErr: os.ErrClosed},
+		{name: "camera failure during cancellation", cancel: true, readErr: cameraFailure, wantFinish: cameraFailure},
+		{name: "camera EOF without cancellation", readErr: io.EOF, wantFinish: io.EOF},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			if test.cancel {
+				cancel()
+			}
+			recorder := &Recorder{
+				baseCtx: ctx,
+				cancel:  cancel,
+				frames:  make(chan frame, 1),
+				done:    make(chan struct{}),
+				ready:   make(chan error, 1),
+			}
+			recorder.frames <- frame{err: test.readErr}
+			close(recorder.frames)
+			recorder.write()
+
+			finishErr := recorder.Finish(context.Background(), false)
+			if test.wantFinish == nil && finishErr != nil {
+				t.Fatalf("Finish error = %v, want nil", finishErr)
+			}
+			if test.wantFinish != nil && !errors.Is(finishErr, test.wantFinish) {
+				t.Fatalf("Finish error = %v, want %v", finishErr, test.wantFinish)
+			}
+			select {
+			case <-recorder.done:
+			case <-time.After(time.Second):
+				t.Fatal("camera writer did not finish")
+			}
+		})
 	}
 }
 

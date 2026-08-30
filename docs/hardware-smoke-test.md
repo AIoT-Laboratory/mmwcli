@@ -1,53 +1,74 @@
-# IWR6843 + DCA1000 smoke test
+# Web hardware smoke test
 
-Run this only on the fixed Windows/amd64 research rig. Automated tests do not access hardware.
+This is the only end-to-end hardware acceptance for the local OpenMMW workstation. Unit tests and
+mocked Playwright runs do not satisfy it.
 
-## Before capture
+## Prepare the workstation
 
-- Put the IWR6843 in SOP2 host-download mode and connect Enhanced COM.
-- Connect DCA1000 to the dedicated `192.168.33.30/24` host interface; its default address is
-  `192.168.33.180`.
-- Install FTDI D2XX and build `mmwcli.exe` with `-tags ftd2xx`.
-- Put exact Enhanced COM, D2XX description, BSS/MSS paths, DCA addresses, delay, camera settings,
-  radar height, and `tilt_deg: 90` in the `mmwcli.rig.v3` `rig.json`.
-- Do not run another DCA1000 or camera process concurrently.
+1. Put the IWR6843 in SOP2 host-download mode, connect Enhanced COM and DCA1000, and use the
+   dedicated `192.168.33.30/24` host interface.
+2. Build `mmwcli/bin/mmwcli.exe` with `-tags ftd2xx`.
+3. Copy `mmwcli/hardware/setup.example.json` to the ignored
+   `mmwcli/hardware/setup.json`. The example already points to the installed xWR68xx BSS/MSS files;
+   enter the real COM port, D2XX description, DCA addresses, measured height, and camera format.
+   use `pitch_deg: 90` for the primary downward-looking mount; use `0` only for a deliberate
+   horizontal control.
+4. Confirm that no other radar, DCA1000, camera, or OpenMMW process is running.
 
-First run offline validation:
-
-```powershell
-mmwcli check hardware\iwr6843.cfg --rig rig.json --frames 100
-```
-
-It must finish with `capture check passed (offline; no hardware accessed)`.
-
-## Finite capture
+From `mmwcli`, validate the request without opening hardware:
 
 ```powershell
-mmwcli capture hardware\iwr6843.cfg capture-001 --rig rig.json --frames 100
+bin\mmwcli.exe check hardware\iwr6843.cfg --setup hardware\setup.json --frames 30 --radar-only
 ```
 
-Pass criteria:
-
-- exit code `0` and a final `capture complete` summary;
-- `capture-001/session.json` reports `mmwcli.take.v2`, `radar_tilt_deg: 90`, and 100 frames;
-- `adc.bin` size equals `frames × bytes_per_frame` reported by `check`;
-- camera payload and index exist for a camera take;
-- packet gaps and missing bytes are zero;
-- no `capture-001.part` remains.
-
-A non-empty ADC file or an unpublished `.part` directory is not a pass. On failure, retain the error
-output and do not rename partial data.
-
-## Continuous stream
-
-Start the OpenMMW consumer, which invokes:
+Then start the actual entry point from `openmmw` and open `http://127.0.0.1:5173/capture`:
 
 ```powershell
-mmwcli stream hardware\iwr6843.cfg --rig rig.json
+bun run --cwd=web dev
 ```
 
-The consumer must read one JSON header line and then exact `frame_bytes` blocks. Pass criteria are a
-single radar start, more than 65535 complete frames without file growth, stable process memory, and
-clean shutdown on `stop`, EOF, or Ctrl+C followed by an immediate successful restart. Any malformed
-packet, overlap, unresolved gap, or closed consumer pipe must terminate the stream; losing the first
-packet must emit no frame, and partial frames must never reach inference.
+The Setup card must show the measured height and pitch `90`. Refresh cameras, explicitly select the
+device under test (choose a non-first device when more than one is present), and require a real JPEG
+Preview before capture.
+
+## Three hardware gates
+
+Use `No inference` so hardware evidence does not depend on a checkpoint.
+
+1. **Camera:** Subject `smoke`, Scene `hardware`, Action `camera`, Take `take-001`, 30 frames,
+   selected camera. Capture must end at
+   `dataset/takes/smoke/hardware/camera/take-001/`.
+2. **Radar only:** Action `radar`, Take `take-001`, 30 frames, no camera. Capture must end at
+   `dataset/takes/smoke/hardware/radar/take-001/`.
+3. **Cooperative Stop:** Action `stop`, Take `take-001`, camera selected, enough frames to press
+   **Stop** while status is Capturing. Status must become Cancelled and preserve exactly
+   `dataset/takes/smoke/hardware/stop/take-001.capture.part/`; neither a verified take nor a
+   `.capture` directory may appear.
+
+For each completed take, run the strict reader from the OpenMMW environment:
+
+```powershell
+.venv\Scripts\python.exe -c "from mmwcore.io import open_take; t=open_take(r'dataset/takes/smoke/hardware/camera/take-001'); t.archive.verify_all(); print(t.frame_count,t.height_m,t.pitch_deg,t.camera is not None); t.camera.read(0); t.camera.read(len(t.camera.frames)-1)"
+.venv\Scripts\python.exe -c "from mmwcore.io import open_take; t=open_take(r'dataset/takes/smoke/hardware/radar/take-001'); t.archive.verify_all(); print(t.frame_count,t.height_m,t.pitch_deg,t.camera is None)"
+```
+
+Both must print 30 frames, the measured height, pitch `90`, and `True`. The strict reader checks the
+session/setup references, file sizes and hashes, radar CFG/archive agreement, and camera payload and
+index. Successful conversion must leave only the verified directory; `.capture` and `.capture.part`
+must be absent.
+
+## Report five independent results
+
+Record each as Pass, Fail, or Blocked with its command/path evidence:
+
+- **Software:** three repository test gates pass.
+- **UI:** mocked desktop/mobile Playwright flows pass; this proves UI behavior only.
+- **Hardware:** Preview plus all three gates above pass on real devices.
+- **Model:** a maintained checkpoint infers the new camera take and Offline opens the strictly
+  validated red pose (green target is optional when labels are generated).
+- **Online:** the same real setup, CFG, and maintained checkpoint produce increasing prediction
+  counters; Stop returns Idle without a cleanup warning and an immediate restart succeeds.
+
+No checkpoint means Model and Online are Blocked, not failed and not passed. A short Online smoke
+does not prove long-duration stability; record a separate soak duration and peak memory before
+making that claim.

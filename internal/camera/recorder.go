@@ -272,7 +272,7 @@ func (recorder *Recorder) write() {
 	for item := range recorder.frames {
 		recorder.mu.Lock()
 		if item.err != nil {
-			if !recorder.stopping {
+			if !recorder.expectedReadEndLocked(item.err) {
 				err := fmt.Errorf("read camera JPEG: %w", item.err)
 				recorder.signalReady(err)
 				recorder.failLocked(err)
@@ -314,6 +314,14 @@ func (recorder *Recorder) write() {
 		recorder.bytes += size
 		recorder.mu.Unlock()
 	}
+}
+
+func (recorder *Recorder) expectedReadEndLocked(err error) bool {
+	if !recorder.stopping && recorder.baseCtx.Err() == nil {
+		return false
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, io.ErrClosedPipe) || errors.Is(err, os.ErrClosed)
 }
 
 func (recorder *Recorder) failLocked(err error) {

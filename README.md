@@ -1,12 +1,13 @@
 # mmwcli
 
-mmwcli captures finite IWR6843 + DCA1000 takes or streams whole ADC frames on Windows/amd64.
-Finite capture writes raw ADC, an optional MJPEG camera recording, and one small manifest.
+mmwcli captures finite IWR6843 + DCA1000 raw captures or streams complete ADC frames on
+Windows/amd64. Finite capture writes raw ADC, an optional MJPEG camera recording, and one small
+manifest.
 DSP, datasets, training, inference, and visualization belong downstream.
 
 ```text
-finite: IWR6843 + DCA1000 [+ camera] -> mmwcli.take.v2 -> mmwcore -> OpenMMW
-stream: IWR6843 + DCA1000 -> whole ADC frames on stdout -> OpenMMW
+finite: IWR6843 + DCA1000 [+ camera] -> mmwcli.take.v3 -> mmwcore -> openmmw.take.v3
+online: IWR6843 + DCA1000 -> complete ADC frames on stdout -> OpenMMW
 ```
 
 ## Build
@@ -21,63 +22,47 @@ go build -trimpath -tags ftd2xx -o bin\mmwcli.exe .\cmd\mmwcli
 
 Automated checks are offline. They do not open radar, DCA1000, serial, USB, or camera hardware.
 
-## Rig
+## Hardware setup
 
-Keep workstation-specific paths and device selections in one JSON file:
+Copy `hardware/setup.example.json` to the ignored `hardware/setup.json`, then set the Enhanced COM
+port, measured mount height, and camera format once. The tracked example already points to this
+workstation's installed mmWave Studio 2.1.1.0 xWR68xx BSS/MSS files. Relative firmware paths, when
+used, resolve beside the setup file.
 
-```json
-{
-  "schema": "mmwcli.rig.v3",
-  "port": "COM3",
-  "bss": "firmware/xwr68xx_radarss.bin",
-  "mss": "firmware/xwr68xx_masterss.bin",
-  "d2xx": "AR-DevPack-EVM-012",
-  "dca": {
-    "host": "192.168.33.30",
-    "device": "192.168.33.180",
-    "delay_us": 50
-  },
-  "camera": {
-    "device": "@device_pnp_...",
-    "width": 1280,
-    "height": 720,
-    "fps": 30,
-    "max_bytes": 2097152
-  },
-  "height_m": 1.5,
-  "tilt_deg": 90
-}
-```
-
-Relative firmware paths resolve beside the rig file. The camera is always a DirectShow video
-device produced by the one built-in FFmpeg MJPEG command; rig files cannot execute arbitrary
-camera commands. `tilt_deg` is the radar PCB plane's angle above the horizontal floor: `90` means
-the PCB is vertical and its boresight is horizontal. This release accepts only `90`.
-
-List DirectShow cameras before choosing one. This also works when the rig has no camera. The JSON
-result has the rig default (`null` when absent) and each device's friendly `name` plus its
-unambiguous FFmpeg `id` (the alternative name when available):
+`pitch_deg` is boresight pitch and accepts only `90` (the current downward-looking research mount)
+or `0` (a horizontal control). Missing pitch defaults to `90`; the tracked example is explicit.
+Inspect or update the mount with:
 
 ```powershell
-mmwcli camera list --rig rig.json
-mmwcli camera preview --rig rig.json --camera "@device_pnp_..." > preview.jpg
+mmwcli setup show hardware\setup.json
+mmwcli setup mount hardware\setup.json --height 1.5 --pitch 90
+```
+
+List DirectShow cameras without loading radar hardware configuration, then preview any returned
+device. The JSON result contains each friendly `name` plus its unambiguous FFmpeg `id`:
+
+```powershell
+mmwcli camera list
+mmwcli camera preview --setup hardware\setup.json --camera "@device_pnp_..." > preview.jpg
 ```
 
 `preview` has a fixed three-second timeout and writes exactly one JPEG to stdout. Use the returned
-`id`, not a device number, in `--camera`; the same effective FFmpeg/DirectShow configuration is
-used by preview, `check`, and capture.
+`id`, not a device number, in `--camera`. Preview and camera capture require the explicit `camera`
+format in setup; there are no hidden format defaults. `camera list` remains available without setup.
 
 ## Capture
 
 Check every input without opening capture hardware, then run the same finite plan:
 
 ```powershell
-mmwcli check hardware\iwr6843.cfg --rig rig.json --frames 600 --camera "@device_pnp_..."
-mmwcli capture hardware\iwr6843.cfg TAKE --rig rig.json --frames 600 --camera "@device_pnp_..."
+mmwcli check hardware\iwr6843.cfg --setup hardware\setup.json --frames 600 --camera "@device_pnp_..."
+mmwcli capture hardware\iwr6843.cfg take-001.capture --setup hardware\setup.json --frames 600 --camera "@device_pnp_..." --control-stdin
 ```
 
 Use `--radar-only` on both commands to omit the camera; it cannot be combined with `--camera`.
-`--frames` must be in `1..65535`.
+`--frames` must be in `1..65535`. With `--control-stdin`, exact `stop\n` or stdin EOF enters the
+normal cancellation and hardware-cleanup path; other input is ignored. Without that flag, finite
+capture does not consume stdin.
 A camera configured for a normal take is required to complete successfully; otherwise the take is
 not published.
 
@@ -86,33 +71,37 @@ not published.
 Run one unbounded radar-only session for online inference:
 
 ```powershell
-mmwcli stream hardware\iwr6843.cfg --rig rig.json
+mmwcli stream hardware\iwr6843.cfg --setup hardware\setup.json
 ```
 
 The effective in-memory CFG always uses `frameCfg numFrames=0`; the source file is unchanged. stdout
-starts with one JSON line containing `frame_bytes`, `period_ns`, `height_m`, and `tilt_deg`. Every
-remaining byte belongs to fixed-size complete ADC frames. Logs go to stderr. `stream` never opens a
-camera or writes a take. Ctrl+C stops the radar and DCA1000 and discards any incomplete final frame.
+starts with one JSON line containing `frame_bytes`, `period_ns`, and
+`mount: {height_m, pitch_deg}`. Every remaining byte belongs to fixed-size complete ADC frames.
+Logs go to stderr. `stream` never opens a camera or writes a take. Ctrl+C stops the radar and
+DCA1000 and discards any incomplete final frame.
 An exact `stop` line or stdin EOF performs the same cleanup; other stdin lines are ignored.
 Malformed, overlapping, or persistently incomplete DCA data terminates the stream instead of being
 repaired. The first packet must be DCA sequence 1 at byte offset 0, so losing the stream origin
 cannot silently shift every frame.
 
-## Output
+## Finite output
 
 ```text
-TAKE/
+take-001.capture/
   session.json
+  setup.json
   adc.bin
   radar.cfg
   camera.mjpeg      # absent with --radar-only
   camera.index.bin  # absent with --radar-only
 ```
 
-`session.json` uses `mmwcli.take.v2` and records the required 90-degree radar tilt. Radar time is a
-bounded frame-start observation. Camera time is complete-JPEG delivery time, not exposure time.
-Files are staged under `TAKE.part` and published
-only after the requested radar frames and required camera recording complete.
+`setup.json` is the immutable normalized `mmwcli.snapshot.v1` used for the capture; `session.json`
+uses `mmwcli.take.v3` and references its bytes and SHA-256. Radar time is a bounded frame-start
+observation. Camera time is complete-JPEG delivery time, not exposure time. Files are staged under
+`take-001.capture.part` and published as `take-001.capture` only after the requested radar frames
+and required camera recording complete. mmwcore converts this raw capture to the
+`openmmw.take.v3` verified take used by OpenMMW datasets and finite inference.
 
-See [architecture](docs/architecture.md), [timing and layout](docs/timing.md), and the
-[hardware smoke test](docs/hardware-smoke-test.md).
+See [architecture](docs/architecture.md), [timing and layout](docs/timing.md), and the canonical
+[Web hardware smoke test](docs/hardware-smoke-test.md).

@@ -1,50 +1,39 @@
-# mmwcli contributor guide
+# mmwcli
 
-## Scope
+This file records only stable repository contracts. Keep one-off task decisions out of it.
 
-mmwcli acquires raw mmWave data as a completed finite take or a stream of whole ADC frames. Keep
-DSP, datasets, inference, and visualization in mmwcore or OpenMMW.
+## Skills
 
-The active research path is:
+Use a matching `~/.codex/skills` skill only when it helps the current task. Common choices are
+`simplify` (`code-simplifier`), `grill-me`, `code-review` (when installed), and `prototype`; these
+are examples, not an allowlist. Read the selected `SKILL.md` first, and never run skills
+mechanically or turn one-off outputs into permanent constraints.
 
-```text
-finite: mmwcli capture -> flat take -> mmwcore -> OpenMMW
-online: mmwcli stream -> whole ADC frames -> OpenMMW
-```
+## Role
 
-The only hardware route is IWR6843 ES2 + DCA1000 on Windows/amd64.
+- Own IWR6843 ES2 + DCA1000 acquisition on Windows/amd64.
+- Publish finite capture as `mmwcli.take.v3` with an immutable `mmwcli.snapshot.v1`, or stream
+  complete ADC frames to OpenMMW.
+- Keep camera capture optional so radar-only capture remains available.
+- Leave DSP, tracking, and benchmarks to mmwcore; leave datasets, models, inference, and Web to
+  OpenMMW.
 
-## Code map
+## Preserve
 
-- `cmd/mmwcli`: executable
-- `internal/app`: command parsing and orchestration
-- `internal/iwr6843`, `internal/d2xx`: IWR6843 firmware and mmWaveLink control
-- `internal/dca`, `internal/session`, `internal/capturefile`: raw ADC receive, streaming, and publication
-- `internal/camera`, `internal/take`: optional camera recording and flat take publication
-- `internal/radar`: CFG parsing and frame geometry
+- Require explicit COM and D2XX selection; validate inputs before opening hardware or output.
+- Preserve ADC bytes exactly. mmwcli does not process or repair them.
+- Own the raw `TAKE.capture.part -> TAKE.capture` transaction; callers never add `.part`.
+- Stream complete frames only. Stdout is machine data; logs use stderr.
 
-## Rules
+## Checks
 
-- Validate capture inputs before opening hardware or creating output.
-- Never auto-select a COM or D2XX device.
-- Preserve ADC bytes exactly; do not process or repair them.
-- Publish finite takes only through the existing `.part` transaction.
-- Stream only complete frames, never repairs or files; stdout is machine data and logs use stderr.
-- Completed directories and `stream` stdout are the only data handoffs.
-- Keep changes narrow and update the closest tests and documentation.
-- Automated validation must not access radar, DCA1000, serial, USB, camera, or network hardware.
-
-## Validation
-
-Run the narrowest test first, then the full offline gates for capture or lifecycle changes:
+Run only checks affected by the change. The full gate is `.github/workflows/ci.yml`.
 
 ```text
-go test ./...
+gofmt -l cmd internal
+go test -count=1 ./...
 go vet ./...
 go build -trimpath ./cmd/mmwcli
 ```
 
-The `ftd2xx` build and physical capture require the user-installed FTDI library and explicit
-hardware authorization. Report offline tests separately from hardware validation.
-
-Do not commit, push, switch branches, tag, or publish without explicit user authorization.
+Hardware validation is a separate, explicitly requested step.

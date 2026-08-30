@@ -10,8 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,19 +24,54 @@ import (
 )
 
 const (
-	Schema          = "mmwcli.take.v2"
+	Schema          = "mmwcli.take.v3"
 	ManifestName    = "session.json"
+	SetupName       = "setup.json"
+	SetupSchema     = "mmwcli.snapshot.v1"
 	RadarPayload    = "adc.bin"
 	RadarConfigName = "radar.cfg"
 )
 
 type Config struct {
-	Output       string
-	RadarConfig  []byte
-	Plan         radar.Plan
-	RadarHeightM float64
-	RadarTiltDeg float64
-	Camera       *camera.Config
+	Output      string
+	RadarConfig []byte
+	Plan        radar.Plan
+	Setup       SetupSnapshot
+	Camera      *camera.Config
+}
+
+type SetupSnapshot struct {
+	Schema string         `json:"schema"`
+	Radar  SetupRadar     `json:"radar"`
+	DCA    SetupDCA       `json:"dca"`
+	Mount  SetupMount     `json:"mount"`
+	Camera *camera.Config `json:"camera"`
+}
+
+type SetupRadar struct {
+	Model    string    `json:"model"`
+	Revision string    `json:"revision"`
+	Port     string    `json:"port"`
+	BSS      SetupFile `json:"bss"`
+	MSS      SetupFile `json:"mss"`
+	D2XX     string    `json:"d2xx"`
+}
+
+type SetupFile struct {
+	Name   string `json:"name"`
+	Bytes  uint64 `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+type SetupDCA struct {
+	Host    string `json:"host"`
+	Device  string `json:"device"`
+	DelayUS int    `json:"delay_us"`
+}
+
+type SetupMount struct {
+	HeightM  float64 `json:"height_m"`
+	PitchDeg float64 `json:"pitch_deg"`
 }
 
 type Capture struct {
@@ -84,8 +122,7 @@ type manifest struct {
 	FrameCount    uint16        `json:"frame_count"`
 	FramePeriodNS uint64        `json:"frame_period_ns"`
 	RadarStart    frameStart    `json:"radar_start"`
-	RadarHeightM  float64       `json:"radar_height_m"`
-	RadarTiltDeg  float64       `json:"radar_tilt_deg"`
+	Setup         artifact      `json:"setup"`
 	Radar         radarRecord   `json:"radar"`
 	Camera        *cameraRecord `json:"camera,omitempty"`
 }
@@ -96,13 +133,23 @@ func New(
 	config Config,
 	stderr io.Writer,
 ) (*Capture, error) {
-	if ctx == nil || cancel == nil || config.Output == "" || len(config.RadarConfig) == 0 ||
-		config.Plan.NumberOfFrames == 0 || config.Plan.ExpectedBytes <= 0 ||
-		config.RadarHeightM <= 0 || config.RadarTiltDeg != 90 {
+	if ctx == nil || cancel == nil || !strings.HasSuffix(strings.ToLower(filepath.Clean(config.Output)), ".capture") || len(config.RadarConfig) == 0 ||
+		config.Plan.NumberOfFrames == 0 || config.Plan.ExpectedBytes <= 0 {
 		return nil, errors.New("take configuration is incomplete")
+	}
+	if err := validateSetupSnapshot(config.Setup, config.Camera); err != nil {
+		return nil, fmt.Errorf("take setup snapshot is invalid: %w", err)
 	}
 	directory, err := capturefile.CreateTransactionDirectory(config.Output)
 	if err != nil {
+		return nil, err
+	}
+	setupBytes, err := json.MarshalIndent(config.Setup, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode setup snapshot: %w", err)
+	}
+	setupBytes = append(setupBytes, '\n')
+	if err := writeFile(ctx, filepath.Join(directory.PartPath(), SetupName), setupBytes); err != nil {
 		return nil, err
 	}
 	radarOutput, err := capturefile.Create(filepath.Join(directory.PartPath(), RadarPayload))
@@ -200,9 +247,12 @@ func (capture *Capture) Publish(ctx context.Context) error {
 		Schema: Schema, SessionID: capture.id,
 		FrameCount:    capture.config.Plan.NumberOfFrames,
 		FramePeriodNS: uint64(capture.config.Plan.FramePeriod),
-		RadarStart:    start, RadarHeightM: capture.config.RadarHeightM,
-		RadarTiltDeg: capture.config.RadarTiltDeg,
-		Radar:        radarRecord, Camera: recordedCamera,
+		RadarStart:    start,
+		Radar:         radarRecord, Camera: recordedCamera,
+	}
+	record.Setup, err = fileArtifact(ctx, filepath.Join(capture.directory.PartPath(), SetupName), SetupName)
+	if err != nil {
+		return err
 	}
 	encoded, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
@@ -321,7 +371,7 @@ func writeFile(ctx context.Context, path string, data []byte) error {
 
 func validateFiles(root string, hasCamera bool) error {
 	wanted := map[string]bool{
-		ManifestName: true, RadarPayload: true, RadarConfigName: true,
+		ManifestName: true, SetupName: true, RadarPayload: true, RadarConfigName: true,
 	}
 	if hasCamera {
 		wanted[camera.PayloadName] = true
@@ -340,6 +390,44 @@ func validateFiles(root string, hasCamera bool) error {
 		}
 	}
 	return nil
+}
+
+func validateSetupSnapshot(snapshot SetupSnapshot, selectedCamera *camera.Config) error {
+	if snapshot.Schema != SetupSchema || snapshot.Radar.Model != "iwr6843" ||
+		snapshot.Radar.Revision != "es2" || !exactValue(snapshot.Radar.Port) ||
+		!exactValue(snapshot.Radar.D2XX) || !canonicalIPv4(snapshot.DCA.Host) || !canonicalIPv4(snapshot.DCA.Device) ||
+		snapshot.DCA.DelayUS < 5 || snapshot.DCA.DelayUS > 500 ||
+		math.IsNaN(snapshot.Mount.HeightM) || math.IsInf(snapshot.Mount.HeightM, 0) ||
+		snapshot.Mount.HeightM <= 0 || snapshot.Mount.HeightM > 10 || snapshot.Mount.PitchDeg != 0 {
+		return errors.New("setup snapshot is incomplete")
+	}
+	for _, file := range []SetupFile{snapshot.Radar.BSS, snapshot.Radar.MSS} {
+		if !exactValue(file.Name) || filepath.Base(file.Name) != file.Name || file.Bytes == 0 ||
+			len(file.SHA256) != sha256.Size*2 || file.SHA256 != strings.ToLower(file.SHA256) {
+			return errors.New("setup snapshot firmware identity is incomplete")
+		}
+		if _, err := hex.DecodeString(file.SHA256); err != nil {
+			return errors.New("setup snapshot firmware SHA-256 is invalid")
+		}
+	}
+	if (snapshot.Camera == nil) != (selectedCamera == nil) {
+		return errors.New("setup snapshot camera does not match capture")
+	}
+	if snapshot.Camera != nil {
+		if err := snapshot.Camera.Validate(); err != nil || *snapshot.Camera != *selectedCamera {
+			return errors.New("setup snapshot camera does not match capture")
+		}
+	}
+	return nil
+}
+
+func exactValue(value string) bool {
+	return value != "" && value == strings.TrimSpace(value) && !strings.ContainsRune(value, 0)
+}
+
+func canonicalIPv4(value string) bool {
+	parsed := net.ParseIP(value)
+	return parsed != nil && parsed.To4() != nil && parsed.To4().String() == value
 }
 
 func newID() (string, error) {

@@ -5,3 +5,5 @@ bin/
 *.test
 coverage.out
 *.gocache
+hardware/setup.json
+hardware/.hardware.lock

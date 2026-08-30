@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"mmwcli/internal/camera"
 	"mmwcli/internal/d2xx"
@@ -18,9 +20,10 @@ import (
 type captureRequest struct {
 	ConfigPath string
 	OutputPath string
-	Rig        rigConfig
+	Setup      setupConfig
+	Camera     *camera.Config
 	Frames     uint16
-	RadarOnly  bool
+	Control    io.Reader
 }
 
 type preparedRun struct {
@@ -64,7 +67,7 @@ func prepareCapture(
 	if loaded.plan.NumberOfFrames != request.Frames {
 		return preparedRun{}, errors.New("capture plan must be finite and match --frames")
 	}
-	dcaSetup, err := dcaForRig(request.Rig)
+	dcaSetup, err := dcaForSetup(request.Setup)
 	if err != nil {
 		return preparedRun{}, err
 	}
@@ -78,14 +81,11 @@ func prepareCapture(
 	if err != nil {
 		return preparedRun{}, usageError{message: err.Error()}
 	}
-	ready, err := prepareHardware(request.Rig, loaded, dcaSetup, preparedSession)
+	ready, err := prepareHardware(request.Setup, loaded, dcaSetup, preparedSession)
 	if err != nil {
 		return preparedRun{}, err
 	}
-	if !request.RadarOnly {
-		if request.Rig.Camera == nil {
-			return preparedRun{}, errors.New("camera is required unless --radar-only is set")
-		}
+	if request.Camera != nil {
 		if _, err := exec.LookPath(camera.Executable); err != nil {
 			return preparedRun{}, fmt.Errorf(
 				"find camera executable %q: %w",
@@ -100,7 +100,7 @@ func prepareCapture(
 }
 
 func prepareHardware(
-	rig rigConfig,
+	setup setupConfig,
 	loaded loadedPlan,
 	dcaSetup dcaConfig,
 	preparedSession session.Prepared,
@@ -109,7 +109,7 @@ func prepareHardware(
 	if err != nil {
 		return preparedRun{}, err
 	}
-	assets, err := iwr6843.CheckAssets(rig.BSS, rig.MSS)
+	assets, err := iwr6843.CheckAssets(setup.bssPath, setup.mssPath)
 	if err != nil {
 		return preparedRun{}, err
 	}
@@ -120,7 +120,7 @@ func prepareHardware(
 	if err := library.Close(); err != nil {
 		return preparedRun{}, err
 	}
-	selectors, err := buildSelectors(rig.D2XX)
+	selectors, err := buildSelectors(setup.Radar.D2XX)
 	if err != nil {
 		return preparedRun{}, err
 	}
@@ -173,18 +173,16 @@ func captureHardware(
 ) (stats dca.CaptureStats, resultErr error) {
 	ctx, cancel := hardwareSignalContext()
 	defer cancel()
-	var cameraConfig *camera.Config
-	if !request.RadarOnly {
-		configured := *request.Rig.Camera
-		cameraConfig = &configured
+	if request.Control != nil {
+		go watchManagedStop(request.Control, cancel)
 	}
+	cameraConfig := request.Camera
 	captureOutput, err := take.New(ctx, cancel, take.Config{
-		Output:       request.OutputPath,
-		RadarConfig:  ready.radar.source,
-		Plan:         ready.radar.plan,
-		RadarHeightM: request.Rig.HeightM,
-		RadarTiltDeg: request.Rig.TiltDeg,
-		Camera:       cameraConfig,
+		Output:      request.OutputPath,
+		RadarConfig: ready.radar.source,
+		Plan:        ready.radar.plan,
+		Setup:       setupSnapshot(request.Setup, ready.assets, cameraConfig),
+		Camera:      cameraConfig,
 	}, stderr)
 	if err != nil {
 		return stats, err
@@ -204,7 +202,7 @@ func captureHardware(
 		)
 	}()
 	controller, err := iwr6843.Open(ctx, iwr6843.Options{
-		EnhancedPort: request.Rig.Port,
+		EnhancedPort: request.Setup.Radar.Port,
 		Assets:       ready.assets,
 		Selectors:    ready.selectors,
 		Plan:         ready.link,
@@ -245,4 +243,29 @@ func captureHardware(
 		return stats, err
 	}
 	return stats, nil
+}
+
+func setupSnapshot(setup setupConfig, assets iwr6843.Assets, selectedCamera *camera.Config) take.SetupSnapshot {
+	firmware := func(file iwr6843.File) take.SetupFile {
+		return take.SetupFile{
+			Name: filepath.Base(file.Path), Bytes: uint64(file.Size), SHA256: strings.ToLower(file.SHA256),
+		}
+	}
+	var cameraSnapshot *camera.Config
+	if selectedCamera != nil {
+		value := *selectedCamera
+		cameraSnapshot = &value
+	}
+	return take.SetupSnapshot{
+		Schema: take.SetupSchema,
+		Radar: take.SetupRadar{
+			Model: "iwr6843", Revision: "es2", Port: setup.Radar.Port,
+			BSS: firmware(assets.BSS), MSS: firmware(assets.MSS), D2XX: setup.Radar.D2XX,
+		},
+		DCA: take.SetupDCA{
+			Host: setup.DCA.Host, Device: setup.DCA.Device, DelayUS: setup.DCA.DelayUS,
+		},
+		Mount:  take.SetupMount{HeightM: setup.Mount.HeightM, PitchDeg: setup.Mount.PitchDeg},
+		Camera: cameraSnapshot,
+	}
 }

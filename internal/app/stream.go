@@ -15,14 +15,13 @@ import (
 
 type streamRequest struct {
 	ConfigPath string
-	Rig        rigConfig
+	Setup      setupConfig
 }
 
 type streamHeader struct {
-	FrameBytes int64   `json:"frame_bytes"`
-	PeriodNS   int64   `json:"period_ns"`
-	HeightM    float64 `json:"height_m"`
-	TiltDeg    float64 `json:"tilt_deg"`
+	FrameBytes int64      `json:"frame_bytes"`
+	PeriodNS   int64      `json:"period_ns"`
+	Mount      setupMount `json:"mount"`
 }
 
 func stream(request streamRequest, control io.Reader, stdout, stderr io.Writer) error {
@@ -33,8 +32,7 @@ func stream(request streamRequest, control io.Reader, stdout, stderr io.Writer) 
 	header := streamHeader{
 		FrameBytes: ready.radar.plan.BytesPerFrame,
 		PeriodNS:   int64(ready.radar.plan.FramePeriod),
-		HeightM:    request.Rig.HeightM,
-		TiltDeg:    request.Rig.TiltDeg,
+		Mount:      request.Setup.Mount,
 	}
 	if err := json.NewEncoder(stdout).Encode(header); err != nil {
 		return fmt.Errorf("write stream header: %w", err)
@@ -51,7 +49,7 @@ func prepareStream(request streamRequest, stderr io.Writer) (preparedRun, error)
 	if loaded.plan.NumberOfFrames != 0 || loaded.plan.ExpectedBytes != 0 {
 		return preparedRun{}, errors.New("stream plan must use frameCfg numFrames=0")
 	}
-	dcaSetup, err := dcaForRig(request.Rig)
+	dcaSetup, err := dcaForSetup(request.Setup)
 	if err != nil {
 		return preparedRun{}, err
 	}
@@ -65,17 +63,17 @@ func prepareStream(request streamRequest, stderr io.Writer) (preparedRun, error)
 	if err != nil {
 		return preparedRun{}, usageError{message: err.Error()}
 	}
-	ready, err := prepareHardware(request.Rig, loaded, dcaSetup, preparedSession)
+	ready, err := prepareHardware(request.Setup, loaded, dcaSetup, preparedSession)
 	if err != nil {
 		return preparedRun{}, err
 	}
 	fmt.Fprintf(
 		stderr,
-		"radar stream: IWR6843 period=%s bytes/frame=%d height=%.3fm tilt=%.0fdeg\n",
+		"radar stream: IWR6843 period=%s bytes/frame=%d height=%.3fm pitch=%.0fdeg\n",
 		loaded.plan.FramePeriod,
 		loaded.plan.BytesPerFrame,
-		request.Rig.HeightM,
-		request.Rig.TiltDeg,
+		request.Setup.Mount.HeightM,
+		request.Setup.Mount.PitchDeg,
 	)
 	return ready, nil
 }
@@ -101,7 +99,7 @@ func streamHardware(
 		resultErr = closeCaptureClient(resultErr, false, "DCA1000", dcaClient)
 	}()
 	controller, err := iwr6843.Open(ctx, iwr6843.Options{
-		EnhancedPort: request.Rig.Port,
+		EnhancedPort: request.Setup.Radar.Port,
 		Assets:       ready.assets,
 		Selectors:    ready.selectors,
 		Plan:         ready.link,

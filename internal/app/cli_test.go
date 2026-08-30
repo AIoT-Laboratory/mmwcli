@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,7 +22,7 @@ func TestPublicCLIStaysSmall(t *testing.T) {
 	}
 	help := stdout.String()
 	for _, command := range []string{
-		"mmwcli check", "mmwcli capture", "mmwcli stream", "mmwcli camera list", "mmwcli camera preview", "mmwcli version",
+		"mmwcli setup show", "mmwcli check", "mmwcli capture", "mmwcli stream", "mmwcli camera list", "mmwcli camera preview", "mmwcli version",
 	} {
 		if !strings.Contains(help, command) {
 			t.Fatalf("help missing %q", command)
@@ -39,11 +40,12 @@ func TestPublicCLIStaysSmall(t *testing.T) {
 	}
 }
 
-func TestCaptureFlagsRequireFiniteFramesAndRig(t *testing.T) {
+func TestCaptureFlagsRequireFiniteFramesAndSetup(t *testing.T) {
 	for _, arguments := range [][]string{
-		{"capture", "radar.cfg", "take"},
-		{"capture", "radar.cfg", "take", "--rig", "rig.json", "--frames", "0"},
-		{"check", "radar.cfg", "--rig", "rig.json", "--frames", "65536"},
+		{"capture", "radar.cfg", "take.capture"},
+		{"capture", "radar.cfg", "take.capture", "--setup", "setup.json", "--frames", "0"},
+		{"check", "radar.cfg", "--setup", "setup.json", "--frames", "65536"},
+		{"check", "radar.cfg", "--rig", "old.json", "--frames", "1", "--radar-only"},
 	} {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
@@ -53,18 +55,18 @@ func TestCaptureFlagsRequireFiniteFramesAndRig(t *testing.T) {
 	}
 }
 
-func TestStreamFlagsExposeOnlyConfigAndRig(t *testing.T) {
-	options, err := parseStreamOptions([]string{"radar.cfg", "--rig", "rig.json"}, io.Discard)
+func TestStreamFlagsExposeOnlyConfigAndSetup(t *testing.T) {
+	options, err := parseStreamOptions([]string{"radar.cfg", "--setup", "setup.json"}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.configPath != "radar.cfg" || options.rigPath != "rig.json" {
+	if options.configPath != "radar.cfg" || options.setupPath != "setup.json" {
 		t.Fatalf("stream options = %+v", options)
 	}
 	for _, arguments := range [][]string{
 		{"radar.cfg"},
-		{"radar.cfg", "--rig", "rig.json", "--frames", "1"},
-		{"radar.cfg", "--rig", "rig.json", "--camera", "id"},
+		{"radar.cfg", "--setup", "setup.json", "--frames", "1"},
+		{"radar.cfg", "--setup", "setup.json", "--camera", "id"},
 	} {
 		if _, err := parseStreamOptions(arguments, io.Discard); err == nil {
 			t.Fatalf("stream options accepted %v", arguments)
@@ -74,11 +76,11 @@ func TestStreamFlagsExposeOnlyConfigAndRig(t *testing.T) {
 
 func TestStreamHeaderIsOneExactJSONLine(t *testing.T) {
 	var output bytes.Buffer
-	header := streamHeader{FrameBytes: 4, PeriodNS: 10, HeightM: 1.5, TiltDeg: 90}
+	header := streamHeader{FrameBytes: 4, PeriodNS: 10, Mount: setupMount{HeightM: 1.5, PitchDeg: 90}}
 	if err := json.NewEncoder(&output).Encode(header); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := output.String(), "{\"frame_bytes\":4,\"period_ns\":10,\"height_m\":1.5,\"tilt_deg\":90}\n"; got != want {
+	if got, want := output.String(), "{\"frame_bytes\":4,\"period_ns\":10,\"mount\":{\"height_m\":1.5,\"pitch_deg\":90}}\n"; got != want {
 		t.Fatalf("stream header = %q, want %q", got, want)
 	}
 }
@@ -119,6 +121,54 @@ func TestStreamControlCancelsOnStopOrEOF(t *testing.T) {
 	})
 }
 
+func TestManagedCaptureControlRequiresExactStopLineOrEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	reader, writer := io.Pipe()
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+	go watchManagedStop(reader, cancel)
+	for _, ignored := range []string{"stop\r\n", " stop\n", "unknown\n"} {
+		if _, err := io.WriteString(writer, ignored); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("managed control accepted %q", ignored)
+		default:
+		}
+	}
+	if _, err := io.WriteString(writer, "stop\n"); err != nil {
+		t.Fatal(err)
+	}
+	waitForCancellation(t, ctx)
+}
+
+func TestCaptureCancellationExits130OnlyAfterCleanCameraShutdown(t *testing.T) {
+	var stderr bytes.Buffer
+	cleanCancellation := errors.Join(
+		context.Canceled,
+		fmt.Errorf("finish capture participant: %w", context.Canceled),
+	)
+	if code := commandExitCode("capture", cleanCancellation, &stderr); code != 130 {
+		t.Fatalf("clean cancellation exit = %d, stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "cleanup completed") {
+		t.Fatalf("clean cancellation message = %q", stderr.String())
+	}
+
+	stderr.Reset()
+	cameraCloseErr := errors.New("camera shutdown failed")
+	failedCleanup := errors.Join(context.Canceled, cameraCloseErr)
+	if code := commandExitCode("capture", failedCleanup, &stderr); code != 4 {
+		t.Fatalf("camera cleanup failure exit = %d, stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), cameraCloseErr.Error()) {
+		t.Fatalf("camera cleanup failure was hidden: %q", stderr.String())
+	}
+}
+
 func waitForCancellation(t *testing.T, ctx context.Context) {
 	t.Helper()
 	select {
@@ -128,95 +178,161 @@ func waitForCancellation(t *testing.T, ctx context.Context) {
 	}
 }
 
-func TestLoadRigResolvesFirmwareRelativeToRig(t *testing.T) {
+func TestLoadSetupResolvesFirmwareRelativeToSetup(t *testing.T) {
 	root := t.TempDir()
-	rigPath := filepath.Join(root, "rig.json")
+	setupPath := filepath.Join(root, "setup.json")
 	encoded := `{
-  "schema": "mmwcli.rig.v3",
-  "port": "COM3",
-  "bss": "firmware/bss.bin",
-  "mss": "firmware/mss.bin",
-  "d2xx": "AR-DevPack-EVM-012",
+  "schema": "mmwcli.setup.v1",
+  "radar": {"port": "COM3", "bss": "firmware/bss.bin", "mss": "firmware/mss.bin", "d2xx": "AR-DevPack-EVM-012"},
   "dca": {"host": "192.168.33.30", "device": "192.168.33.180", "delay_us": 50},
-  "height_m": 1.5,
-  "tilt_deg": 90
+  "mount": {"height_m": 1.5}
 }`
-	if err := os.WriteFile(rigPath, []byte(encoded), 0o644); err != nil {
+	if err := os.WriteFile(setupPath, []byte(encoded), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rig, err := loadRig(rigPath, true, "")
+	setup, err := loadSetup(setupPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rig.BSS != filepath.Join(root, "firmware", "bss.bin") ||
-		rig.MSS != filepath.Join(root, "firmware", "mss.bin") {
-		t.Fatalf("relative firmware paths not resolved: %+v", rig)
+	if setup.bssPath != filepath.Join(root, "firmware", "bss.bin") ||
+		setup.mssPath != filepath.Join(root, "firmware", "mss.bin") {
+		t.Fatalf("relative firmware paths not resolved: %+v", setup)
 	}
-	if _, err := loadRig(rigPath, false, ""); err == nil || !strings.Contains(err.Error(), "camera") {
+	if setup.Mount.PitchDeg != 90 {
+		t.Fatalf("default mount pitch = %v", setup.Mount.PitchDeg)
+	}
+	if _, err := setup.cameraConfig("camera", false); err == nil || !strings.Contains(err.Error(), "camera") {
 		t.Fatalf("camera requirement error = %v", err)
 	}
 }
 
-func TestLoadRigUsesStructuredCameraAndOverride(t *testing.T) {
-	root := t.TempDir()
-	rigPath := filepath.Join(root, "rig.json")
-	encoded := `{
-  "schema": "mmwcli.rig.v3",
-  "port": "COM3",
-  "bss": "bss.bin",
-  "mss": "mss.bin",
-  "d2xx": "AR-DevPack-EVM-012",
-  "dca": {"host": "192.168.33.30", "device": "192.168.33.180", "delay_us": 50},
-  "camera": {"device": "Default Camera", "width": 1280, "height": 720, "fps": 30, "max_bytes": 2097152},
-  "height_m": 1.5,
-  "tilt_deg": 90
-}`
-	if err := os.WriteFile(rigPath, []byte(encoded), 0o644); err != nil {
-		t.Fatal(err)
+func TestSetupShowAndMountUseOneStrictSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "setup.json")
+	writeTestSetup(t, path, false)
+	var stdout bytes.Buffer
+	if code := Run([]string{"setup", "show", path}, &stdout, io.Discard); code != 0 {
+		t.Fatalf("setup show exit = %d", code)
 	}
-	rig, err := loadRig(rigPath, false, "@device_pnp_camera")
-	if err != nil {
-		t.Fatal(err)
+	if !strings.Contains(stdout.String(), "\n  \"radar\": {") || strings.Contains(stdout.String(), "bssPath") {
+		t.Fatalf("setup show is not normalized JSON: %s", stdout.String())
 	}
-	if rig.Camera == nil || rig.Camera.Device != "@device_pnp_camera" || rig.Camera.Width != 1280 {
-		t.Fatalf("camera override = %#v", rig.Camera)
+	if code := Run(
+		[]string{"setup", "mount", path, "--height", "1.75", "--pitch", "90"},
+		io.Discard, io.Discard,
+	); code != 0 {
+		t.Fatalf("setup mount exit = %d", code)
+	}
+	setup, err := loadSetup(path)
+	if err != nil || setup.Mount.HeightM != 1.75 || setup.Mount.PitchDeg != 90 {
+		t.Fatalf("updated mount = %+v, %v", setup.Mount, err)
+	}
+	for _, pitch := range []string{"1", "0.5"} {
+		if code := Run(
+			[]string{"setup", "mount", path, "--height", "1.75", "--pitch", pitch},
+			io.Discard, io.Discard,
+		); code != 2 {
+			t.Fatalf("pitch %s exit = %d", pitch, code)
+		}
+	}
+	if code := Run(
+		[]string{"setup", "mount", path, "--height", "NaN", "--pitch", "90"},
+		io.Discard, io.Discard,
+	); code != 2 {
+		t.Fatalf("NaN height exit = %d", code)
 	}
 }
 
-func TestRigRequiresVersionThreeWithNinetyDegreeTilt(t *testing.T) {
+func TestLoadSetupUsesCameraFormatAndSelectedDevice(t *testing.T) {
+	root := t.TempDir()
+	setupPath := filepath.Join(root, "setup.json")
+	encoded := `{
+  "schema": "mmwcli.setup.v1",
+  "radar": {"port": "COM3", "bss": "bss.bin", "mss": "mss.bin", "d2xx": "AR-DevPack-EVM-012"},
+  "dca": {"host": "192.168.33.30", "device": "192.168.33.180", "delay_us": 50},
+  "mount": {"height_m": 1.5, "pitch_deg": 90},
+  "camera": {"width": 1280, "height": 720, "fps": 30, "max_bytes": 2097152}
+}`
+	if err := os.WriteFile(setupPath, []byte(encoded), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setup, err := loadSetup(setupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured, err := setup.cameraConfig("@device_pnp_camera", false)
+	if err != nil || configured.Device != "@device_pnp_camera" || configured.Width != 1280 {
+		t.Fatalf("camera config = %#v, %v", configured, err)
+	}
+}
+
+func writeTestSetup(t *testing.T, path string, camera bool) {
+	t.Helper()
+	cameraJSON := ""
+	if camera {
+		cameraJSON = `,
+  "camera": {"width": 1280, "height": 720, "fps": 30, "max_bytes": 2097152}`
+	}
+	encoded := fmt.Sprintf(`{
+  "schema": "mmwcli.setup.v1",
+  "radar": {"port": "COM3", "bss": "bss.bin", "mss": "mss.bin", "d2xx": "AR-DevPack-EVM-012"},
+  "dca": {"host": "192.168.33.30", "device": "192.168.33.180", "delay_us": 50},
+  "mount": {"height_m": 1.5, "pitch_deg": 90}%s
+}`, cameraJSON)
+	if err := os.WriteFile(path, []byte(encoded), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetupRequiresVersionOneAndDiscretePitch(t *testing.T) {
 	root := t.TempDir()
 	base := `{
   "schema": %q,
-  "port": "COM3",
-  "bss": "bss.bin",
-  "mss": "mss.bin",
-  "d2xx": "AR-DevPack-EVM-012",
+  "radar": {"port": "COM3", "bss": "bss.bin", "mss": "mss.bin", "d2xx": "AR-DevPack-EVM-012"},
   "dca": {"host": "192.168.33.30", "device": "192.168.33.180", "delay_us": 50},
-  "height_m": 1.5,
-  "tilt_deg": %v
+  "mount": {"height_m": 1.5, "pitch_deg": %v}
 }`
 	for index, test := range []struct {
 		schema string
-		tilt   any
+		pitch  any
+		valid  bool
 	}{
-		{schema: "mmwcli.rig.v2", tilt: 90},
-		{schema: "mmwcli.rig.v3", tilt: 0},
-		{schema: "mmwcli.rig.v3", tilt: 89.5},
+		{schema: "mmwcli.setup.v0", pitch: 90},
+		{schema: "mmwcli.setup.v1", pitch: 90, valid: true},
+		{schema: "mmwcli.setup.v1", pitch: 0, valid: true},
+		{schema: "mmwcli.setup.v1", pitch: 1},
+		{schema: "mmwcli.setup.v1", pitch: 0.5},
 	} {
-		path := filepath.Join(root, fmt.Sprintf("rig-%d.json", index))
-		if err := os.WriteFile(path, []byte(fmt.Sprintf(base, test.schema, test.tilt)), 0o644); err != nil {
+		path := filepath.Join(root, fmt.Sprintf("setup-%d.json", index))
+		if err := os.WriteFile(path, []byte(fmt.Sprintf(base, test.schema, test.pitch)), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := loadRig(path, true, ""); err == nil {
-			t.Fatalf("loadRig accepted schema=%s tilt=%v", test.schema, test.tilt)
+		_, err := loadSetup(path)
+		if (err == nil) != test.valid {
+			t.Fatalf("loadSetup schema=%s pitch=%v error = %v", test.schema, test.pitch, err)
 		}
+	}
+}
+
+func TestSetupRejectsStoredCameraDevice(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "setup.json")
+	writeTestSetup(t, path, true)
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded = bytes.Replace(encoded, []byte(`"camera": {`), []byte(`"camera": {"device":"old",`), 1)
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadSetup(path); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("stored camera device error = %v", err)
 	}
 }
 
 func TestCaptureFlagsRejectCameraWithRadarOnly(t *testing.T) {
 	for _, camera := range []string{"id", "   "} {
 		_, err := parseCaptureOptions(
-			"capture", "capture", []string{"radar.cfg", "take", "--rig", "rig.json", "--frames", "1", "--radar-only", "--camera", camera}, true, io.Discard,
+			"capture", "capture", []string{"radar.cfg", "take.capture", "--setup", "setup.json", "--frames", "1", "--radar-only", "--camera", camera}, true, io.Discard,
 		)
 		if err == nil || !strings.Contains(err.Error(), "--camera cannot") {
 			t.Fatalf("camera/radar-only error for %q = %v", camera, err)
@@ -225,10 +341,29 @@ func TestCaptureFlagsRejectCameraWithRadarOnly(t *testing.T) {
 }
 
 func TestCameraPreviewUsesCameraFlag(t *testing.T) {
-	rig, camera, err := parseCameraFlags(
-		"camera preview", "preview", []string{"--rig", "rig.json", "--camera", "camera-id"}, true, io.Discard,
+	setup, camera, err := parseCameraPreview([]string{"--setup", "setup.json", "--camera", "camera-id"}, io.Discard)
+	if err != nil || setup != "setup.json" || camera != "camera-id" {
+		t.Fatalf("preview = %q, %q, %v", setup, camera, err)
+	}
+}
+
+func TestCaptureOutputOwnsOnePartSuffix(t *testing.T) {
+	valid, err := parseCaptureOptions(
+		"capture", "capture",
+		[]string{"radar.cfg", "take.capture", "--setup", "setup.json", "--frames", "1", "--radar-only"},
+		true, io.Discard,
 	)
-	if err != nil || rig != "rig.json" || camera != "camera-id" {
-		t.Fatalf("preview options = %q, %q, %v", rig, camera, err)
+	if err != nil || valid.outputPath != "take.capture" {
+		t.Fatalf("valid output = %+v, %v", valid, err)
+	}
+	for _, output := range []string{"take", "take.capture.part"} {
+		_, err := parseCaptureOptions(
+			"capture", "capture",
+			[]string{"radar.cfg", output, "--setup", "setup.json", "--frames", "1", "--radar-only"},
+			true, io.Discard,
+		)
+		if err == nil {
+			t.Fatalf("capture accepted output %q", output)
+		}
 	}
 }

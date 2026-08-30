@@ -1,0 +1,24 @@
+{
+  "schema": "mmwcli.setup.v1",
+  "radar": {
+    "port": "COM3",
+    "bss": "D:/Apps/ti/mmwave_studio_02_01_01_00/rf_eval_firmware/radarss/xwr68xx_radarss.bin",
+    "mss": "D:/Apps/ti/mmwave_studio_02_01_01_00/rf_eval_firmware/masterss/xwr68xx_masterss.bin",
+    "d2xx": "AR-DevPack-EVM-012"
+  },
+  "dca": {
+    "host": "192.168.33.30",
+    "device": "192.168.33.180",
+    "delay_us": 50
+  },
+  "mount": {
+    "height_m": 1.5,
+    "pitch_deg": 90
+  },
+  "camera": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "max_bytes": 2097152
+  }
+}

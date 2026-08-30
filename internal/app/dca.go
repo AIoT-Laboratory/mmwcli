@@ -14,14 +14,14 @@ type dcaConfig struct {
 	delay    int
 }
 
-func dcaForRig(rig rigConfig) (dcaConfig, error) {
+func dcaForSetup(setup setupConfig) (dcaConfig, error) {
 	control := dca.DefaultOptions()
 	receiver := dca.DefaultReceiverConfig()
-	deviceIP, err := parseRigIPv4("dca.device", rig.DCA.Device)
+	deviceIP, err := parseSetupIPv4("dca.device", setup.DCA.Device)
 	if err != nil {
 		return dcaConfig{}, err
 	}
-	hostIP, err := parseRigIPv4("dca.host", rig.DCA.Host)
+	hostIP, err := parseSetupIPv4("dca.host", setup.DCA.Host)
 	if err != nil {
 		return dcaConfig{}, err
 	}
@@ -33,11 +33,11 @@ func dcaForRig(rig rigConfig) (dcaConfig, error) {
 		control:  control,
 		receiver: receiver,
 		fpga:     fpga,
-		delay:    rig.DCA.DelayUS,
+		delay:    setup.DCA.DelayUS,
 	}, nil
 }
 
-func parseRigIPv4(name, value string) (net.IP, error) {
+func parseSetupIPv4(name, value string) (net.IP, error) {
 	address := net.ParseIP(value)
 	if address == nil || address.To4() == nil {
 		return nil, fmt.Errorf("%s must be an IPv4 address: %s", name, value)
