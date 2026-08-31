@@ -22,6 +22,7 @@ type streamHeader struct {
 	FrameBytes int64      `json:"frame_bytes"`
 	PeriodNS   int64      `json:"period_ns"`
 	Mount      setupMount `json:"mount"`
+	ROI        *setupROI  `json:"roi,omitempty"`
 }
 
 func stream(request streamRequest, control io.Reader, stdout, stderr io.Writer) error {
@@ -33,6 +34,7 @@ func stream(request streamRequest, control io.Reader, stdout, stderr io.Writer) 
 		FrameBytes: ready.radar.plan.BytesPerFrame,
 		PeriodNS:   int64(ready.radar.plan.FramePeriod),
 		Mount:      request.Setup.Mount,
+		ROI:        request.Setup.ROI,
 	}
 	if err := json.NewEncoder(stdout).Encode(header); err != nil {
 		return fmt.Errorf("write stream header: %w", err)

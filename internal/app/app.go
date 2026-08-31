@@ -350,6 +350,7 @@ func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "usage:")
 	fmt.Fprintln(writer, "  mmwcli setup show SETUP")
 	fmt.Fprintln(writer, "  mmwcli setup mount SETUP --height M --pitch 90")
+	fmt.Fprintln(writer, "  mmwcli setup roi SETUP --min-forward M --max-forward M --min-lateral M --max-lateral M --min-up M --max-up M")
 	fmt.Fprintln(writer, "  mmwcli probe --setup SETUP [--camera DEVICE]")
 	fmt.Fprintln(writer, "  mmwcli check RADAR_CFG --setup SETUP --frames N [--camera DEVICE | --radar-only]")
 	fmt.Fprintln(writer, "  mmwcli capture RADAR_CFG TAKE.capture --setup SETUP --frames N [--camera DEVICE | --radar-only] [--control-stdin]")

@@ -25,9 +25,9 @@ Automated checks are offline. They do not open radar, DCA1000, serial, USB, or c
 ## Hardware setup
 
 Copy `hardware/setup.example.json` to the ignored `hardware/setup.json`, then set the Enhanced COM
-port, measured mount height, and camera format once. The tracked example already points to this
-workstation's installed mmWave Studio 2.1.1.0 xWR68xx BSS/MSS files. Relative firmware paths, when
-used, resolve beside the setup file.
+port, measured mount height, physical scene ROI, and camera format once. The tracked example already
+points to this workstation's installed mmWave Studio 2.1.1.0 xWR68xx BSS/MSS files. Relative
+firmware paths, when used, resolve beside the setup file.
 
 `pitch_deg` is boresight pitch and accepts only `90` (the current downward-looking research mount)
 or `0` (a horizontal control). Missing pitch defaults to `90`; the tracked example is explicit.
@@ -36,7 +36,15 @@ Inspect or update the mount with:
 ```powershell
 mmwcli setup show hardware\setup.json
 mmwcli setup mount hardware\setup.json --height 1.5 --pitch 90
+mmwcli setup roi hardware\setup.json `
+  --min-forward 0.5 --max-forward 5.5 `
+  --min-lateral -1.5 --max-lateral 1.5 `
+  --min-up 0 --max-up 2.2
 ```
+
+ROI coordinates are `[forward, lateral, up]` metres in the level frame. The ROI is editable
+collection metadata for downstream DSP and visualization; mmwcli never crops or changes raw ADC
+bytes with it. A setup created before ROI was added remains valid and simply has no ROI metadata.
 
 List DirectShow cameras without loading radar hardware configuration, then preview any returned
 device. The JSON result contains each friendly `name` plus its unambiguous FFmpeg `id`:
@@ -85,8 +93,8 @@ mmwcli stream hardware\iwr6843.cfg --setup hardware\setup.json
 ```
 
 The effective in-memory CFG always uses `frameCfg numFrames=0`; the source file is unchanged. stdout
-starts with one JSON line containing `frame_bytes`, `period_ns`, and
-`mount: {height_m, pitch_deg}`. Every remaining byte belongs to fixed-size complete ADC frames.
+starts with one JSON line containing `frame_bytes`, `period_ns`, `mount`, and `roi` when configured.
+Every remaining byte belongs to fixed-size complete ADC frames.
 Logs go to stderr. `stream` never opens a camera or writes a take. Ctrl+C stops the radar and
 DCA1000 and discards any incomplete final frame.
 An exact `stop` line or stdin EOF performs the same cleanup; other stdin lines are ignored.
@@ -112,8 +120,9 @@ take-001.capture/
   camera.index.bin  # absent with --radar-only
 ```
 
-`setup.json` is the immutable normalized `mmwcli.snapshot.v1` used for the capture; `session.json`
-uses `mmwcli.take.v3` and references its bytes and SHA-256. Radar time is a bounded frame-start
+`setup.json` is the immutable normalized `mmwcli.snapshot.v1` used for the capture, including its
+mount and optional physical ROI. `session.json` uses `mmwcli.take.v3` and references its bytes and
+SHA-256. Radar time is a bounded frame-start
 observation. Camera time is complete-JPEG delivery time, not exposure time. Files are staged under
 `take-001.capture.part` and published as `take-001.capture` only after the requested radar frames
 and required camera recording complete. mmwcore converts this raw capture to the

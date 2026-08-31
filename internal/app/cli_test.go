@@ -22,7 +22,7 @@ func TestPublicCLIStaysSmall(t *testing.T) {
 	}
 	help := stdout.String()
 	for _, command := range []string{
-		"mmwcli setup show", "mmwcli probe", "mmwcli check", "mmwcli capture", "mmwcli stream", "mmwcli camera list", "mmwcli camera preview", "mmwcli version",
+		"mmwcli setup show", "mmwcli setup roi", "mmwcli probe", "mmwcli check", "mmwcli capture", "mmwcli stream", "mmwcli camera list", "mmwcli camera preview", "mmwcli version",
 	} {
 		if !strings.Contains(help, command) {
 			t.Fatalf("help missing %q", command)
@@ -81,6 +81,26 @@ func TestStreamHeaderIsOneExactJSONLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, want := output.String(), "{\"frame_bytes\":4,\"period_ns\":10,\"mount\":{\"height_m\":1.5,\"pitch_deg\":90}}\n"; got != want {
+		t.Fatalf("stream header = %q, want %q", got, want)
+	}
+}
+
+func TestStreamHeaderIncludesConfiguredROI(t *testing.T) {
+	var output bytes.Buffer
+	roi := setupROI{
+		Frame: levelROIFrame,
+		MinM:  [3]float64{0.5, -1.5, 0},
+		MaxM:  [3]float64{5.5, 1.5, 2.2},
+	}
+	header := streamHeader{
+		FrameBytes: 4, PeriodNS: 10,
+		Mount: setupMount{HeightM: 1.5, PitchDeg: 90}, ROI: &roi,
+	}
+	if err := json.NewEncoder(&output).Encode(header); err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"frame_bytes\":4,\"period_ns\":10,\"mount\":{\"height_m\":1.5,\"pitch_deg\":90},\"roi\":{\"frame\":\"level_forward_lateral_up\",\"min_m\":[0.5,-1.5,0],\"max_m\":[5.5,1.5,2.2]}}\n"
+	if got := output.String(); got != want {
 		t.Fatalf("stream header = %q, want %q", got, want)
 	}
 }
@@ -201,8 +221,97 @@ func TestLoadSetupResolvesFirmwareRelativeToSetup(t *testing.T) {
 	if setup.Mount.PitchDeg != 90 {
 		t.Fatalf("default mount pitch = %v", setup.Mount.PitchDeg)
 	}
+	if setup.ROI != nil {
+		t.Fatalf("legacy setup gained ROI: %+v", setup.ROI)
+	}
 	if _, err := setup.cameraConfig("camera", false); err == nil || !strings.Contains(err.Error(), "camera") {
 		t.Fatalf("camera requirement error = %v", err)
+	}
+}
+
+func TestSetupROIUpdatesPhysicalBounds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "setup.json")
+	writeTestSetup(t, path, false)
+	arguments := []string{
+		"setup", "roi", path,
+		"--min-forward", "0.5", "--max-forward", "6.5",
+		"--min-lateral", "-2", "--max-lateral", "2",
+		"--min-up", "0", "--max-up", "2.5",
+	}
+	if code := Run(arguments, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("setup roi exit = %d", code)
+	}
+	setup, err := loadSetup(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := setupROI{
+		Frame: levelROIFrame,
+		MinM:  [3]float64{0.5, -2, 0},
+		MaxM:  [3]float64{6.5, 2, 2.5},
+	}
+	if setup.ROI == nil || *setup.ROI != want {
+		t.Fatalf("updated ROI = %+v, want %+v", setup.ROI, want)
+	}
+}
+
+func TestSetupROIRejectsInvalidBounds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "setup.json")
+	writeTestSetup(t, path, false)
+	for _, arguments := range [][]string{
+		{"setup", "roi", path},
+		{"setup", "roi", path, "--min-forward", "-0.1", "--max-forward", "5", "--min-lateral", "-1", "--max-lateral", "1", "--min-up", "0", "--max-up", "2"},
+		{"setup", "roi", path, "--min-forward", "5", "--max-forward", "5", "--min-lateral", "-1", "--max-lateral", "1", "--min-up", "0", "--max-up", "2"},
+		{"setup", "roi", path, "--min-forward", "0.5", "--max-forward", "5", "--min-lateral", "-1", "--max-lateral", "1", "--min-up", "-0.1", "--max-up", "2"},
+		{"setup", "roi", path, "--min-forward", "NaN", "--max-forward", "5", "--min-lateral", "-1", "--max-lateral", "1", "--min-up", "0", "--max-up", "2"},
+	} {
+		if code := Run(arguments, io.Discard, io.Discard); code != 2 {
+			t.Fatalf("Run(%v) exit = %d", arguments, code)
+		}
+	}
+	setup, err := loadSetup(path)
+	if err != nil || setup.ROI != nil {
+		t.Fatalf("invalid update changed setup ROI: %+v, %v", setup.ROI, err)
+	}
+}
+
+func TestValidateROIRequiresExactLevelFrame(t *testing.T) {
+	valid := setupROI{
+		Frame: levelROIFrame,
+		MinM:  [3]float64{0.5, -1.5, 0},
+		MaxM:  [3]float64{5.5, 1.5, 2.2},
+	}
+	if err := validateROI(valid); err != nil {
+		t.Fatal(err)
+	}
+	invalid := valid
+	invalid.Frame = "sensor_xyz"
+	if err := validateROI(invalid); err == nil {
+		t.Fatal("ROI with the wrong coordinate frame was accepted")
+	}
+}
+
+func TestSetupROIVectorsRequireThreeValues(t *testing.T) {
+	for _, encoded := range []string{"[0, 1]", "[0, 1, 2, 3]"} {
+		var vector setupVector
+		if err := json.Unmarshal([]byte(encoded), &vector); err == nil {
+			t.Fatalf("setup ROI vector accepted %s", encoded)
+		}
+	}
+}
+
+func TestTrackedSetupExampleHasResearchROI(t *testing.T) {
+	setup, err := loadSetup(filepath.Join("..", "..", "hardware", "setup.example.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := setupROI{
+		Frame: levelROIFrame,
+		MinM:  [3]float64{0.5, -1.5, 0},
+		MaxM:  [3]float64{5.5, 1.5, 2.2},
+	}
+	if setup.ROI == nil || *setup.ROI != want {
+		t.Fatalf("tracked setup ROI = %+v, want %+v", setup.ROI, want)
 	}
 }
 

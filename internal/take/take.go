@@ -45,6 +45,7 @@ type SetupSnapshot struct {
 	Radar  SetupRadar     `json:"radar"`
 	DCA    SetupDCA       `json:"dca"`
 	Mount  SetupMount     `json:"mount"`
+	ROI    *SetupROI      `json:"roi,omitempty"`
 	Camera *camera.Config `json:"camera"`
 }
 
@@ -72,6 +73,12 @@ type SetupDCA struct {
 type SetupMount struct {
 	HeightM  float64 `json:"height_m"`
 	PitchDeg float64 `json:"pitch_deg"`
+}
+
+type SetupROI struct {
+	Frame string     `json:"frame"`
+	MinM  [3]float64 `json:"min_m"`
+	MaxM  [3]float64 `json:"max_m"`
 }
 
 type Capture struct {
@@ -410,6 +417,9 @@ func validateSetupSnapshot(snapshot SetupSnapshot, selectedCamera *camera.Config
 			return errors.New("setup snapshot firmware SHA-256 is invalid")
 		}
 	}
+	if snapshot.ROI != nil && !validSetupROI(*snapshot.ROI) {
+		return errors.New("setup snapshot ROI is invalid")
+	}
 	if (snapshot.Camera == nil) != (selectedCamera == nil) {
 		return errors.New("setup snapshot camera does not match capture")
 	}
@@ -419,6 +429,20 @@ func validateSetupSnapshot(snapshot SetupSnapshot, selectedCamera *camera.Config
 		}
 	}
 	return nil
+}
+
+func validSetupROI(roi SetupROI) bool {
+	if roi.Frame != "level_forward_lateral_up" || roi.MinM[0] < 0 || roi.MinM[2] < 0 {
+		return false
+	}
+	for index := range roi.MinM {
+		minimum, maximum := roi.MinM[index], roi.MaxM[index]
+		if math.IsNaN(minimum) || math.IsInf(minimum, 0) ||
+			math.IsNaN(maximum) || math.IsInf(maximum, 0) || minimum >= maximum {
+			return false
+		}
+	}
+	return true
 }
 
 func validMountPitch(pitchDeg float64) bool {

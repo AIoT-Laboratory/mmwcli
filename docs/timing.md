@@ -22,8 +22,10 @@ TAKE.capture/
 - IWR6843 data/config identities and selected camera results;
 - camera frame count, payload/index identity, and timing semantics when present.
 
-`setup.json` records boresight `pitch_deg`. Pitch `90` is the primary downward-looking installation;
-pitch `0` remains the horizontal control. Stream headers preserve the selected value.
+`setup.json` records boresight `pitch_deg` and, when configured, level-frame ROI bounds in
+`[forward, lateral, up]` metres. Pitch `90` is the primary downward-looking installation; pitch `0`
+remains the horizontal control. Stream headers preserve the mount and ROI. ROI is metadata for
+downstream processing and does not crop raw acquisition.
 
 ## Time meaning
 

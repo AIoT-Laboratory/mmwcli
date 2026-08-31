@@ -18,6 +18,7 @@ The public surface is intentionally small:
 ```text
 mmwcli setup show SETUP
 mmwcli setup mount SETUP --height M --pitch 90
+mmwcli setup roi SETUP --min-forward M --max-forward M --min-lateral M --max-lateral M --min-up M --max-up M
 mmwcli probe --setup SETUP [--camera DEVICE]
 mmwcli check RADAR_CFG --setup SETUP --frames N [--camera DEVICE | --radar-only]
 mmwcli capture RADAR_CFG TAKE.capture --setup SETUP --frames N [--camera DEVICE | --radar-only] [--control-stdin]
@@ -28,6 +29,9 @@ mmwcli version
 ```
 
 Pitch `90` is the primary downward-looking installation; pitch `0` remains the horizontal control.
+The optional level-frame ROI stores `[forward, lateral, up]` metre bounds for downstream processing.
+It is frozen with each finite take and included in the stream header, but never affects acquisition
+or raw ADC bytes.
 
 `check` parses the radar configuration and setup, derives exact frame geometry, validates firmware
 and DCA settings, loads and closes D2XX, and checks the fixed FFmpeg camera executable. It does not

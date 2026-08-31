@@ -256,6 +256,14 @@ func setupSnapshot(setup setupConfig, assets iwr6843.Assets, selectedCamera *cam
 		value := *selectedCamera
 		cameraSnapshot = &value
 	}
+	var roiSnapshot *take.SetupROI
+	if setup.ROI != nil {
+		roiSnapshot = &take.SetupROI{
+			Frame: setup.ROI.Frame,
+			MinM:  [3]float64(setup.ROI.MinM),
+			MaxM:  [3]float64(setup.ROI.MaxM),
+		}
+	}
 	return take.SetupSnapshot{
 		Schema: take.SetupSchema,
 		Radar: take.SetupRadar{
@@ -266,6 +274,7 @@ func setupSnapshot(setup setupConfig, assets iwr6843.Assets, selectedCamera *cam
 			Host: setup.DCA.Host, Device: setup.DCA.Device, DelayUS: setup.DCA.DelayUS,
 		},
 		Mount:  take.SetupMount{HeightM: setup.Mount.HeightM, PitchDeg: setup.Mount.PitchDeg},
+		ROI:    roiSnapshot,
 		Camera: cameraSnapshot,
 	}
 }

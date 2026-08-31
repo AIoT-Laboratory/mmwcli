@@ -99,6 +99,36 @@ func TestSetupSnapshotAcceptsOnlySupportedMountPitches(t *testing.T) {
 	}
 }
 
+func TestSetupSnapshotAcceptsOptionalValidROI(t *testing.T) {
+	snapshot := testSetupSnapshot()
+	if err := validateSetupSnapshot(snapshot, nil); err != nil {
+		t.Fatalf("legacy snapshot without ROI rejected: %v", err)
+	}
+	snapshot.ROI = &SetupROI{
+		Frame: "level_forward_lateral_up",
+		MinM:  [3]float64{0.5, -1.5, 0},
+		MaxM:  [3]float64{5.5, 1.5, 2.2},
+	}
+	if err := validateSetupSnapshot(snapshot, nil); err != nil {
+		t.Fatalf("valid ROI rejected: %v", err)
+	}
+	validROI := *snapshot.ROI
+	for _, mutate := range []func(*SetupROI){
+		func(roi *SetupROI) { roi.Frame = "sensor_xyz" },
+		func(roi *SetupROI) { roi.MinM[0] = -0.1 },
+		func(roi *SetupROI) { roi.MinM[2] = -0.1 },
+		func(roi *SetupROI) { roi.MaxM[1] = roi.MinM[1] },
+		func(roi *SetupROI) { roi.MaxM[0] = math.Inf(1) },
+	} {
+		invalid := validROI
+		mutate(&invalid)
+		snapshot.ROI = &invalid
+		if err := validateSetupSnapshot(snapshot, nil); err == nil {
+			t.Fatalf("invalid ROI accepted: %+v", invalid)
+		}
+	}
+}
+
 func testSetupSnapshot() SetupSnapshot {
 	return SetupSnapshot{
 		Schema: SetupSchema,

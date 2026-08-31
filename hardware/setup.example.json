@@ -15,6 +15,11 @@
     "height_m": 1.5,
     "pitch_deg": 90
   },
+  "roi": {
+    "frame": "level_forward_lateral_up",
+    "min_m": [0.5, -1.5, 0.0],
+    "max_m": [5.5, 1.5, 2.2]
+  },
   "camera": {
     "width": 1280,
     "height": 720,

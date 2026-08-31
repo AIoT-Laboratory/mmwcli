@@ -18,6 +18,7 @@ import (
 const (
 	setupSchema          = "mmwcli.setup.v1"
 	defaultMountPitchDeg = 90
+	levelROIFrame        = "level_forward_lateral_up"
 )
 
 type setupConfig struct {
@@ -25,6 +26,7 @@ type setupConfig struct {
 	Radar  setupRadar         `json:"radar"`
 	DCA    setupDCA           `json:"dca"`
 	Mount  setupMount         `json:"mount"`
+	ROI    *setupROI          `json:"roi,omitempty"`
 	Camera *setupCameraFormat `json:"camera,omitempty"`
 
 	path    string
@@ -48,6 +50,26 @@ type setupDCA struct {
 type setupMount struct {
 	HeightM  float64 `json:"height_m"`
 	PitchDeg float64 `json:"pitch_deg"`
+}
+
+type setupROI struct {
+	Frame string      `json:"frame"`
+	MinM  setupVector `json:"min_m"`
+	MaxM  setupVector `json:"max_m"`
+}
+
+type setupVector [3]float64
+
+func (vector *setupVector) UnmarshalJSON(encoded []byte) error {
+	var values []float64
+	if err := json.Unmarshal(encoded, &values); err != nil {
+		return err
+	}
+	if len(values) != len(vector) {
+		return errors.New("setup ROI vectors must contain exactly three values")
+	}
+	copy(vector[:], values)
+	return nil
 }
 
 type setupCameraFormat struct {
@@ -121,6 +143,11 @@ func (setup setupConfig) validate() error {
 	if err := validateMount(setup.Mount); err != nil {
 		return err
 	}
+	if setup.ROI != nil {
+		if err := validateROI(*setup.ROI); err != nil {
+			return err
+		}
+	}
 	if setup.Camera != nil {
 		if err := setup.Camera.config("validation-device").Validate(); err != nil {
 			return fmt.Errorf("setup camera: %w", err)
@@ -136,6 +163,26 @@ func validateMount(mount setupMount) error {
 	if math.IsNaN(mount.PitchDeg) || math.IsInf(mount.PitchDeg, 0) ||
 		(mount.PitchDeg != 0 && mount.PitchDeg != defaultMountPitchDeg) {
 		return errors.New("setup mount.pitch_deg must be 0 or 90")
+	}
+	return nil
+}
+
+func validateROI(roi setupROI) error {
+	if roi.Frame != levelROIFrame {
+		return fmt.Errorf("setup roi.frame must be %q", levelROIFrame)
+	}
+	for index, axis := range []string{"forward", "lateral", "up"} {
+		minimum, maximum := roi.MinM[index], roi.MaxM[index]
+		if math.IsNaN(minimum) || math.IsInf(minimum, 0) ||
+			math.IsNaN(maximum) || math.IsInf(maximum, 0) || minimum >= maximum {
+			return fmt.Errorf("setup roi %s bounds must be finite and increasing", axis)
+		}
+	}
+	if roi.MinM[0] < 0 {
+		return errors.New("setup roi minimum forward distance must be non-negative")
+	}
+	if roi.MinM[2] < 0 {
+		return errors.New("setup roi minimum height must be non-negative")
 	}
 	return nil
 }
