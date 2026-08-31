@@ -17,7 +17,7 @@ Go 1.26 or newer and the FTDI D2XX Windows library are required.
 ```powershell
 go test ./...
 go vet ./...
-go build -trimpath -tags ftd2xx -o bin\mmwcli.exe .\cmd\mmwcli
+go build -trimpath -o bin\mmwcli.exe .\cmd\mmwcli
 ```
 
 Automated checks are offline. They do not open radar, DCA1000, serial, USB, or camera hardware.

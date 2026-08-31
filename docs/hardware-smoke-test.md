@@ -7,7 +7,7 @@ mocked Playwright runs do not satisfy it.
 
 1. Put the IWR6843 in SOP2 host-download mode, connect Enhanced COM and DCA1000, and use the
    dedicated `192.168.33.30/24` host interface.
-2. Build `mmwcli/bin/mmwcli.exe` with `-tags ftd2xx`.
+2. Build `mmwcli/bin/mmwcli.exe` with the standard README command.
 3. Copy `mmwcli/hardware/setup.example.json` to the ignored
    `mmwcli/hardware/setup.json`. The example already points to the installed xWR68xx BSS/MSS files;
    enter the real COM port, D2XX description, DCA addresses, measured height, and camera format.

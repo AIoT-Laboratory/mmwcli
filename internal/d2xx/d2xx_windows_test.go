@@ -1,4 +1,4 @@
-//go:build windows && ftd2xx
+//go:build windows
 
 package d2xx
 

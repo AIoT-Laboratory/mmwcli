@@ -1,4 +1,4 @@
-//go:build windows && !ftd2xx
+//go:build !windows
 
 package d2xx
 
@@ -7,5 +7,5 @@ import (
 )
 
 func openNative() (nativeLibrary, error) {
-	return nil, errors.New("FTDI D2XX backend requires the Windows ftd2xx build tag")
+	return nil, errors.New("FTDI D2XX backend requires Windows")
 }
