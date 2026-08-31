@@ -17,7 +17,7 @@ The public surface is intentionally small:
 
 ```text
 mmwcli setup show SETUP
-mmwcli setup mount SETUP --height M --pitch 90
+mmwcli setup mount SETUP --height M --pitch DEG
 mmwcli setup roi SETUP --min-forward M --max-forward M --min-lateral M --max-lateral M --min-up M --max-up M
 mmwcli probe --setup SETUP [--camera DEVICE]
 mmwcli check RADAR_CFG --setup SETUP --frames N [--camera DEVICE | --radar-only]
@@ -28,7 +28,7 @@ mmwcli camera preview --setup SETUP --camera ID
 mmwcli version
 ```
 
-Pitch `90` is the primary downward-looking installation; pitch `0` remains the horizontal control.
+Pitch is measured downward from horizontal as `0`, `30`, or `90`; missing pitch defaults to `0`.
 The optional level-frame ROI stores `[forward, lateral, up]` metre bounds for downstream processing.
 It is frozen with each finite take and included in the stream header, but never affects acquisition
 or raw ADC bytes.

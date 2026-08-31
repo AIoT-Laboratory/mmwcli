@@ -17,7 +17,7 @@ import (
 
 const (
 	setupSchema          = "mmwcli.setup.v1"
-	defaultMountPitchDeg = 90
+	defaultMountPitchDeg = 0
 	levelROIFrame        = "level_forward_lateral_up"
 )
 
@@ -161,8 +161,8 @@ func validateMount(mount setupMount) error {
 		return errors.New("setup mount.height_m must be in (0, 10]")
 	}
 	if math.IsNaN(mount.PitchDeg) || math.IsInf(mount.PitchDeg, 0) ||
-		(mount.PitchDeg != 0 && mount.PitchDeg != defaultMountPitchDeg) {
-		return errors.New("setup mount.pitch_deg must be 0 or 90")
+		(mount.PitchDeg != 0 && mount.PitchDeg != 30 && mount.PitchDeg != 90) {
+		return errors.New("setup mount.pitch_deg must be 0, 30, or 90")
 	}
 	return nil
 }

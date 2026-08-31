@@ -10,9 +10,8 @@ mocked Playwright runs do not satisfy it.
 2. Build `mmwcli/bin/mmwcli.exe` with the standard README command.
 3. Copy `mmwcli/hardware/setup.example.json` to the ignored
    `mmwcli/hardware/setup.json`. The example already points to the installed xWR68xx BSS/MSS files;
-   enter the real COM port, D2XX description, DCA addresses, measured height, and camera format.
-   use `pitch_deg: 90` for the primary downward-looking mount; use `0` only for a deliberate
-   horizontal control.
+   enter the real COM port, D2XX description, DCA addresses, measured height, downward pitch, and
+   camera format. Choose `0`, `30`, or `90`; `0` is horizontal and `90` is vertical down.
 4. Confirm that no other radar, DCA1000, camera, or OpenMMW process is running.
 
 From `mmwcli`, validate the request without opening hardware:
@@ -28,7 +27,7 @@ Then start the actual entry point from `openmmw` and open `http://127.0.0.1:5173
 bun run --cwd=web dev
 ```
 
-The Setup card must show the measured height and pitch `90`. Refresh cameras, explicitly select the
+The Setup card must show the measured height and pitch. Refresh cameras, explicitly select the
 device under test (choose a non-first device when more than one is present), and require a real JPEG
 Preview before capture.
 
@@ -53,7 +52,7 @@ For each completed take, run the strict reader from the OpenMMW environment:
 .venv\Scripts\python.exe -c "from mmwcore.io import open_take; t=open_take(r'dataset/takes/smoke/hardware/radar/take-001'); t.archive.verify_all(); print(t.frame_count,t.height_m,t.pitch_deg,t.camera is None)"
 ```
 
-Both must print 30 frames, the measured height, pitch `90`, and `True`. The strict reader checks the
+Both must print 30 frames, the measured height and pitch, and `True`. The strict reader checks the
 session/setup references, file sizes and hashes, radar CFG/archive agreement, and camera payload and
 index. Successful conversion must leave only the verified directory; `.capture` and `.capture.part`
 must be absent.

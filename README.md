@@ -29,13 +29,13 @@ port, measured mount height, physical scene ROI, and camera format once. The tra
 points to this workstation's installed mmWave Studio 2.1.1.0 xWR68xx BSS/MSS files. Relative
 firmware paths, when used, resolve beside the setup file.
 
-`pitch_deg` is boresight pitch and accepts only `90` (the current downward-looking research mount)
-or `0` (a horizontal control). Missing pitch defaults to `90`; the tracked example is explicit.
+`pitch_deg` is the downward boresight angle from horizontal: `0` is horizontal, `30` is the tilted
+mount, and `90` is vertical down. A missing value defaults to `0`.
 Inspect or update the mount with:
 
 ```powershell
 mmwcli setup show hardware\setup.json
-mmwcli setup mount hardware\setup.json --height 1.5 --pitch 90
+mmwcli setup mount hardware\setup.json --height 1.5 --pitch 0
 mmwcli setup roi hardware\setup.json `
   --min-forward 0.5 --max-forward 5.5 `
   --min-lateral -1.5 --max-lateral 1.5 `

@@ -18,7 +18,7 @@ func TestSetupSnapshotKeepsFirmwareIdentityWithoutSourcePaths(t *testing.T) {
 		DCA: setupDCA{
 			Host: "192.168.33.30", Device: "192.168.33.180", DelayUS: 50,
 		},
-		Mount: setupMount{HeightM: 1.5, PitchDeg: 90},
+		Mount: setupMount{HeightM: 1.5, PitchDeg: 30},
 		ROI:   &roi,
 	}
 	assets := iwr6843.Assets{
@@ -32,7 +32,7 @@ func TestSetupSnapshotKeepsFirmwareIdentityWithoutSourcePaths(t *testing.T) {
 		},
 	}
 	snapshot := setupSnapshot(setup, assets, nil)
-	if snapshot.Mount.PitchDeg != 90 {
+	if snapshot.Mount.PitchDeg != 30 {
 		t.Fatalf("snapshot mount = %+v", snapshot.Mount)
 	}
 	if snapshot.ROI == nil || snapshot.ROI.Frame != levelROIFrame || snapshot.ROI.MaxM[0] != 5.5 {

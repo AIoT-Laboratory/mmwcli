@@ -81,8 +81,8 @@ func TestRadarOnlyTakePublishesFlatFiles(t *testing.T) {
 	}
 }
 
-func TestSetupSnapshotAcceptsOnlySupportedMountPitches(t *testing.T) {
-	for _, pitchDeg := range []float64{0, 90} {
+func TestSetupSnapshotAcceptsDownwardMountPitch(t *testing.T) {
+	for _, pitchDeg := range []float64{0, 30, 90} {
 		snapshot := testSetupSnapshot()
 		snapshot.Mount.PitchDeg = pitchDeg
 		if err := validateSetupSnapshot(snapshot, nil); err != nil {
@@ -90,7 +90,7 @@ func TestSetupSnapshotAcceptsOnlySupportedMountPitches(t *testing.T) {
 		}
 	}
 
-	for _, pitchDeg := range []float64{-90, 45, math.Inf(1), math.NaN()} {
+	for _, pitchDeg := range []float64{-30, 0.5, 45, 90.5, math.Inf(1), math.NaN()} {
 		snapshot := testSetupSnapshot()
 		snapshot.Mount.PitchDeg = pitchDeg
 		if err := validateSetupSnapshot(snapshot, nil); err == nil {

@@ -23,8 +23,8 @@ TAKE.capture/
 - camera frame count, payload/index identity, and timing semantics when present.
 
 `setup.json` records boresight `pitch_deg` and, when configured, level-frame ROI bounds in
-`[forward, lateral, up]` metres. Pitch `90` is the primary downward-looking installation; pitch `0`
-remains the horizontal control. Stream headers preserve the mount and ROI. ROI is metadata for
+`[forward, lateral, up]` metres. Pitch is measured downward from horizontal as `0`, `30`, or `90`;
+`90` is vertical down. Stream headers preserve the mount and ROI. ROI is metadata for
 downstream processing and does not crop raw acquisition.
 
 ## Time meaning

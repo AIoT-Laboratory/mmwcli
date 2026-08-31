@@ -76,11 +76,11 @@ func TestStreamFlagsExposeOnlyConfigAndSetup(t *testing.T) {
 
 func TestStreamHeaderIsOneExactJSONLine(t *testing.T) {
 	var output bytes.Buffer
-	header := streamHeader{FrameBytes: 4, PeriodNS: 10, Mount: setupMount{HeightM: 1.5, PitchDeg: 90}}
+	header := streamHeader{FrameBytes: 4, PeriodNS: 10, Mount: setupMount{HeightM: 1.5, PitchDeg: 30}}
 	if err := json.NewEncoder(&output).Encode(header); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := output.String(), "{\"frame_bytes\":4,\"period_ns\":10,\"mount\":{\"height_m\":1.5,\"pitch_deg\":90}}\n"; got != want {
+	if got, want := output.String(), "{\"frame_bytes\":4,\"period_ns\":10,\"mount\":{\"height_m\":1.5,\"pitch_deg\":30}}\n"; got != want {
 		t.Fatalf("stream header = %q, want %q", got, want)
 	}
 }
@@ -218,7 +218,7 @@ func TestLoadSetupResolvesFirmwareRelativeToSetup(t *testing.T) {
 		setup.mssPath != filepath.Join(root, "firmware", "mss.bin") {
 		t.Fatalf("relative firmware paths not resolved: %+v", setup)
 	}
-	if setup.Mount.PitchDeg != 90 {
+	if setup.Mount.PitchDeg != 0 {
 		t.Fatalf("default mount pitch = %v", setup.Mount.PitchDeg)
 	}
 	if setup.ROI != nil {
@@ -326,16 +326,16 @@ func TestSetupShowAndMountUseOneStrictSchema(t *testing.T) {
 		t.Fatalf("setup show is not normalized JSON: %s", stdout.String())
 	}
 	if code := Run(
-		[]string{"setup", "mount", path, "--height", "1.75", "--pitch", "90"},
+		[]string{"setup", "mount", path, "--height", "1.75", "--pitch", "30"},
 		io.Discard, io.Discard,
 	); code != 0 {
 		t.Fatalf("setup mount exit = %d", code)
 	}
 	setup, err := loadSetup(path)
-	if err != nil || setup.Mount.HeightM != 1.75 || setup.Mount.PitchDeg != 90 {
+	if err != nil || setup.Mount.HeightM != 1.75 || setup.Mount.PitchDeg != 30 {
 		t.Fatalf("updated mount = %+v, %v", setup.Mount, err)
 	}
-	for _, pitch := range []string{"1", "0.5"} {
+	for _, pitch := range []string{"-30", "0.5", "45", "90.5"} {
 		if code := Run(
 			[]string{"setup", "mount", path, "--height", "1.75", "--pitch", pitch},
 			io.Discard, io.Discard,
@@ -392,7 +392,7 @@ func writeTestSetup(t *testing.T, path string, camera bool) {
 	}
 }
 
-func TestSetupRequiresVersionOneAndDiscretePitch(t *testing.T) {
+func TestSetupRequiresVersionOneAndDownwardPitch(t *testing.T) {
 	root := t.TempDir()
 	base := `{
   "schema": %q,
@@ -408,8 +408,11 @@ func TestSetupRequiresVersionOneAndDiscretePitch(t *testing.T) {
 		{schema: "mmwcli.setup.v0", pitch: 90},
 		{schema: "mmwcli.setup.v1", pitch: 90, valid: true},
 		{schema: "mmwcli.setup.v1", pitch: 0, valid: true},
-		{schema: "mmwcli.setup.v1", pitch: 1},
+		{schema: "mmwcli.setup.v1", pitch: 30, valid: true},
 		{schema: "mmwcli.setup.v1", pitch: 0.5},
+		{schema: "mmwcli.setup.v1", pitch: 45},
+		{schema: "mmwcli.setup.v1", pitch: -0.5},
+		{schema: "mmwcli.setup.v1", pitch: 90.5},
 	} {
 		path := filepath.Join(root, fmt.Sprintf("setup-%d.json", index))
 		if err := os.WriteFile(path, []byte(fmt.Sprintf(base, test.schema, test.pitch)), 0o644); err != nil {

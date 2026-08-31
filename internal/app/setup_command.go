@@ -75,10 +75,10 @@ func runSetupROI(arguments []string, stderr io.Writer) error {
 }
 
 func runSetupMount(arguments []string, stderr io.Writer) error {
-	const synopsis = "mmwcli setup mount SETUP --height M --pitch 90"
+	const synopsis = "mmwcli setup mount SETUP --height M --pitch DEG"
 	flags := newCommandFlagSet("setup mount", stderr, synopsis)
 	height := flags.String("height", "", "radar height in metres")
-	pitch := flags.String("pitch", "", "boresight pitch: 90 downward, 0 horizontal")
+	pitch := flags.String("pitch", "", "downward boresight pitch: 0, 30, or 90 degrees")
 	if len(arguments) < 1 || arguments[0] == "" || strings.HasPrefix(arguments[0], "-") {
 		return usageError{message: synopsis}
 	}
@@ -119,6 +119,6 @@ func runSetupMount(arguments []string, stderr io.Writer) error {
 func printSetupHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "usage:")
 	fmt.Fprintln(writer, "  mmwcli setup show SETUP")
-	fmt.Fprintln(writer, "  mmwcli setup mount SETUP --height M --pitch 90")
+	fmt.Fprintln(writer, "  mmwcli setup mount SETUP --height M --pitch DEG")
 	fmt.Fprintln(writer, "  mmwcli setup roi SETUP --min-forward M --max-forward M --min-lateral M --max-lateral M --min-up M --max-up M")
 }

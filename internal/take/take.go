@@ -446,7 +446,7 @@ func validSetupROI(roi SetupROI) bool {
 }
 
 func validMountPitch(pitchDeg float64) bool {
-	return pitchDeg == 0 || pitchDeg == 90
+	return pitchDeg == 0 || pitchDeg == 30 || pitchDeg == 90
 }
 
 func exactValue(value string) bool {
