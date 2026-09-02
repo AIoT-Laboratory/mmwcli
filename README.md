@@ -38,13 +38,17 @@ mmwcli setup show hardware\setup.json
 mmwcli setup mount hardware\setup.json --height 1.5 --pitch 0
 mmwcli setup roi hardware\setup.json `
   --min-forward 0.5 --max-forward 5.5 `
-  --min-lateral -1.5 --max-lateral 1.5 `
+  --min-lateral -4.8 --max-lateral 4.8 `
   --min-up 0 --max-up 2.2
 ```
 
 ROI coordinates are `[forward, lateral, up]` metres in the level frame. The ROI is editable
 collection metadata for downstream DSP and visualization; mmwcli never crops or changes raw ADC
-bytes with it. A setup created before ROI was added remains valid and simply has no ROI metadata.
+bytes with it. The tracked default uses 0.1 m precision and bounds the current 5.5 m usable RD
+radius with the IWR6843ISK's +/-60 degree horizontal field of view: forward `0.5..5.5 m` and
+lateral `-4.8..4.8 m`. This is an axis-aligned envelope; its far corners are not claimed to be
+physically reachable. A setup created before ROI was added remains valid and simply has no ROI
+metadata.
 
 List DirectShow cameras without loading radar hardware configuration, then preview any returned
 device. The JSON result contains each friendly `name` plus its unambiguous FFmpeg `id`:

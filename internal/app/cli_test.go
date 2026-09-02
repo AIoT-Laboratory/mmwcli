@@ -307,8 +307,8 @@ func TestTrackedSetupExampleHasResearchROI(t *testing.T) {
 	}
 	want := setupROI{
 		Frame: levelROIFrame,
-		MinM:  [3]float64{0.5, -1.5, 0},
-		MaxM:  [3]float64{5.5, 1.5, 2.2},
+		MinM:  [3]float64{0.5, -4.8, 0},
+		MaxM:  [3]float64{5.5, 4.8, 2.2},
 	}
 	if setup.ROI == nil || *setup.ROI != want {
 		t.Fatalf("tracked setup ROI = %+v, want %+v", setup.ROI, want)
