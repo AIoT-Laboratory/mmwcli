@@ -1,5 +1,4 @@
-// Package session coordinates one radar CLI and one DCA1000 capture without
-// hiding state-changing retries.
+// Package session coordinates one radar CLI and one DCA1000 capture.
 package session
 
 import (
@@ -25,6 +24,7 @@ type Radar interface {
 }
 
 type DCA interface {
+	Ping(context.Context) (dca.Response, error)
 	Execute(context.Context, dca.Command, []byte) (dca.Response, error)
 	Configure(context.Context, dca.FPGAConfig, int) (dca.ConfigurationResponses, error)
 	Start(context.Context) (dca.Response, error)
@@ -124,13 +124,22 @@ func (state *runState) configure(
 	if _, err := state.radar.Verify(ctx); err != nil {
 		return err
 	}
+	response, err := state.dca.Ping(ctx)
+	if err != nil {
+		return fmt.Errorf("verify DCA1000 control link: %w", err)
+	}
+	if err := requireStatus(response); err != nil {
+		return err
+	}
+	log("DCA1000 control link ready")
+
 	if _, err := state.radar.Stop(ctx); err != nil {
 		return fmt.Errorf("establish stopped radar state: %w", err)
 	}
 	log("radar stopped")
 
 	state.dcaUsed = true
-	response, err := state.dca.Stop(ctx)
+	response, err = state.dca.Stop(ctx)
 	if err != nil {
 		return fmt.Errorf("establish stopped DCA state: %w", err)
 	}

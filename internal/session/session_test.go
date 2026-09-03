@@ -113,14 +113,18 @@ func (f *fakeFiniteFrameRadar) AwaitEnd(ctx context.Context) (string, error) {
 
 type fakeDCA struct {
 	events        *[]string
+	pingHook      func(context.Context) (dca.Response, error)
 	startHook     func(context.Context) (dca.Response, error)
 	stopHook      func(context.Context, int) (dca.Response, error)
 	drainStatuses []dca.Response
 	stopCalls     int
 }
 
-func (f *fakeDCA) Ping(context.Context) (dca.Response, error) {
+func (f *fakeDCA) Ping(ctx context.Context) (dca.Response, error) {
 	*f.events = append(*f.events, "dcaPing")
+	if f.pingHook != nil {
+		return f.pingHook(ctx)
+	}
 	return dca.Response{Command: dca.CommandSystemAlive}, nil
 }
 func (f *fakeDCA) Execute(_ context.Context, command dca.Command, _ []byte) (dca.Response, error) {
@@ -320,7 +324,7 @@ func TestStreamRunsUntilCancellationAndUsesExplicitRadarStop(t *testing.T) {
 		t.Fatalf("DCA stop calls = %d, want initial and cleanup stops", dcaControl.stopCalls)
 	}
 	want := []string{
-		"version", "sensorStop", "dcaStop", "dcaConfigure", "apply",
+		"version", "dcaPing", "sensorStop", "dcaStop", "dcaConfigure", "apply",
 		"receiverStart", "dcaStart", "sensorStart", "radarStartedLog", "receiverFirst", "receiverWait",
 		"sensorStop", "receiverWait", "dcaStop", "dcaDrain", "receiverClose",
 	}
@@ -365,6 +369,37 @@ func TestStreamRejectsUnexpectedReceiverEnd(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "ended unexpectedly") {
 		t.Fatalf("Stream error = %v", err)
+	}
+}
+
+func TestConfigureChecksDCABeforeChangingRadarState(t *testing.T) {
+	plan := streamTestPlan(t)
+	prepared, err := PrepareStream(
+		plan,
+		dca.DefaultFPGAConfig(),
+		dca.DefaultReceiverConfig(),
+		25,
+		3*time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	want := errors.New("DCA control unavailable")
+	dcaControl := &fakeDCA{
+		events: &events,
+		pingHook: func(context.Context) (dca.Response, error) {
+			return dca.Response{}, want
+		},
+	}
+	state := runState{radar: &fakeRadar{events: &events}, dca: dcaControl}
+	err = state.configure(context.Background(), plan, prepared, func(string) {})
+	if !errors.Is(err, want) || !strings.Contains(err.Error(), "verify DCA1000 control link") {
+		t.Fatalf("configure error = %v, want DCA control-link failure", err)
+	}
+	wantEvents := []string{"version", "dcaPing"}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("events = %v, want %v", events, wantEvents)
 	}
 }
 
@@ -479,7 +514,7 @@ func TestParticipantRunsInsideCaptureLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"version", "sensorStop", "dcaStop", "dcaConfigure", "apply",
+		"version", "dcaPing", "sensorStop", "dcaStop", "dcaConfigure", "apply",
 		"participantArm", "receiverStart", "dcaStart", "participantStart", "sensorStart", "radarStartedLog",
 		"receiverFirst", "participantSetRadarStart", "receiverWait", "frameEnd", "receiverWait", "dcaStop", "dcaDrain",
 		"receiverClose", "participantFinish:true",
@@ -739,7 +774,7 @@ func TestFiniteCaptureUsesNaturalFrameEndCapability(t *testing.T) {
 		)
 	}
 	want := []string{
-		"version", "sensorStop", "dcaStop", "dcaConfigure", "apply",
+		"version", "dcaPing", "sensorStop", "dcaStop", "dcaConfigure", "apply",
 		"receiverStart", "dcaStart", "sensorStart", "receiverFirst", "receiverWait",
 		"frameEnd", "receiverWait", "dcaStop", "dcaDrain", "receiverClose",
 	}
