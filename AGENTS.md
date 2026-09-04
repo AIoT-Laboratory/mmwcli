@@ -11,7 +11,7 @@ mechanically or turn one-off outputs into permanent constraints.
 
 ## Role
 
-- Own IWR6843 ES2 + DCA1000 acquisition on Windows/amd64.
+- Own IWR6843 ES2 + DCA1000 acquisition on Windows/amd64 and Linux/amd64.
 - Publish finite capture as `mmwcli.take.v3` with an immutable `mmwcli.snapshot.v1`, or stream
   complete ADC frames to OpenMMW.
 - Keep camera capture optional so radar-only capture remains available.

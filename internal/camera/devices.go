@@ -11,8 +11,8 @@ import (
 	"strings"
 )
 
-// Device identifies one DirectShow video input. ID is its alternative name when
-// FFmpeg exposes one, which avoids ambiguity between equal friendly names.
+// Device identifies one platform video input. ID is the exact value passed to
+// FFmpeg; Name is only for display.
 type Device struct {
 	Name string `json:"name"`
 	ID   string `json:"id"`
@@ -23,9 +23,13 @@ var (
 	dshowAlternative = regexp.MustCompile(`^\s*Alternative name "(.+)"\s*$`)
 )
 
-// List asks FFmpeg's DirectShow input for its currently visible video
-// devices. FFmpeg exits non-zero after a successful -list_devices invocation.
+// List returns the platform's currently visible video devices.
 func List(ctx context.Context) ([]Device, error) {
+	return listDevices(ctx)
+}
+
+// FFmpeg exits non-zero after a successful DirectShow -list_devices invocation.
+func listDirectShowDevices(ctx context.Context) ([]Device, error) {
 	output, err := exec.CommandContext(
 		ctx, Executable, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy",
 	).CombinedOutput()
@@ -42,8 +46,8 @@ func List(ctx context.Context) ([]Device, error) {
 	return nil, errors.New("DirectShow reported no video cameras")
 }
 
-// Preview returns one complete JPEG from the same generated FFmpeg DirectShow
-// input command that Recorder uses, with a one-frame output limit.
+// Preview returns one complete JPEG from the same generated FFmpeg input
+// command that Recorder uses, with a one-frame output limit.
 func Preview(ctx context.Context, config Config) ([]byte, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err

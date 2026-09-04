@@ -6,4 +6,5 @@ bin/
 coverage.out
 *.gocache
 hardware/setup.json
+hardware/setup.linux.json
 hardware/.hardware.lock

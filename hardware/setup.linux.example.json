@@ -1,0 +1,29 @@
+{
+  "schema": "mmwcli.setup.v1",
+  "radar": {
+    "port": "/dev/serial/by-id/replace-with-iwr6843-enhanced-port",
+    "bss": "firmware/xwr68xx_radarss.bin",
+    "mss": "firmware/xwr68xx_masterss.bin",
+    "d2xx": "AR-DevPack-EVM-012"
+  },
+  "dca": {
+    "host": "192.168.33.30",
+    "device": "192.168.33.180",
+    "delay_us": 50
+  },
+  "mount": {
+    "height_m": 1.5,
+    "pitch_deg": 0
+  },
+  "roi": {
+    "frame": "level_forward_lateral_up",
+    "min_m": [0.5, -4.8, 0.0],
+    "max_m": [5.5, 4.8, 2.2]
+  },
+  "camera": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "max_bytes": 2097152
+  }
+}

@@ -1,7 +1,7 @@
 # mmwcli
 
 mmwcli captures finite IWR6843 + DCA1000 raw captures or streams complete ADC frames on
-Windows/amd64. Finite capture writes raw ADC, an optional MJPEG camera recording, and one small
+Windows/amd64 and Linux/amd64. Finite capture writes raw ADC, an optional MJPEG camera recording, and one small
 manifest.
 DSP, datasets, training, inference, and visualization belong downstream.
 
@@ -12,13 +12,24 @@ online: IWR6843 + DCA1000 -> complete ADC frames on stdout -> OpenMMW
 
 ## Build
 
-Go 1.26 or newer and the FTDI D2XX Windows library are required.
+Go 1.26 or newer and the platform's FTDI D2XX library are required. Windows loads
+`ftd2xx.dll`; Linux builds with CGO and loads the vendor-installed `libftd2xx.so` at runtime.
 
 ```powershell
 go test ./...
 go vet ./...
 go build -trimpath -o bin\mmwcli.exe .\cmd\mmwcli
 ```
+
+On Linux/amd64:
+
+```bash
+CGO_ENABLED=1 go build -trimpath -o bin/mmwcli ./cmd/mmwcli
+```
+
+FTDI's Linux VCP and D2XX drivers cannot own the same device concurrently. Follow the vendor Linux
+installation guide to release a DCA1000 FTDI device from `ftdi_sio` before hardware use; mmwcli does
+not unload kernel drivers itself.
 
 Automated checks are offline. They do not open radar, DCA1000, serial, USB, or camera hardware.
 
@@ -50,13 +61,17 @@ lateral `-4.8..4.8 m`. This is an axis-aligned envelope; its far corners are not
 physically reachable. A setup created before ROI was added remains valid and simply has no ROI
 metadata.
 
-List DirectShow cameras without loading radar hardware configuration, then preview any returned
-device. The JSON result contains each friendly `name` plus its unambiguous FFmpeg `id`:
+List cameras without loading radar hardware configuration, then preview any returned device.
+Windows uses DirectShow IDs; Linux uses V4L2 `/dev/video*` paths. The JSON result contains each
+friendly `name` plus the FFmpeg input `id`:
 
 ```powershell
 mmwcli camera list
 mmwcli camera preview --setup hardware\setup.json --camera "@device_pnp_..." > preview.jpg
 ```
+
+The equivalent Linux preview uses `hardware/setup.linux.json` and a returned path such as
+`/dev/video0`.
 
 `preview` has a fixed three-second timeout and writes exactly one JPEG to stdout. Use the returned
 `id`, not a device number, in `--camera`. Preview and camera capture require the explicit `camera`
@@ -105,9 +120,6 @@ An exact `stop` line or stdin EOF performs the same cleanup; other stdin lines a
 Malformed, overlapping, or persistently incomplete DCA data terminates the stream instead of being
 repaired. The first packet must be DCA sequence 1 at byte offset 0, so losing the stream origin
 cannot silently shift every frame.
-
-After the validated radar frame-start event, finite capture and stream write the exact line
-`MMWCLI_EVENT {"event":"radar_started"}` to stderr. It never enters stream stdout.
 
 After the validated radar frame-start event, finite capture and stream write the exact line
 `MMWCLI_EVENT {"event":"radar_started"}` to stderr. It never enters stream stdout.

@@ -42,8 +42,8 @@ Enhanced COM IWR6843 ES2 identity, and requires a DCA1000 SystemAlive reply thro
 host link. Optional `--camera` reuses the one-frame preview. It does not submit firmware.
 
 `capture` repeats preflight, boots the IWR6843, configures DCA1000, records exactly `N` complete
-radar frames, and optionally records complete JPEGs using the setup format and selected DirectShow
-configuration. Raw ADC bytes are not converted, repaired, or processed.
+radar frames, and optionally records complete JPEGs using the setup format and selected platform
+camera. Raw ADC bytes are not converted, repaired, or processed.
 
 `stream` applies the same hardware preflight with `frameCfg numFrames=0`, starts the radar once, and
 emits one compact JSON geometry line followed by fixed-size complete ADC frames on stdout. It has
@@ -58,13 +58,13 @@ the same control only when `--control-stdin` is explicit.
 
 `setup.camera` contains only `width`, `height`, `fps`, and `max_bytes`; the selected device remains
 an explicit CLI input. It never contains a shell command. mmwcli owns the FFmpeg argv that opens
-`video=<device>` through DirectShow and emits JPEGs on stdout. `--camera` is rejected with
-`--radar-only`.
+the selected device through DirectShow on Windows or V4L2 on Linux and emits JPEGs on stdout.
+`--camera` is rejected with `--radar-only`.
 
-`camera list` is setup-independent and prints `{name,id}` video devices; `id` prefers FFmpeg's
-unambiguous alternative name. `camera preview` requires setup camera format, opens the selected
-device, and writes one complete JPEG before releasing it. Web passes the same `id` to preview and
-capture.
+`camera list` is setup-independent and prints `{name,id}` video devices. Windows `id` prefers
+FFmpeg's unambiguous alternative name; Linux `id` is its `/dev/video*` path. `camera preview`
+requires setup camera format, opens the selected device, and writes one complete JPEG before
+releasing it. Web passes the same `id` to preview and capture.
 
 ## Transaction boundary
 
