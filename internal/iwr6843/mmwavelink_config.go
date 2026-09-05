@@ -452,6 +452,7 @@ func parseMMWaveLinkADCBuf(fields []string, command string) (uint8, uint8, error
 	if !fieldsEqual(fields, "adcbufCfg", "-1", "0", "1", "1", "1") {
 		return 0, 0, fmt.Errorf("IWR6843 capture requires exact adcbufCfg -1 0 1 1 1: %s", command)
 	}
+	// rlDevDataFmtCfg.iqSwapSel=1 emits Q first; grouping is set by the two-lane LVDS path.
 	return 1, 1, nil
 }
 

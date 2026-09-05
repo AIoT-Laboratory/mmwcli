@@ -155,7 +155,7 @@ func validateTakeCommands(commands []string, plan Plan) error {
 		return err
 	}
 	if profile.samples%2 != 0 {
-		return errors.New("group2_i_then_q capture session requires an even profileCfg numAdcSamples")
+		return errors.New("group2_q_then_i capture session requires an even profileCfg numAdcSamples")
 	}
 
 	frame, err := parseFrame(commands)
